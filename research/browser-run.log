@@ -1,0 +1,149 @@
+ok browser compiled design with native backend and WebGL board
+ok Blender asset contains the corrected three-header layout
+ok imported PCB preserves 136 by 106 by 1.6 mm model dimensions
+ok desktop has no horizontal overflow
+screenshot research/overhaul-desktop.png
+ok closing Project clears Files and Pins highlights: [{"id":"btnLibrary","visible":false,"active":false,"expanded":"false"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+screenshot research/sidebar-closed.png
+ok Files highlights its open panel: [{"id":"btnLibrary","visible":true,"active":true,"expanded":"true"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok clicking Files again clears its highlight: [{"id":"btnLibrary","visible":false,"active":false,"expanded":"false"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok Pins highlights its open panel: [{"id":"btnLibrary","visible":false,"active":false,"expanded":"false"},{"id":"btnPins","visible":true,"active":true,"expanded":"true"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok switching from Pins to Files moves the highlight: [{"id":"btnLibrary","visible":true,"active":true,"expanded":"true"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok inner Pin map tab updates the sidebar: [{"id":"btnLibrary","visible":false,"active":false,"expanded":"false"},{"id":"btnPins","visible":true,"active":true,"expanded":"true"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok inner Sources tab updates the sidebar: [{"id":"btnLibrary","visible":true,"active":true,"expanded":"true"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok clicking Pins again closes it and clears its highlight: [{"id":"btnLibrary","visible":false,"active":false,"expanded":"false"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok Tools can highlight alongside other visible panels: [{"id":"btnLibrary","visible":true,"active":true,"expanded":"true"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":true,"active":true,"expanded":"true"}]
+ok Tools close button clears its highlight: [{"id":"btnLibrary","visible":true,"active":true,"expanded":"true"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok Tools toggle clears its highlight: [{"id":"btnLibrary","visible":true,"active":true,"expanded":"true"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok Escape clears Tools without hiding the desktop Project panel: [{"id":"btnLibrary","visible":true,"active":true,"expanded":"true"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok hiding Signals clears its highlight: [{"id":"btnLibrary","visible":true,"active":true,"expanded":"true"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":false,"active":false,"expanded":"false"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok showing Signals restores its highlight: [{"id":"btnLibrary","visible":true,"active":true,"expanded":"true"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok 1000px hidden project drawer is not highlighted: [{"id":"btnLibrary","visible":false,"active":false,"expanded":"false"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok 1000px Files drawer highlights when open: [{"id":"btnLibrary","visible":true,"active":true,"expanded":"true"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok 1000px switching to Pins keeps the drawer open: [{"id":"btnLibrary","visible":false,"active":false,"expanded":"false"},{"id":"btnPins","visible":true,"active":true,"expanded":"true"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok 1000px switching back to Files keeps the drawer open: [{"id":"btnLibrary","visible":true,"active":true,"expanded":"true"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok 1000px drawer close clears its highlight: [{"id":"btnLibrary","visible":false,"active":false,"expanded":"false"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok 1000px Pins toggles closed: [{"id":"btnLibrary","visible":false,"active":false,"expanded":"false"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok 1000px Escape clears both drawer highlights: [{"id":"btnLibrary","visible":false,"active":false,"expanded":"false"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok 390px hidden project drawer is not highlighted: [{"id":"btnLibrary","visible":false,"active":false,"expanded":"false"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok 390px Files drawer highlights when open: [{"id":"btnLibrary","visible":true,"active":true,"expanded":"true"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok 390px switching to Pins keeps the drawer open: [{"id":"btnLibrary","visible":false,"active":false,"expanded":"false"},{"id":"btnPins","visible":true,"active":true,"expanded":"true"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok 390px switching back to Files keeps the drawer open: [{"id":"btnLibrary","visible":true,"active":true,"expanded":"true"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok 390px drawer close clears its highlight: [{"id":"btnLibrary","visible":false,"active":false,"expanded":"false"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok 390px Pins toggles closed: [{"id":"btnLibrary","visible":false,"active":false,"expanded":"false"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok 390px Escape clears both drawer highlights: [{"id":"btnLibrary","visible":false,"active":false,"expanded":"false"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok returning to desktop preserves the closed project state: [{"id":"btnLibrary","visible":false,"active":false,"expanded":"false"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok desktop Files reopens after responsive transitions: [{"id":"btnLibrary","visible":true,"active":true,"expanded":"true"},{"id":"btnPins","visible":false,"active":false,"expanded":"false"},{"id":"btnSignals","visible":true,"active":true,"expanded":"true"},{"id":"btnTools","visible":false,"active":false,"expanded":"false"}]
+ok keyboard drives active-low S1 and pressed styling
+ok held S1 produces exactly twenty counts
+ok all multiplexed digits reach the model
+ok step with released enable holds count
+ok run and pause controls work
+screenshot research/overhaul-running-trace.png
+ok view settings open
+screenshot research/overhaul-top.png
+ok clicking the actual 3D key drives S1 and depresses its cap
+ok releasing outside the 3D key restores input and orbit controls
+ok native lamp test drives independent GLB LED and digit meshes
+screenshot research/blender-browser-detail.png
+ok exploded view lifts components without moving the PCB
+screenshot research/blender-browser-underside.png
+ok underside is accessible without orbit restrictions
+ok inspection drawer opens
+ok power-off blanks outputs and disables transport
+ok power-on starts a fresh native simulation
+ok finish-and-export finalizes native VCD and disables ended session
+ok source editor opens
+ok LED locator focuses the four independent active-low indicators
+screenshot research/product-leds.png
+ok saved project import builds source and exposes virtual inputs
+ok real virtual input controls drive compiled AND gate
+ok isolated truth table covers all inputs without changing active simulation
+screenshot research/product-truth.png
+ok late truth-table results cannot overwrite a rebuilt design
+ok compiler errors remain visible and disable invalid designs
+ok failed builds remove stale signals, inputs and truth results
+ok source editor recovers from a compiler failure
+ok invalid compiler settings cannot run a stale compiled design
+ok error log receives the invalid-generic toast: "veform finalized. Build or restart to run a new simulation.\n  [02:35:15] [0 fs] INFO loading VPI module 'C:\\Users\\cmpj\\dev\\fpga-lab\\backend\\bridge-9839de3aa113047c.vpi'\n  [02:35:15] [0 fs] INFO VPI module loaded!\n  [02:35:15] [0 fs] WARNING ../../src/ieee/v93/numeric_std-body.vhdl:2098:7:@0ms:(assertion warning): NUMERIC_STD.TO_INTEGER: metavalue detected, returning 0\n  [02:35:15] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]\n      Compiled bench_demo. 20 observable signals.\n  [02:35:16] [0 fs] INFO loading VPI module 'C:\\Users\\cmpj\\dev\\fpga-lab\\backend\\bridge-9839de3aa113047c.vpi'\n  [02:35:16] [0 fs] INFO VPI module loaded!\n  [02:35:16] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]\n      Compiled dut. 3 observable signals.\n  [02:35:18] [0 fs] INFO loading VPI module 'C:\\Users\\cmpj\\dev\\fpga-lab\\backend\\bridge-9839de3aa113047c.vpi'\n  [02:35:18] [0 fs] INFO VPI module loaded!\n  [02:35:18] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]\n      Compiled dut. 3 observable signals.\n  [02:35:18] [0 fs] ERROR gate.vhd:1:15:error: object class keyword such as 'variable' is expected\n      entity dut is invalid syntax; end;\n                    ^\n      \n  [02:35:18] [0 fs] INFO loading VPI module 'C:\\Users\\cmpj\\dev\\fpga-lab\\backend\\bridge-9839de3aa113047c.vpi'\n  [02:35:18] [0 fs] INFO VPI module loaded!\n  [02:35:18] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]\n      Compiled dut. 3 observable signals.\n\n"
+ok compiler failures are logged with session details and recent console lines: "==== 2026-11-17 02:35:18.288 UTC+08:00 | client error ====\nMessage:\n  gate.vhd:1:15:error: object class keyword such as 'variable' is expected\n  entity dut is invalid syntax; end;\n                ^\nPage: http://127.0.0.1:8045/\nDesign: gate.vhd\nTop: dut\nLanguage: VHDL-2008\nStatus: Error\nSim time: 0 fs\nBackend: none\nTheme: light\nViewport: 1440x1000\nBrowser: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/148.0.0.0 Safari/537.36\nRecent console (oldest first):\n  [02:35:08] [0 fs] INFO loading VPI module 'C:\\Users\\cmpj\\dev\\fpga-lab\\backend\\bridge-9839de3aa113047c.vpi'\n  [02:35:08] [0 fs] INFO VPI module loaded!\n  [02:35:08] [0 fs] WARNING ../../src/ieee/v93/numeric_std-body.vhdl:2098:7:@0ms:(assertion warning): NUMERIC_STD.TO_INTEGER: metavalue detected, returning 0\n  [02:35:08] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]\n      Compiled bench_demo. 20 observable signals.\n  [02:35:14] [0 fs] INFO loading VPI module 'C:\\Users\\cmpj\\dev\\fpga-lab\\backend\\bridge-9839de3aa113047c.vpi'\n  [02:35:14] [0 fs] INFO VPI module loaded!\n  [02:35:14] [0 fs] WARNING ../../src/ieee/v93/numeric_std-body.vhdl:2098:7:@0ms:(assertion warning): NUMERIC_STD.TO_INTEGER: metavalue detected, returning 0\n  [02:35:14] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]\n      Compiled bench_demo. 20 observable signals.\n  [02:35:14] [0 fs] INFO Native waveform finalized. Build or restart to run a new simulation.\n  [02:35:15] [0 fs] INFO loading VPI module 'C:\\Users\\cmpj\\dev\\fpga-lab\\backend\\bridge-9839de3aa113047c.vpi'\n  [02:35:15] [0 fs] INFO VPI module loaded!\n  [02:35:15] [0 fs] WARNING ../../src/ieee/v93/numeric_std-body.vhdl:2098:7:@0ms:(assertion warning): NUMERIC_STD.TO_INTEGER: metavalue detected, returning 0\n  [02:35:15] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]\n      Compiled bench_demo. 20 observable signals.\n  [02:35:16] [0 fs] INFO loading VPI module 'C:\\Users\\cmpj\\dev\\fpga-lab\\backend\\bridge-9839de3aa113047c.vpi'\n  [02:35:16] [0 fs] INFO VPI module loaded!\n  [02:35:16] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]\n      Compiled dut. 3 observable signals.\n  [02:35:18] [0 fs] INFO loading VPI module 'C:\\Users\\cmpj\\dev\\fpga-lab\\backend\\bridge-9839de3aa113047c.vpi'\n  [02:35:18] [0 fs] INFO VPI module loaded!\n  [02:35:18] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]\n      Compiled dut. 3 observable signals.\n  [02:35:18] [0 fs] ERROR gate.vhd:1:15:error: object class keyword such as 'variable' is expected\n      entity dut is invalid syntax; end;\n                    ^\n      \n\n"
+ok an error shown in both the console and a toast is logged once: 1, 1
+ok uncaught page exceptions are logged with their stack: "tavalue detected, returning 0\n  [02:35:15] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]\n      Compiled bench_demo. 20 observable signals.\n  [02:35:16] [0 fs] INFO loading VPI module 'C:\\Users\\cmpj\\dev\\fpga-lab\\backend\\bridge-9839de3aa113047c.vpi'\n  [02:35:16] [0 fs] INFO VPI module loaded!\n  [02:35:16] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]\n      Compiled dut. 3 observable signals.\n  [02:35:18] [0 fs] INFO loading VPI module 'C:\\Users\\cmpj\\dev\\fpga-lab\\backend\\bridge-9839de3aa113047c.vpi'\n  [02:35:18] [0 fs] INFO VPI module loaded!\n  [02:35:18] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]\n      Compiled dut. 3 observable signals.\n  [02:35:18] [0 fs] ERROR gate.vhd:1:15:error: object class keyword such as 'variable' is expected\n      entity dut is invalid syntax; end;\n                    ^\n      \n  [02:35:18] [0 fs] INFO loading VPI module 'C:\\Users\\cmpj\\dev\\fpga-lab\\backend\\bridge-9839de3aa113047c.vpi'\n  [02:35:18] [0 fs] INFO VPI module loaded!\n  [02:35:18] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]\n      Compiled dut. 3 observable signals.\n  [02:35:19] [0 fs] INFO loading VPI module 'C:\\Users\\cmpj\\dev\\fpga-lab\\backend\\bridge-9839de3aa113047c.vpi'\n  [02:35:19] [0 fs] INFO VPI module loaded!\n  [02:35:19] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]\n      Compiled dut. 3 observable signals.\n  [02:35:19] [0 fs] ERROR Uncaught error: Error: trace log probe\n\n"
+ok uncaught page exceptions also appear in the console
+ok console copy includes session details and the log path: ["Trace FPGA workbench console report","Copied: Tue Nov 17 2026 02:35:19 GMT+0800 (Taiwan Standard Time)","Page: http://127.0.0.1:8045/","Design: gate.vhd","Top: dut","Language: VHDL-2008","Status: Paused","Sim time: 0 fs","Backend: GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]","Theme: light","Viewport: 1440x1000","Browser: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/148.0.0.0 Safari/537.36","Error log: C:\\Users\\cmpj\\AppData\\Local\\Temp\\trace-log-jvgqUv\\log.txt",""]
+ok console copy contains every event in order: 27
+ok console copy confirms what was copied
+screenshot research/console-copy.png
+ok QSF initializes mapped active-low bits in ascending nonzero vectors without changing unmapped bits
+ok physical key correctly drives ascending-range vector and mapped LED
+ok editable control: input[aria-label="led1 design port"]
+ok editable pin map rebuilds with the chosen vector bit
+ok pin controls remain editable after rebuilding
+screenshot research/product-pins.png
+ok project save includes source settings and edited pin map
+ok downloaded project contains exact source, generics and pin mappings
+ok file picker reloads an actual saved project through its change handler
+ok page reload restores and recompiles saved project
+ok VCD scope, aliases and padded vectors drive the board correctly
+ok real-valued and unknown VCD replay advances without crashes or binary reinterpretation
+ok replay scope selector avoids ambiguous hierarchical short names
+screenshot research/product-replay.png
+ok end of VCD disables replay transport and retains final values
+ok restart rewinds VCD to first timestamp
+ok malformed VCD does not destroy active replay
+ok unsupported native formats are explicitly rejected instead of simulated falsely
+ok normal native testbench completion reaches exact final state without an error
+ok waveform export locks design mutation until finalization completes
+ok completed native testbench exports final timestamp
+ok downloaded VCD contains the finalized native waveform
+ok UART decodes sparse native transitions without relying on the UI clock rate
+screenshot research/product-uart.png
+ok UART clear control works
+ok SDF import exposes instance and corner before rebuilding
+ok SDF max-corner UI produces verified 4 ns native delay in the analyzer
+ok native clock selector and analyzer fit expose nanosecond timing
+screenshot research/product-timing.png
+ok waveform zoom controls change the visible time range
+ok signal chips hide selected waveforms
+ok removing timing annotation requires a rebuild
+ok named source library and top library survive project import and compilation
+ok bitstream inspector flags mismatched hardware without replacing the live simulation
+screenshot research/overhaul-mobile.png
+ok mobile has no horizontal overflow
+ok entire board bounding box fits the mobile viewport
+ok mobile project drawer opens
+screenshot research/product-320px.png
+ok 320px layout has no horizontal overflow: {"width":320,"viewport":310,"scroll":310}
+ok 768px layout has no horizontal overflow: {"width":768,"viewport":768,"scroll":768}
+ok 1920px layout has no horizontal overflow: {"width":1920,"viewport":1920,"scroll":1920}
+ok board screenshot control downloads a PNG
+screenshot research/product-final.png
+ok camera menu adds Four dtubes and keeps every existing preset
+ok keyboard selection in the native camera menu chooses Four dtubes
+ok desktop Four dtubes frames all 32 segments: {"inside":true,"width":0.37542032979630924,"closeup":true,"view":[1070,442]}
+screenshot research/camera-dtubes-desktop.png
+ok mobile Four dtubes frames all 32 segments: {"inside":true,"width":0.7701889578994761,"closeup":true,"view":[304,378]}
+screenshot research/camera-dtubes-mobile.png
+ok existing Display detail preset is unchanged
+ok light theme is the untouched default: {"theme":"light","pressed":"false","stored":null,"body":"rgb(246, 246, 243)","editor":"rgb(252, 253, 249)","panel":"rgb(255, 255, 255)","scene":"e9ebe4","meta":"#f6f6f3","sun":"none","wave":"255,255,255","chip":"rgb(105, 144, 75)","trace":"#69904b"}
+ok dark mode toggle updates state, storage and browser chrome: {"theme":"dark","pressed":"true","stored":"dark","body":"rgb(20, 24, 19)","editor":"rgb(23, 28, 22)","panel":"rgb(28, 33, 26)","scene":"20261e","meta":"#141813","sun":"block","wave":"23,28,22","chip":"rgb(183, 217, 140)","trace":"#b7d98c"}
+ok dark mode covers page, panels, editor, analyzer and 3D backdrop: {"theme":"dark","pressed":"true","stored":"dark","body":"rgb(20, 24, 19)","editor":"rgb(23, 28, 22)","panel":"rgb(28, 33, 26)","scene":"20261e","meta":"#141813","sun":"block","wave":"23,28,22","chip":"rgb(183, 217, 140)","trace":"#b7d98c"}
+ok dark mode recolors traces and signal chips together
+ok switching theme keeps the simulation session, trace history and board materials
+screenshot research/theme-dark-desktop.png
+screenshot research/theme-dark-tools.png
+screenshot research/theme-dark-editor.png
+screenshot research/theme-dark-settings.png
+ok 320px dark layout has no horizontal overflow: {"viewport":310,"scroll":310}
+screenshot research/theme-dark-mobile.png
+ok 390px dark layout has no horizontal overflow: {"viewport":390,"scroll":390}
+ok 768px dark layout has no horizontal overflow: {"viewport":768,"scroll":768}
+ok 1920px dark layout has no horizontal overflow: {"viewport":1920,"scroll":1920}
+ok dark mode persists across page reload
+ok keyboard toggle restores the original light theme: {"theme":"light","pressed":"false","stored":"light","body":"rgb(246, 246, 243)","editor":"rgb(252, 253, 249)","panel":"rgb(255, 255, 255)","scene":"e9ebe4","meta":"#f6f6f3","sun":"none","wave":"255,255,255","chip":"rgb(105, 144, 75)","trace":"#69904b"}
+ok a saved light choice overrides a dark system preference
+ok without a saved choice the site follows a dark system preference
+ok application loads no external network resources
+ok no browser exceptions: []
+
+124 browser checks passed

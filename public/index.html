@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f6f6f3">
+<title>Trace — FPGA workbench</title>
+<script>
+{
+  let savedTheme;
+  try { savedTheme = localStorage.getItem('trace.theme'); } catch {}
+  document.documentElement.dataset.theme = ['light', 'dark'].includes(savedTheme) ? savedTheme : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+</script>
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='28' rx='7' fill='%23232622'/%3E%3Cpath d='M8 10h16M16 10v14' fill='none' stroke='%23d4ed80' stroke-width='3'/%3E%3C/svg%3E">
+<script type="importmap">{"imports":{"three":"/vendor/three.module.min.js","three/addons/controls/OrbitControls.js":"/vendor/OrbitControls.js","three/addons/environments/RoomEnvironment.js":"/vendor/RoomEnvironment.js"}}</script>
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <a class="brand" href="/" aria-label="Trace home"><span class="brand-mark">t</span><span>trace<span class="brand-period">.</span></span></a>
+    <span class="header-divider"></span><span class="workspace-name">FPGA workbench</span>
+    <div class="transport">
+      <button id="btnReset" class="icon-btn" title="Restart simulation" aria-label="Restart simulation"><svg viewBox="0 0 24 24"><path d="M4 10a8 8 0 1 1 1 8M4 4v6h6"/></svg></button>
+      <button id="btnStep" class="icon-btn" title="One clock cycle (.)" aria-label="Step one clock cycle"><svg viewBox="0 0 24 24"><path d="m6 5 10 7-10 7zM19 5v14"/></svg></button>
+      <button id="btnRun" class="run-btn"><svg viewBox="0 0 24 24" class="ic-play"><path d="m8 5 11 7-11 7z"/></svg><svg viewBox="0 0 24 24" class="ic-pause"><path d="M8 5v14M16 5v14"/></svg><span id="runLabel">Run</span><kbd>Space</kbd></button>
+    </div>
+    <div class="header-end"><span class="local-indicator"><i></i>Local workspace</span><button id="btnImport" class="btn dark">Open files <span>↗</span></button></div>
+  </header>
+  <nav id="rail" aria-label="Workspace panels">
+    <button id="btnLibrary" class="rail-btn active" title="Project files" aria-label="Project files" aria-expanded="true"><svg viewBox="0 0 24 24"><path d="M3 7V5h7l2 2h9v13H3z"/></svg><span>Files</span></button>
+    <button id="btnPins" class="rail-btn" title="Pin assignments" aria-label="Pin assignments"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4"/></svg><span>Pins</span></button>
+    <button id="btnSignals" class="rail-btn active" title="Logic analyzer" aria-label="Toggle logic analyzer" aria-expanded="true"><svg viewBox="0 0 24 24"><path d="M2 16h5V6h7v10h8M2 21h20"/></svg><span>Signals</span></button>
+    <button id="btnTools" class="rail-btn" title="Inspection tools" aria-label="Inspection tools" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="m5 7 5 5-5 5m8 0h6"/></svg><span>Tools</span></button>
+    <button id="btnTheme" class="rail-btn rail-bottom" title="Switch to dark mode" aria-label="Dark mode" aria-pressed="false"><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 13.4A9 9 0 0 1 10.6 3.2 9 9 0 1 0 20.8 13.4Z"/></svg><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><span>Theme</span></button>
+    <button id="btnAbout" class="rail-btn" title="Simulation capabilities" aria-label="Simulation capabilities"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-11v2"/></svg><span>About</span></button>
+  </nav>
+  <aside id="left">
+    <div class="panel-heading"><h2 id="leftTitle">Project</h2><button id="closeLeft" class="icon-btn small" aria-label="Close project panel">×</button></div>
+    <div class="tabs" role="tablist" aria-label="Project tools"><button class="tab active" data-ltab="library" role="tab" aria-selected="true">Sources</button><button class="tab" data-ltab="pins" role="tab" aria-selected="false">Pin map</button></div>
+    <section id="ltab-library" class="ltab active">
+      <div class="project-card"><span class="eyebrow">ACTIVE DESIGN</span><div class="design-title" id="designTitle">Counter demo</div><p id="designSubtitle">24-bit counter · multiplexed display</p></div>
+      <label class="field" for="topSelect"><span>Top entity</span><select id="topSelect"></select></label>
+      <details class="compiler-options"><summary>Compiler options</summary><label class="field">Language<select id="standardSelect"><option value="93">VHDL-1993</option><option value="02">VHDL-2002</option><option value="08">VHDL-2008</option></select></label><label class="field">Top library<input id="topLibrary" class="search" value="work" aria-label="Top library"></label><label class="field">Generic overrides<input id="genericInput" class="search" placeholder="WIDTH=32, DEPTH=8" aria-label="Generic overrides"></label><div id="sdfControls" class="hidden"><span id="sdfName"></span><label class="field">SDF instance<input id="sdfInstance" class="search" placeholder="/ (top level)" aria-label="SDF instance"></label><label class="field">Timing corner<select id="sdfCorner"><option value="min">Minimum</option><option value="typ" selected>Typical</option><option value="max">Maximum</option></select></label><button id="clearSdf" class="text-btn">Remove annotation</button><p class="hint">Requires compatible VITAL models and timing checks. A file alone does not create gate delays.</p></div></details>
+      <div class="lib-actions"><button id="btnSaveProject" class="text-btn">Save project ↗</button><span class="hint">Autosaved locally</span></div>
+      <button id="btnElab" class="btn block">Build design <span>↵</span></button>
+      <div class="section-label"><span>Sources</span><span id="srcCount">0</span></div>
+      <ul id="srcList" class="src-list"></ul>
+      <button id="dropZone" class="dropzone"><span class="upload-plus">+</span><span>Add source files<small>VHDL, QSF, VCD or saved project</small></span></button>
+      <div class="section-label library-label"><span>Local HDL library</span><button id="btnDemo" class="text-btn">Load demo</button></div>
+      <input id="libSearch" class="search" type="search" aria-label="Filter HDL library" placeholder="Search files…">
+      <div id="hdlTree" class="hdl-tree"><p class="empty">Reading local files…</p></div>
+      <div class="sidebar-foot"><i></i>All processing stays on this device</div>
+    </section>
+    <section id="ltab-pins" class="ltab">
+      <p class="hint">Enter ports or indexed bits (for example leds[3]). Editing a mapping restarts a native design. Empty fields disconnect a pin; unmapped inputs remain available below the board.</p>
+      <div id="replayControls" class="hidden"><label class="field">Recorded board scope<select id="replayScope" aria-label="Recorded board scope"></select></label><p id="replayPosition" class="hint"></p></div>
+      <div class="lib-actions"><button id="btnQsf" class="btn">Import QSF</button><button id="btnPinReset" class="text-btn">Reset map</button></div>
+      <div class="pin-scroll"><table class="pin-table"><thead><tr><th>Board net</th><th>Design port</th><th>Pin</th></tr></thead><tbody id="pinBody"></tbody></table></div>
+      <p class="hint">Reference pinout; verify against your board revision before using physical hardware.</p>
+    </section>
+  </aside>
+  <main id="workbench">
+    <div class="bench-heading"><div><div class="breadcrumb">Workspace <span>/</span> Digital lab</div><h1>FPGA workbench<span>.</span></h1></div><div class="bench-state"><span id="statusPill" class="status-pill paused">Paused</span><span class="mode-label">Behavioral simulation</span></div></div>
+    <section id="center" aria-label="Interactive 3D FPGA board">
+      <canvas id="view3d" aria-label="FPGA board. Drag to orbit, scroll to zoom. Board keys also available below."></canvas>
+      <div class="viewport-heading"><span class="eyebrow">RZ–EASYFPGA A2.2</span><span class="board-device">Cyclone IV E</span><span class="board-part">EP4CE6E22C8N</span></div>
+      <div class="view-toolbar"><div class="view-presets" aria-label="Board camera"><button data-camera="hero" class="active">Perspective</button><button data-camera="top">Top</button><button data-camera="fpga">Detail</button></div><button id="btnViewSettings" class="icon-btn" aria-label="View settings" aria-expanded="false" title="View settings"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="8" cy="7" r="3"/><circle cx="16" cy="17" r="3"/></svg></button></div>
+      <div id="glOverlay" class="gl-overlay hidden"><h2>3D rendering is unavailable</h2><p>Enable WebGL to see the board. The digital simulator and analyzer still work.</p></div>
+      <div id="deck" class="deck hidden"><div class="panel-heading"><h2>View settings</h2><button id="deckCollapse" class="icon-btn small" aria-label="Close view settings">×</button></div><div class="deck-body">
+        <label class="field">Camera<select id="camPreset"><option value="hero">Perspective</option><option value="top">Top-down</option><option value="fpga">FPGA detail</option><option value="display">Display detail</option><option value="dtubes">Four dtubes</option><option value="leds">Four LEDs</option><option value="io">Connectors</option><option value="underside">Underside</option></select></label>
+        <label class="field">Exploded view <span id="explodeVal">0%</span><input id="explode" type="range" min="0" max="100" value="0"></label>
+        <label class="field">Display persistence <span id="persistVal">60%</span><input id="persistence" type="range" min="0" max="100" value="60"></label>
+        <label class="field">LED intensity <span id="glowVal">40%</span><input id="glow" type="range" min="0" max="100" value="40"></label>
+        <div class="ctl-row"><label><input id="tglOrbit" type="checkbox"> Auto-rotate</label><label><input id="tglLabels" type="checkbox"> Labels</label></div>
+        <div class="ctl-row"><label><input id="tglGrid" type="checkbox"> Grid</label><label><input id="tglTraces" type="checkbox"> Net guides</label></div>
+        <label class="field">Render quality<select id="quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high" selected>High</option></select></label>
+        <div class="lib-actions"><button id="btnResetView" class="btn">Reset view</button><button id="btnShot" class="btn">Save image</button></div>
+      </div></div>
+      <div class="viewport-footer"><span><i class="orbit-icon">↔</i> Drag to orbit <b>·</b> Scroll to zoom</span><span class="model-note">Reference model <span id="roFps">—</span> fps</span></div>
+    </section>
+    <section id="inputBar" class="input-bar" aria-label="Board inputs and outputs">
+      <div class="input-heading"><span class="eyebrow">BOARD I/O</span><span id="inputHint">Hold S1 to count</span></div>
+      <div class="ib-group keys"><button class="key-btn" data-key="key1" title="Hold to count (1)">S1<kbd>1</kbd></button><button class="key-btn" data-key="key2" title="Clear low byte (2)">S2<kbd>2</kbd></button><button class="key-btn" data-key="key3" title="Decrement (3)">S3<kbd>3</kbd></button><button class="key-btn" data-key="key4" title="Lamp test (4)">S4<kbd>4</kbd></button><button class="key-btn reset" data-key="reset" title="Active-low reset (R)">Reset<kbd>R</kbd></button></div>
+      <div class="ib-group led-bank" aria-label="Active-low LED outputs"><button id="btnLedView" class="io-caption text-btn" title="Locate the four LEDs on the board">LEDs ↗</button><span data-led="0">1</span><span data-led="1">2</span><span data-led="2">3</span><span data-led="3">4</span></div>
+      <label class="power-switch"><input id="pwrToggle" type="checkbox" checked><span class="switch-track"></span><span>Power</span></label>
+    </section>
+    <div id="virtualInputs" class="virtual-inputs hidden"></div>
+    <footer id="waves">
+      <div class="waves-head"><div><h2>Logic analyzer <span id="signalCount">0 signals</span></h2><p>Digital states over simulated time</p></div><div class="waves-tools"><label class="follow-label"><input id="waveFollow" type="checkbox" checked> Follow</label><button id="waveZoomOut" class="icon-btn small" aria-label="Zoom waveform out">−</button><button id="waveZoomIn" class="icon-btn small" aria-label="Zoom waveform in">+</button><button id="waveFit" class="text-btn">Fit</button><button id="btnVcd" class="btn" title="Finish the native simulation and export its complete waveform">Finish & export ↗</button></div></div>
+      <div id="sigChips" class="sig-chips" aria-label="Visible signals"></div>
+      <div class="waves-body"><div id="waveNames" class="wave-names"></div><div id="wavePlot" class="wave-plot"><canvas id="waveCanvas" aria-label="Digital signal waveforms"></canvas></div></div>
+      <div class="waves-status"><span id="waveCursor">Cursor —</span><span>0 / 1 · U uninitialized · X unknown · Z high impedance</span></div>
+    </footer>
+    <div class="bench-footer"><span class="simulation-note">Digital logic only <button id="btnLimits" class="text-btn">Model limits ↗</button></span><div><label for="clkHz">Clock</label><select id="clkHz"><option value="1">1 Hz</option><option value="10">10 Hz</option><option value="100">100 Hz</option><option value="1000" selected>1 kHz</option><option value="10000">10 kHz</option><option value="50000000">50 MHz</option></select><label for="speed">Rate</label><input id="speed" type="range" min="0" max="100" value="55" aria-label="Simulation playback rate"><span id="rateLabel">1×</span><span id="roTime" class="mono">0 ns</span><button id="btnMute" class="text-btn muted" aria-pressed="true"><span id="muteLabel">Sound off</span></button></div></div>
+  </main>
+  <aside id="right" class="hidden"><div class="panel-heading"><h2>Inspect</h2><button id="closeRight" class="icon-btn small" aria-label="Close tools">×</button></div>
+    <div class="tabs" role="tablist" aria-label="Inspection tools"><button class="tab active" role="tab" aria-selected="true" data-rtab="console">Console</button><button class="tab" role="tab" aria-selected="false" data-rtab="truth">Truth table</button><button class="tab" role="tab" aria-selected="false" data-rtab="uart">UART</button><button class="tab" role="tab" aria-selected="false" data-rtab="programmer">Bitstream</button></div>
+    <section id="rtab-console" class="rtab active"><div class="lib-actions"><span id="consoleCount" class="count">0</span><span class="hint">events</span><button id="consoleCopy" class="text-btn push-right" title="Copy the console and session details as plain text">Copy</button><button id="consoleClear" class="text-btn">Clear</button></div><div id="consoleOut" class="console-out"></div></section>
+    <section id="rtab-truth" class="rtab"><p class="hint">Evaluate selected scalar inputs in an isolated copy of the design. These are observed outputs, not a proof of correctness. Sequential circuits depend on history.</p><div id="truthInputs" class="truth-inputs"></div><button id="btnTruth" class="btn dark">Generate table</button><span id="truthSummary" class="hint"></span><div class="truth-scroll"><table class="truth-table"><thead id="truthHead"></thead><tbody id="truthBody"></tbody></table></div></section>
+    <section id="rtab-uart" class="rtab"><p class="hint">Receive-only digital UART monitor: 8 data bits, no parity, 1 stop bit. Samples recorded transitions at bit centers; retains the last 16 KB. Set the baud before running.</p><div class="lib-actions"><label for="uartBaud">Baud</label><select id="uartBaud"><option>9600</option><option>19200</option><option>38400</option><option>57600</option><option selected>115200</option></select><button id="uartClear" class="text-btn">Clear</button></div><div id="uartOut" class="uart-out mono"></div></section>
+    <section id="rtab-programmer" class="rtab"><p class="hint">Inspect configuration metadata locally. A bitstream cannot be executed by this simulator, and no physical FPGA is connected.</p><button id="progDrop" class="dropzone"><span class="upload-plus">+</span><span>Inspect bitstream<small>.sof or .pof</small></span></button><input id="progFile" type="file" accept=".sof,.pof" hidden><div id="progInfo" class="prog-info hidden"><dl><dt>File</dt><dd id="piFile"></dd><dt>Device</dt><dd id="piDevice"></dd><dt>Family</dt><dd id="piFamily"></dd><dt>Version</dt><dd id="piVersion"></dd><dt>Date</dt><dd id="piDate"></dd><dt>Size</dt><dd id="piSize"></dd><dt>Device match</dt><dd id="piMatch"></dd></dl><span class="eyebrow">SHA-256</span><code id="piHash"></code><p id="piNote" class="hint"></p></div></section>
+  </aside>
+</div>
+<dialog id="sourceDialog"><div class="dialog-head"><div><span class="eyebrow">SOURCE EDITOR</span><h2 id="sourceName"></h2></div><button class="icon-btn" data-close="sourceDialog" aria-label="Close editor">×</button></div><textarea id="sourceEditor" spellcheck="false" aria-label="VHDL source code"></textarea><div class="dialog-foot"><label>Library <input id="sourceLibrary" class="search" value="work" aria-label="VHDL source library"></label><button id="saveSource" class="btn dark">Save & build</button></div></dialog>
+<dialog id="aboutDialog"><div class="dialog-head"><h2>What this lab models</h2><button class="icon-btn" data-close="aboutDialog" aria-label="Close capabilities">×</button></div><div class="about-content"><p class="intro">A digital workbench.<br>Not a physical circuit solver.</p><dl><dt>Logic & timing</dt><dd>VHDL compiled and executed by the installed GHDL engine, connected through a native VPI bridge. Nine-state logic, native assertions, event timing, ideal clock stimulus and native VCD capture. The website itself is not a certified verification tool.</dd><dt>Board visualization</dt><dd>Photo-referenced component layout, active-low keys and LEDs, and multiplexed display persistence. The model is illustrative, not a dimensionally certified CAD model.</dd><dt>Not simulated</dt><dd>Voltage, current, power consumption, analog transients, signal integrity, metastability, thermal behavior, or FPGA place-and-route timing. Peripheral chips are visual references, not complete electronic models.</dd><dt>Files & projects</dt><dd>VHD/VHDL and VHO netlists compile locally; vendor netlists require their matching VHDL primitive libraries. CF files are GHDL indexes: include their source files and set the correct libraries. QSF imports pin assignments, not a Quartus build. SDF requires matching VITAL timing models and an instance path. HEX/MIF/MEM/TXT/DAT files are provided to the testbench as data; they do not configure the FPGA. VCD replays digital and real traces with selectable board scope. Verilog/SystemVerilog and proprietary bitstreams cannot execute in this GHDL installation.</dd><dt>Resource limits</dt><dd>Four simultaneous simulations, 100 source/data files, 512 observed native signals, 4096 bits per signal, 16 hierarchy levels. Native waveform capture stops at 64 MB; replay accepts 32 MB and 250,000 timestamps. Waveforms reject times outside the exact integer range rather than silently rounding. The analyzer retains recent changes; native VCD retains the captured history.</dd><dt>Local execution</dt><dd>Run only trusted HDL. GHDL testbenches execute locally and may access files; this workbench is not a security sandbox. Projects autosave in this browser and can be exported as JSON; simulation processes and waveform history are not restored after closing the page.</dd><dt>Physical hardware</dt><dd>No JTAG connection. SOF/POF files are inspected, never “programmed.” Verify pin assignments and I/O standards against your exact board schematic before using real hardware.</dd></dl></div></dialog>
+<div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+<input id="fileInput" type="file" multiple accept=".vhd,.vhdl,.vho,.qsf,.sof,.pof,.vo,.v,.sv,.vcd,.cf,.sdf,.hex,.mif,.mem,.txt,.dat,.json" hidden>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
