@@ -1,0 +1,30 @@
+# Runtime server logs
+logs/
+*.log
+
+# Large simulation waveforms
+*.vcd
+trace.vcd
+
+# Browser test profiles & runtime caches
+research/ffprofile/
+research/ffshot2/
+
+# Compiled native bridge artifacts (compiled on the fly by GCC)
+backend/*.o
+backend/bridge-*.vpi
+backend/bridge.vpi
+
+# Tool and editor backups
+__pycache__/
+*.pyc
+*.blend1
+
+# OS generated files
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Future packaging and node dependencies
+node_modules/
+dist/
