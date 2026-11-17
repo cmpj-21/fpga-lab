@@ -125,10 +125,7 @@ const server = http.createServer(async (req, res) => {
 });
 const address = `http://127.0.0.1:${PORT}`;
 function openBrowser() {
-  if (process.env.OPEN_BROWSER === '1' && process.platform === 'win32') {
-    const cmd = process.env.APP_MODE === '1' ? `start "" msedge.exe --app=${address} || start "" ${address}` : `start "" ${address}`;
-    execFile('cmd.exe', ['/d', '/c', cmd], { windowsHide: true }, error => { if (error) console.error(`Open ${address} in your browser.`); });
-  }
+  if (process.env.OPEN_BROWSER === '1' && process.platform === 'win32') execFile('cmd.exe', ['/d', '/c', 'start', '', address], { windowsHide: true }, error => { if (error) console.error(`Open ${address} in your browser.`); });
 }
 server.listen(PORT, '127.0.0.1', () => { claimLog(); console.log(`Trace workbench: ${address}`); openBrowser(); });
 server.on('error', async error => {

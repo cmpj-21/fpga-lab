@@ -12,7 +12,7 @@ import * as audio from './ui/audio.js';
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
-const S = { sources: [], sim: null, running: false, power: true, building: false, busy: false, clkHz: 1000, speed: 55, time: 0, inputs: {}, assignments: new Map(), bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, latchMode: false, latched: new Set() };
+const S = { sources: [], sim: null, running: false, power: true, building: false, busy: false, clkHz: 1000, speed: 55, time: 0, inputs: {}, assignments: new Map(), bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false };
 let board, waves, toastTimer, sourceIndex, consoleCount = 0, logFile = '', reportCount = 0;
 let lastFrame = performance.now(), accumulator = 0, lastDraw = 0;
 const uart = new UartReceiver();
@@ -221,7 +221,6 @@ function consume(result) {
   }
 }
 async function advance(cycles = 1) {
-  if (!Number.isInteger(cycles) || cycles < 0) return;
   if (!S.sim || S.sim.ended || S.dirty || S.error || !S.power || S.busy || S.building || S.importing || S.exporting) return;
   if (S.vcd) { stepPlayback(cycles); return; }
   S.busy = true; const generation = S.generation;
@@ -254,26 +253,14 @@ function keyInput(net, pressed) {
   setInput(bound.signal.id, value);
 }
 function syncKeys() {
-  let dipMask = 0;
   $$('.key-btn').forEach(button => {
     const net = button.dataset.key === 'reset' ? 'reset_btn' : button.dataset.key.replace('key', 's');
     const bound = S.bindings[net]; const down = S.power && bound && S.inputs[bound.signal.id]?.[bound.offset] === '0';
     button.classList.toggle('down', !!down); button.setAttribute('aria-pressed', String(!!down));
     button.disabled = S.building || S.importing || S.exporting || S.dirty || S.error || !S.power || !bound?.signal.driveable || !!S.vcd || S.sim?.ended; board?.setKeyVisual(button.dataset.key, !!down);
   });
-  KEY_NETS.forEach((net, i) => {
-    const bound = S.bindings[net];
-    if (bound && S.inputs[bound.signal.id]?.[bound.offset] === '0') dipMask |= (1 << i);
-  });
-  board?.setDip(dipMask);
 }
-function releaseKeys() {
-  for (const net of ['reset_btn', ...KEY_NETS]) {
-    if (!S.latchMode && !S.latched.has(net)) {
-      const bound = S.bindings[net]; if (bound && S.inputs[bound.signal.id]?.[bound.offset] === '0') keyInput(net, false);
-    }
-  }
-}
+function releaseKeys() { for (const net of ['reset_btn', ...KEY_NETS]) { const bound = S.bindings[net]; if (bound && S.inputs[bound.signal.id]?.[bound.offset] === '0') keyInput(net, false); } }
 function renderVirtualInputs() {
   const wrap = $('#virtualInputs'); wrap.replaceChildren();
   const mapped = new Set(Object.values(S.bindings).map(b => b.signal.id));
@@ -520,7 +507,6 @@ function wire() {
   $('#speed').oninput = e => { S.speed = Number(e.target.value); $('#rateLabel').textContent = `${(10 ** ((S.speed - 55) / 25)).toFixed(1).replace('.0', '')}×`; };
   $('#clkHz').onchange = e => { S.clkHz = Number(e.target.value); accumulator = 0; log(`Ideal clock: ${S.clkHz} Hz. Execution speed is limited by native simulation and display throughput.`); };
   $('#btnMute').onclick = () => { const muted = !audio.isMuted(); audio.setMuted(muted); if (!muted) audio.resume(); $('#btnMute').setAttribute('aria-pressed', String(muted)); $('#muteLabel').textContent = muted ? 'Sound off' : 'Sound on'; };
-  $('#volSlider').oninput = e => { const val = Number(e.target.value); audio.setVolume(val / 100); $('#volLabel').textContent = `${val}%`; if (audio.isMuted() && val > 0) $('#btnMute').click(); };
   $('#btnElab').onclick = () => build(); $('#topSelect').onchange = () => build();
   $('#btnDemo').onclick = () => { S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; S.assignments.clear(); S.sdf = null; $('#genericInput').value = ''; $('#topLibrary').value = 'work'; $('#standardSelect').value = '93'; renderSdf(); renderSources(); build(DEMO_TOP); };
   $('#btnSaveProject').onclick = () => { saveProject(); download(JSON.stringify(projectData(), null, 2), 'trace-project.json', 'application/json'); toast('Project saved, including sources, libraries and pin mappings.'); };
@@ -536,27 +522,11 @@ function wire() {
   $('#btnPinReset').onclick = () => { S.assignments.clear(); saveProject(); if (S.vcd) { buildBindings(); renderPins(); sampleOutputs(); } else { markDirty(); build(); } };
   $$('.key-btn').forEach(button => {
     const net = button.dataset.key === 'reset' ? 'reset_btn' : button.dataset.key.replace('key', 's');
-    button.onpointerdown = e => {
-      if (button.disabled) return; e.preventDefault();
-      if (S.latchMode || e.shiftKey) {
-        if (S.latched.has(net)) { S.latched.delete(net); keyInput(net, false); }
-        else { S.latched.add(net); keyInput(net, true); }
-        return;
-      }
-      button.setPointerCapture(e.pointerId); keyInput(net, true);
-    };
-    button.onpointerup = button.onpointercancel = button.onlostpointercapture = () => {
-      if (!S.latchMode && !S.latched.has(net)) keyInput(net, false);
-    };
+    button.onpointerdown = e => { if (button.disabled) return; e.preventDefault(); button.setPointerCapture(e.pointerId); keyInput(net, true); };
+    button.onpointerup = button.onpointercancel = button.onlostpointercapture = () => keyInput(net, false);
     button.onkeydown = e => { if (['Enter', ' '].includes(e.key)) { e.preventDefault(); e.stopPropagation(); keyInput(net, true); } };
-    button.onkeyup = e => { if (['Enter', ' '].includes(e.key)) { e.preventDefault(); e.stopPropagation(); if (!S.latched.has(net)) keyInput(net, false); } };
+    button.onkeyup = e => { if (['Enter', ' '].includes(e.key)) { e.preventDefault(); e.stopPropagation(); keyInput(net, false); } };
   });
-  $('#btnLatch').onclick = () => {
-    S.latchMode = !S.latchMode;
-    $('#btnLatch').textContent = S.latchMode ? 'Latch ON' : 'Latch off';
-    $('#btnLatch').setAttribute('aria-pressed', String(S.latchMode));
-    if (!S.latchMode) { S.latched.forEach(net => keyInput(net, false)); S.latched.clear(); }
-  };
   const keys = { '1': 's1', '2': 's2', '3': 's3', '4': 's4', r: 'reset_btn' };
   window.addEventListener('keydown', e => {
     if (e.target.closest('input,select,textarea,dialog') || e.repeat) return;
@@ -594,9 +564,9 @@ function wire() {
   window.addEventListener('pagehide', () => { if (S.sim?.id) navigator.sendBeacon(`/api/sim/${S.sim.id}/close`, ''); });
 }
 function frame(now) {
-  requestAnimationFrame(frame); const dt = Math.max(0, Math.min(.1, (now - lastFrame) / 1000)); lastFrame = now;
+  requestAnimationFrame(frame); const dt = Math.min(.1, (now - lastFrame) / 1000); lastFrame = now;
   if (now - lastDraw > 250) { $('#roFps').textContent = board ? Math.round(board.fps) : '—'; lastDraw = now; }
-  if (S.running && !S.busy) { accumulator += S.clkHz * 10 ** ((S.speed - 55) / 25) * dt; const cycles = Math.min(512, Math.floor(accumulator)); if (Number.isInteger(cycles) && cycles > 0) { accumulator -= cycles; accumulator = Math.max(0, Math.min(accumulator, 512)); advance(cycles); } }
+  if (S.running && !S.busy) { accumulator += S.clkHz * 10 ** ((S.speed - 55) / 25) * dt; const cycles = Math.min(512, Math.floor(accumulator)); if (cycles) { accumulator -= cycles; accumulator = Math.min(accumulator, 512); advance(cycles); } }
   else if (!S.running && S.pending.length && !S.busy && !S.building) advance(0);
 }
 async function boot() {

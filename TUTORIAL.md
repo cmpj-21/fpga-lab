@@ -288,11 +288,6 @@ These are the application's reference pin assignments, not a substitute for chec
 | Display digit enables | 133 / 135 / 136 / 137 | `dtube1` / `dtube2` / `dtube3` / `dtube4` |
 | Buzzer | 110 | `beep` |
 | UART transmit / receive | 114 / 115 | `uart_txd` / `uart_rxd` |
-| VGA HS / VS | 101 / 103 | `vga_hs` / `vga_vs` |
-| VGA R / G / B | 106 / 105 / 104 | `vga_r` / `vga_g` / `vga_b` |
-| PS/2 Clock / Data | 119 / 120 | `ps2_clk` / `ps2_data` |
-| I2C SCL / SDA | 112 / 113 | `i2c_scl` / `i2c_sda` |
-| Infrared receiver | 100 | `ir` |
 
 Display segments default to `seven_seg[0]` through `seven_seg[7]`, corresponding to **a, b, c, d, e, f, g, decimal point**. Segments and digit enables are active-low. For a vector declared `(7 downto 0)`, the text string is therefore ordered **dp g f e d c b a**.
 

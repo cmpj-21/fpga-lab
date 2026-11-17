@@ -4,15 +4,13 @@ let master = null;
 let muted = false;
 let buzzerOsc = null, buzzerGain = null;
 
-let currentVolume = 0.5;
-
 function ensure() {
   if (ctx) return ctx;
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return null;
   ctx = new AC();
   master = ctx.createGain();
-  master.gain.value = muted ? 0 : currentVolume;
+  master.gain.value = muted ? 0 : 0.5;
   master.connect(ctx.destination);
   return ctx;
 }
@@ -22,18 +20,9 @@ export function resume() {
   if (c && c.state === 'suspended') c.resume();
 }
 
-export function setVolume(v) {
-  currentVolume = Math.max(0, Math.min(1, Number(v) || 0));
-  const c = ensure();
-  if (master && !muted && c) master.gain.setTargetAtTime(currentVolume, c.currentTime, 0.02);
-}
-
-export function getVolume() { return currentVolume; }
-
 export function setMuted(m) {
   muted = m;
-  const c = ensure();
-  if (master && c) master.gain.setTargetAtTime(m ? 0 : currentVolume, c.currentTime, 0.02);
+  if (master) master.gain.setTargetAtTime(m ? 0 : 0.5, ctx.currentTime, 0.02);
   if (m) stopBuzzer();
 }
 export function isMuted() { return muted; }
