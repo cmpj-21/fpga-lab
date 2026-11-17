@@ -22,30 +22,32 @@ export class WaveViewer {
     });
     for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) canvas.addEventListener(event, () => this.drag = null);
     canvas.addEventListener('wheel', e => {
-      e.preventDefault();
-      this.onNavigate?.();
-      const rect = canvas.getBoundingClientRect();
-      const span = this.tEnd - this.tStart;
-      const cursorT = this.tStart + ((e.clientX - rect.left) / rect.width) * span;
-      const lineFactor = e.deltaMode === 1 ? 20 : e.deltaMode === 2 ? rect.height : 1;
-      const dy = e.deltaY * lineFactor, dx = e.deltaX * lineFactor;
+      const isHorizontalPan = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY);
       if (e.ctrlKey) {
+        e.preventDefault();
+        this.onNavigate?.();
+        const rect = canvas.getBoundingClientRect();
+        const span = this.tEnd - this.tStart;
+        const cursorT = this.tStart + ((e.clientX - rect.left) / rect.width) * span;
+        const lineFactor = e.deltaMode === 1 ? 20 : e.deltaMode === 2 ? rect.height : 1;
+        const dy = e.deltaY * lineFactor;
         this.zoom(Math.exp(dy * 0.005), cursorT);
         return;
       }
-      const isHorizontalPan = e.shiftKey || Math.abs(dx) > Math.abs(dy);
       if (isHorizontalPan) {
-        const deltaPixels = e.shiftKey ? dy : dx;
+        e.preventDefault();
+        this.onNavigate?.();
+        const rect = canvas.getBoundingClientRect();
+        const span = this.tEnd - this.tStart;
+        const lineFactor = e.deltaMode === 1 ? 20 : e.deltaMode === 2 ? rect.height : 1;
+        const dy = e.deltaY * lineFactor, dx = e.deltaX * lineFactor;
+        const deltaPixels = e.shiftKey ? (Math.abs(dx) > 0 ? dx : dy) : dx;
         const timeDelta = (deltaPixels / rect.width) * span;
         this.tStart = Math.max(0, this.tStart + timeDelta);
         this.tEnd = this.tStart + span;
         this.draw();
         return;
       }
-      const timeDelta = (dy / rect.width) * span * 0.5;
-      this.tStart = Math.max(0, this.tStart + timeDelta);
-      this.tEnd = this.tStart + span;
-      this.draw();
     }, { passive: false });
     this.resize();
   }

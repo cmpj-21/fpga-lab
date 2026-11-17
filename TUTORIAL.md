@@ -325,7 +325,8 @@ A QSF imports pin assignments and supported project metadata. It does not run Qu
 - **+ / −** zoom the timeline.
 - **Fit** fits the recorded range and turns off Follow.
 - **Ctrl/⌘ + scroll** or **pinch** over the plot zooms smoothly around the pointer.
-- Scroll over the plot to pan the timeline at half speed; **Shift + scroll** or a two-finger horizontal swipe pans sideways.
+- **Shift + scroll** or a two-finger horizontal swipe pans sideways through time.
+- Scroll vertically over the plot to scroll up and down through the signal list.
 - Drag horizontally inside the plot to pan.
 - Move the pointer over the plot to inspect a time with the cursor. The value column corresponds to the cursor position, which may be earlier than the current simulation time.
 
