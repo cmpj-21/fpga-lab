@@ -15,6 +15,8 @@ export const PIN_NET = {
   128: 'seg_a', 121: 'seg_b', 125: 'seg_c', 129: 'seg_d', 132: 'seg_e', 126: 'seg_f', 124: 'seg_g', 127: 'seg_dp',
   110: 'beep', 114: 'uart_txd', 115: 'uart_rxd',
   106: 'vga_r', 105: 'vga_g', 104: 'vga_b', 101: 'vga_hs', 103: 'vga_vs',
+  119: 'ps2_clk', 120: 'ps2_data', 100: 'ir_rx',
+  112: 'i2c_scl', 113: 'i2c_sda',
 };
 export const NET_PIN = Object.fromEntries(Object.entries(PIN_NET).map(([pin, net]) => [net, Number(pin)]));
 export const SEG_NETS = ['seg_a', 'seg_b', 'seg_c', 'seg_d', 'seg_e', 'seg_f', 'seg_g', 'seg_dp'];

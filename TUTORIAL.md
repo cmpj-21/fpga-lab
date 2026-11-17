@@ -290,12 +290,17 @@ These are the application's reference pin assignments, not a substitute for chec
 | UART transmit / receive | 114 / 115 | `uart_txd` / `uart_rxd` |
 | VGA HS / VS | 101 / 103 | `vga_hs` / `vga_vs` |
 | VGA R / G / B | 106 / 105 / 104 | `vga_r` / `vga_g` / `vga_b` |
+| PS/2 clock / data | 119 / 120 | `ps2_clk` / `ps2_data` |
+| I2C EEPROM SCL / SDA | 112 / 113 | `i2c_scl` / `i2c_sda` |
+| Infrared receiver | 100 | `ir_rx` |
 
 These VGA nets are the physical DB15 connector pins, not the LCD header pins (142, 143, 144, 1, 2) used by some student projects with external wiring.
 
 Display segments default to `seven_seg[0]` through `seven_seg[7]`, corresponding to **a, b, c, d, e, f, g, decimal point**. Segments and digit enables are active-low. For a vector declared `(7 downto 0)`, the text string is therefore ordered **dp g f e d c b a**.
 
 Vendor reference-sheet labels are aliases, not separate nets. The sheet names the pin-100 receiver `IR`; Trace uses `ir_rx`. The sheet also lists a second I2C pair on pins 99/98; Trace's EEPROM mapping is `i2c_scl`/`i2c_sda` on 112/113, and the 99/98 header is not modeled.
+
+These PS/2, I2C and IR entries are pin mappings only. Trace does not provide a PS/2 protocol engine, EEPROM storage, or 38 kHz infrared demodulation.
 
 ### Import a Quartus QSF
 
