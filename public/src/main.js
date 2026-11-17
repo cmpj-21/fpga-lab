@@ -628,8 +628,9 @@ function wire() {
     button.onclick = () => toggleDip(Number(button.dataset.dip));
   });
   const keys = { '1': 's1', '2': 's2', '3': 's3', '4': 's4', r: 'reset_btn' };
-  const setTool = mode => { board?.setToolMode(mode); $$('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === mode)); syncViewportHint(); };
+  const setTool = mode => { board?.setToolMode(mode); $$('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === mode)); $('#lblHideOutline')?.classList.toggle('hidden', mode !== 'select'); syncViewportHint(); };
   const setNav = mode => { board?.setNavMode(mode); $$('[data-nav]').forEach(b => b.classList.toggle('active', b.dataset.nav === mode)); syncViewportHint(); };
+  $('#chkHideOutline').onchange = e => board?.setHideOutline(e.target.checked);
   const centerSelection = () => {
     if (board?.selectedPart) {
       board.centerSelected();

@@ -51,7 +51,7 @@ export async function createBoard3D(canvas, opts = {}) {
   scene.add(model);
   model.updateMatrixWorld(true);
   const groups = Object.fromEntries(model.children.map(object => [object.name, object]));
-  const state = { power: true, persistence: .6, glow: .4, explode: 0, explodeTarget: 0, tween: null, navMode: 'orbit', toolMode: 'interact', selected: null, hovered: null };
+  const state = { power: true, persistence: .6, glow: .4, explode: 0, explodeTarget: 0, tween: null, navMode: 'orbit', toolMode: 'interact', selected: null, hovered: null, hideOutline: false };
   function syncCameraButtons() {
     const mode = state.navMode === 'pan' ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
     controls.mouseButtons.LEFT = mode;
@@ -324,7 +324,7 @@ export async function createBoard3D(canvas, opts = {}) {
     const hit = pick(event);
     if (state.toolMode === 'select') {
       state.hovered = hit?.partId || null;
-      if (state.hovered && state.hovered !== state.selected) {
+      if (!state.hideOutline && state.hovered && state.hovered !== state.selected) {
         computePartBox(state.hovered, hoverHighlight.box);
         hoverHighlight.visible = true;
       } else {
@@ -382,7 +382,7 @@ export async function createBoard3D(canvas, opts = {}) {
     if (labels.visible) for (const sprite of labels.children) {
       sprite.userData.component.getWorldPosition(sprite.position); sprite.position.y += 17;
     }
-    highlight.visible = !!state.selected || now < highlightUntil;
+    highlight.visible = !state.hideOutline && (!!state.selected || now < highlightUntil);
   }
   function frame(now) {
     requestAnimationFrame(frame);
@@ -435,6 +435,11 @@ export async function createBoard3D(canvas, opts = {}) {
       }
     },
     get toolMode() { return state.toolMode; },
+    setHideOutline(value) {
+      state.hideOutline = !!value;
+      if (state.hideOutline) { highlight.visible = false; hoverHighlight.visible = false; }
+    },
+    get hideOutline() { return state.hideOutline; },
     setExplode(value) { state.explodeTarget = value; },
     setPersistence(value) { state.persistence = value; },
     setGlow(value) { state.glow = value; },
