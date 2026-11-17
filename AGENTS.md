@@ -57,8 +57,10 @@ The board model is strictly referenced against the physical **RZ-EasyFPGA A2.2 (
 | **UART Interface** | `uart_txd`, `uart_rxd` | **114, 115** | Serial comms (3.3V TTL) |
 | **VGA DB15 Port** | `vga_hs`, `vga_vs`, `vga_b`, `vga_g`, `vga_r` | **101, 103, 104, 105, 106** | **Physical DB15 connector** *(Do not confuse with expansion header pins 142..144, 1..2 used in custom student projects like `SnakeGame.qsf`)* |
 | **PS/2 Port** | `ps2_clk`, `ps2_data` | **119, 120** | Keyboard / Mouse interface |
-| **I2C EEPROM** | `i2c_scl`, `i2c_sda` | **112, 113** | AT24C02 memory chip |
-| **IR Receiver** | `ir_rx` | **100** | 38 kHz infrared demodulator |
+| **I2C EEPROM** | `i2c_scl`, `i2c_sda` | **112, 113** | AT24C02 memory chip; the sheet's second `I2C_SCL`/`I2C_SDA` pair on 99/98 is a separate unmodeled header |
+| **IR Receiver** | `ir_rx` | **100** | 38 kHz infrared demodulator; vendor sheet label `IR` is an alias, not a separate net |
+
+The net names in this table are canonical. Vendor-sheet labels (such as `IR`) and alternate header pairs (99/98 I2C) are documentation aliases only; never add duplicate nets to `boardDef.js`.
 
 ---
 

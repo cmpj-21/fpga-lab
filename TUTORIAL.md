@@ -291,6 +291,8 @@ These are the application's reference pin assignments, not a substitute for chec
 
 Display segments default to `seven_seg[0]` through `seven_seg[7]`, corresponding to **a, b, c, d, e, f, g, decimal point**. Segments and digit enables are active-low. For a vector declared `(7 downto 0)`, the text string is therefore ordered **dp g f e d c b a**.
 
+Vendor reference-sheet labels are aliases, not separate nets. The sheet names the pin-100 receiver `IR`; Trace uses `ir_rx`. The sheet also lists a second I2C pair on pins 99/98; Trace's EEPROM mapping is `i2c_scl`/`i2c_sda` on 112/113, and the 99/98 header is not modeled.
+
 ### Import a Quartus QSF
 
 Choose **Pins > Import QSF**, or select the QSF with your VHDL files through **Open files**.
