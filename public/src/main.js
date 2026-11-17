@@ -221,6 +221,7 @@ function consume(result) {
   }
 }
 async function advance(cycles = 1) {
+  if (!Number.isInteger(cycles) || cycles < 0) return;
   if (!S.sim || S.sim.ended || S.dirty || S.error || !S.power || S.busy || S.building || S.importing || S.exporting) return;
   if (S.vcd) { stepPlayback(cycles); return; }
   S.busy = true; const generation = S.generation;
@@ -564,9 +565,9 @@ function wire() {
   window.addEventListener('pagehide', () => { if (S.sim?.id) navigator.sendBeacon(`/api/sim/${S.sim.id}/close`, ''); });
 }
 function frame(now) {
-  requestAnimationFrame(frame); const dt = Math.min(.1, (now - lastFrame) / 1000); lastFrame = now;
+  requestAnimationFrame(frame); const dt = Math.max(0, Math.min(.1, (now - lastFrame) / 1000)); lastFrame = now;
   if (now - lastDraw > 250) { $('#roFps').textContent = board ? Math.round(board.fps) : '—'; lastDraw = now; }
-  if (S.running && !S.busy) { accumulator += S.clkHz * 10 ** ((S.speed - 55) / 25) * dt; const cycles = Math.min(512, Math.floor(accumulator)); if (cycles) { accumulator -= cycles; accumulator = Math.min(accumulator, 512); advance(cycles); } }
+  if (S.running && !S.busy) { accumulator += S.clkHz * 10 ** ((S.speed - 55) / 25) * dt; const cycles = Math.min(512, Math.floor(accumulator)); if (Number.isInteger(cycles) && cycles > 0) { accumulator -= cycles; accumulator = Math.max(0, Math.min(accumulator, 512)); advance(cycles); } }
   else if (!S.running && S.pending.length && !S.busy && !S.building) advance(0);
 }
 async function boot() {
