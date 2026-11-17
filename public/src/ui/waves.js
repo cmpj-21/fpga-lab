@@ -21,7 +21,32 @@ export class WaveViewer {
       this.draw(); this.onCursor?.(this.cursorT);
     });
     for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) canvas.addEventListener(event, () => this.drag = null);
-    canvas.addEventListener('wheel', e => { e.preventDefault(); this.onNavigate?.(); const rect = canvas.getBoundingClientRect(); this.zoom(e.deltaY > 0 ? 1.2 : 1 / 1.2, this.tStart + (e.clientX - rect.left) / rect.width * (this.tEnd - this.tStart)); }, { passive: false });
+    canvas.addEventListener('wheel', e => {
+      e.preventDefault();
+      this.onNavigate?.();
+      const rect = canvas.getBoundingClientRect();
+      const span = this.tEnd - this.tStart;
+      const cursorT = this.tStart + ((e.clientX - rect.left) / rect.width) * span;
+      const lineFactor = e.deltaMode === 1 ? 20 : e.deltaMode === 2 ? rect.height : 1;
+      const dy = e.deltaY * lineFactor, dx = e.deltaX * lineFactor;
+      if (e.ctrlKey) {
+        this.zoom(Math.exp(dy * 0.005), cursorT);
+        return;
+      }
+      const isHorizontalPan = e.shiftKey || Math.abs(dx) > Math.abs(dy);
+      if (isHorizontalPan) {
+        const deltaPixels = e.shiftKey ? dy : dx;
+        const timeDelta = (deltaPixels / rect.width) * span;
+        this.tStart = Math.max(0, this.tStart + timeDelta);
+        this.tEnd = this.tStart + span;
+        this.draw();
+        return;
+      }
+      const timeDelta = (dy / rect.width) * span * 0.5;
+      this.tStart = Math.max(0, this.tStart + timeDelta);
+      this.tEnd = this.tStart + span;
+      this.draw();
+    }, { passive: false });
     this.resize();
   }
   resize() {
