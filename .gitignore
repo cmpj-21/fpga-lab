@@ -9,6 +9,8 @@ trace.vcd
 # Browser test profiles & runtime caches
 research/ffprofile/
 research/ffshot2/
+research/crop_*.png
+dump_modules.txt
 
 # Compiled native bridge artifacts (compiled on the fly by GCC)
 backend/*.o

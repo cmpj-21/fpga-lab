@@ -124,7 +124,7 @@ export async function createBoard3D(canvas, opts = {}) {
     fpga: { pos: [12, 61, 64], target: [-13, 3, -1] },
     display: { pos: [36, 52, 24], target: [25.3, 6, -35.8] },
     dtubes: { pos: [25.3, 65, -16], target: [25.3, 9.8, -35.8] },
-    leds: { pos: [34.5, 45, -1], target: [34.5, 2, -22] },
+    leds: { pos: [11.5, 45, 63.5], target: [11.5, 2, 42.5] },
     io: { pos: [162, 43, 38], target: [58, 5, 4] }
   };
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
