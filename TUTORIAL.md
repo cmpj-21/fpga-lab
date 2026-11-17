@@ -109,7 +109,10 @@ Screenshots illustrate the layout; your design, clock, open panels, and signal v
 
 ### Inspect the 3D board
 
-- Drag the board to orbit the camera; scroll to zoom.
+- **Left-click** any component, connector, header, LED, digit, or switch to select it and open its floating hardware inspector card (showing package details, mapped FPGA pins/nets, and live logic states).
+- Use the **Interact / Select** toggle (`V`) in the viewport toolbar to choose whether left-clicking interactive controls (`S1`–`S4`, `Reset`, `DIP 1–4`, `Power`) actuates them (`Interact`) or selects them for inspection without toggling (`Select`).
+- Hold **right-click (RMB) and drag** to move the camera; use the **Orbit / Pan** toggle in the viewport toolbar (or hold `Shift + RMB`) to switch between orbiting and panning. Scroll to zoom.
+- Click **Center** (`F`) or double-click a component to smoothly frame the camera and orbit pivot onto the selected component.
 - Use **Perspective**, **Top**, or **Detail** for quick views.
 - Open the sliders-shaped **View settings** button for more camera views, including **Four LEDs**, **Display detail**, **Connectors**, and **Underside**.
 - **Exploded view** separates component assemblies for inspection.
@@ -611,7 +614,9 @@ The console's first compiler error is usually the best starting point. Fix that 
 | Hold `1`, `2`, `3`, `4` | Hold momentary tactile key S1, S2, S3, S4 respectively |
 | `Alt + 1`, `2`, `3`, `4` | Toggle latching DIP switch 1, 2, 3, 4 (ON/OFF, wired in parallel with S1–S4) |
 | Hold `R` | Hold the board's reset input |
-| `Escape` | Dismiss open overlay panels; native dialogs also support their normal close behavior |
+| `F` | Center and frame the 3D camera on the selected board component (or reset view if none is selected) |
+| `V` | Toggle the 3D viewport left-click mode between **Interact** and **Select** |
+| `Escape` | Clear the active 3D component selection and dismiss open overlay panels |
 
 Mouse and touchpad: Ctrl/⌘ + wheel or pinch zooms the waveform plot around the pointer; Shift + wheel or a horizontal two-finger swipe pans the timeline. Firefox line-mode wheel deltas are normalized so panning has the same speed as other browsers.
 

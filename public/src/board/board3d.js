@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFLoader } from '../../vendor/GLTFLoader.js';
-import { PIN_NET, COMPONENTS } from './boardDef.js';
+import { PIN_NET, COMPONENTS, BOARD_PARTS } from './boardDef.js';
 
 export async function createBoard3D(canvas, opts = {}) {
   const asset = await new GLTFLoader().loadAsync('/assets/rz-easyfpga-a2.2.glb');
@@ -51,7 +51,14 @@ export async function createBoard3D(canvas, opts = {}) {
   scene.add(model);
   model.updateMatrixWorld(true);
   const groups = Object.fromEntries(model.children.map(object => [object.name, object]));
-  const state = { power: true, persistence: .6, glow: .4, explode: 0, explodeTarget: 0, tween: null };
+  const state = { power: true, persistence: .6, glow: .4, explode: 0, explodeTarget: 0, tween: null, navMode: 'orbit', toolMode: 'interact', selected: null, hovered: null };
+  function syncCameraButtons() {
+    controls.mouseButtons.LEFT = -1;
+    controls.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
+    controls.mouseButtons.RIGHT = state.navMode === 'orbit' ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN;
+  }
+  syncCameraButtons();
+  canvas.addEventListener('contextmenu', event => event.preventDefault());
   const segments = Array.from({ length: 4 }, (_, digit) => ({ segs: 0, latched: 0, enabled: false, lastActive: -Infinity,
     meshes: Array.from({ length: 8 }, (_, bit) => {
       const mesh = model.getObjectByName(`segment_${digit}_${bit}`);
@@ -71,24 +78,60 @@ export async function createBoard3D(canvas, opts = {}) {
   const keys = ['key1', 'key2', 'key3', 'key4', 'reset'].map(id => {
     const cap = model.getObjectByName(`key_${id}_cap`);
     cap.userData.key = id;
+    cap.userData.partId = id;
     return { id, cap, baseY: cap.position.y, target: 0, press: 0 };
   });
-  for (const { id } of keys) groups[id].traverse(object => { if (object.isMesh) object.userData.key = id; });
+  for (const { id } of keys) groups[id].traverse(object => { if (object.isMesh) { object.userData.key = id; object.userData.partId = id; } });
+  const touchMat = new THREE.MeshBasicMaterial({ visible: false });
   const dipLevers = [0, 1, 2, 3].map(i => model.getObjectByName(`dip_${i}`));
-  dipLevers.forEach((lever, i) => { if (lever) lever.userData.dip = i; });
+  dipLevers.forEach((lever, i) => { if (lever) { lever.userData.dip = i; lever.userData.partId = `dip_${i}`; } });
   if (groups.dip && dipLevers.every(Boolean)) {
-    const dipTouchMat = new THREE.MeshBasicMaterial({ visible: false });
+    groups.dip.userData.partId = 'dip';
     const dipEdges = [-.0056, ...[0, 1, 2].map(i => (dipLevers[i].position.x + dipLevers[i + 1].position.x) / 2), .0056];
     for (let i = 0; i < 4; i++) {
       // Expand raycast touch boxes to cover each full switch lane (ON label, slot, lever, and digit)
-      const hitBox = new THREE.Mesh(new THREE.BoxGeometry(dipEdges[i + 1] - dipEdges[i], .0043, .0112), dipTouchMat);
+      const hitBox = new THREE.Mesh(new THREE.BoxGeometry(dipEdges[i + 1] - dipEdges[i], .0043, .0112), touchMat);
       hitBox.name = `dip_touch_${i}`;
       hitBox.position.set((dipEdges[i] + dipEdges[i + 1]) / 2, .00465, 0);
-      hitBox.userData.dip = i;
+      hitBox.userData = { dip: i, partId: `dip_${i}`, isTouchBox: true };
       groups.dip.add(hitBox);
     }
   }
+  if (groups.display) {
+    groups.display.userData.partId = 'display';
+    for (let d = 0; d < 4; d++) {
+      const hitBox = new THREE.Mesh(new THREE.BoxGeometry(.0098, .0032, .0144), touchMat);
+      hitBox.name = `dtube_touch_${d}`;
+      hitBox.position.set((-1.5 + d) * .0095, .0076, 0);
+      hitBox.userData = { partId: `dtube${d + 1}`, isTouchBox: true };
+      groups.display.add(hitBox);
+    }
+  }
   const floating = Object.values(groups).filter(g => !['pcb', 'pcb_details', 'routing', 'passives'].includes(g.name)).map(g => ({ group: g, y: g.position.y, lift: g.name === 'fpga' ? .035 : .018 }));
+  for (const { group: g } of floating) {
+    if (!g.userData.partId) g.userData.partId = g.name;
+    if (g.name === 'power_switch') g.userData.power = true;
+    if (g.name === 'dip' || g.name === 'display') continue;
+    g.updateWorldMatrix(true, true);
+    const inv = g.matrixWorld.clone().invert(), localBox = new THREE.Box3();
+    g.traverse(m => {
+      if (m.isMesh && !m.userData.isTouchBox) {
+        m.geometry.computeBoundingBox();
+        localBox.union(m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld).applyMatrix4(inv));
+      }
+    });
+    if (localBox.isEmpty()) continue;
+    const size = localBox.getSize(new THREE.Vector3()), center = localBox.getCenter(new THREE.Vector3());
+    const isRowLed = /^led[1-4]$/.test(g.name);
+    const sx = Math.max(size.x + .0012, isRowLed ? .0058 : .0052);
+    const sy = Math.max(size.y + .0014, .0034);
+    const sz = Math.max(size.z + (isRowLed ? .0004 : .0012), isRowLed ? .0033 : .0052);
+    const hitBox = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), touchMat);
+    hitBox.name = `part_touch_${g.name}`;
+    hitBox.position.set(center.x, Math.max(center.y, sy * .5), center.z);
+    hitBox.userData = { partId: g.name, key: keys.find(k => k.id === g.name)?.id || null, power: g.name === 'power_switch', isTouchBox: true };
+    g.add(hitBox);
+  }
   const labels = new THREE.Group();
   labels.visible = false;
   scene.add(labels);
@@ -126,7 +169,30 @@ export async function createBoard3D(canvas, opts = {}) {
   }
   const highlight = new THREE.Box3Helper(new THREE.Box3(), 0x87a751);
   highlight.visible = false; scene.add(highlight);
+  const hoverHighlight = new THREE.Box3Helper(new THREE.Box3(), 0x9ab074);
+  hoverHighlight.material.transparent = true; hoverHighlight.material.opacity = .5;
+  hoverHighlight.visible = false; scene.add(hoverHighlight);
   let highlightUntil = 0;
+  function computePartBox(partId, outBox = new THREE.Box3()) {
+    outBox.makeEmpty();
+    const meta = BOARD_PARTS[partId];
+    if (meta?.subMesh) {
+      const sub = model.getObjectByName(meta.subMesh);
+      if (sub) { outBox.setFromObject(sub).expandByScalar(.35); return outBox; }
+    }
+    const group = groups[meta?.group || partId];
+    if (!group) return outBox;
+    group.traverse(m => { if (m.isMesh && !m.userData.isTouchBox) outBox.expandByObject(m); });
+    if (!outBox.isEmpty()) outBox.expandByScalar(.65);
+    return outBox;
+  }
+  function selectPart(partId) {
+    const next = partId && BOARD_PARTS[partId] ? partId : null;
+    state.selected = next;
+    if (next) computePartBox(next, highlight.box);
+    opts.onSelect?.(next ? BOARD_PARTS[next] : null);
+    return next ? BOARD_PARTS[next] : null;
+  }
   const presets = {
     hero: { pos: [110, 140, 155], target: [0, 3, 0] },
     top: { pos: [0, 240, .5], target: [0, 0, 0] },
@@ -143,6 +209,23 @@ export async function createBoard3D(canvas, opts = {}) {
     const pos = new THREE.Vector3(...preset.pos), target = new THREE.Vector3(...preset.target);
     if (reducedMotion) { camera.position.copy(pos); controls.target.copy(target); controls.update(); }
     else state.tween = { pos, target };
+  }
+  function centerSelected(partId = state.selected) {
+    if (!partId || !BOARD_PARTS[partId]) { setCamera('hero'); return false; }
+    const box = computePartBox(partId);
+    if (box.isEmpty()) { setCamera('hero'); return false; }
+    const target = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const span = Math.max(size.x, size.y, size.z, 8);
+    const dir = camera.position.clone().sub(controls.target);
+    if (dir.lengthSq() < 1e-4) dir.set(.45, .75, .55);
+    dir.normalize();
+    if (Math.abs(dir.y) < .28) { dir.y = dir.y < 0 ? -.45 : .55; dir.normalize(); }
+    const dist = THREE.MathUtils.clamp(span * 2.4 + 34, 42, 210);
+    const pos = target.clone().addScaledVector(dir, dist);
+    if (reducedMotion) { camera.position.copy(pos); controls.target.copy(target); controls.update(); }
+    else state.tween = { pos, target };
+    return true;
   }
   controls.addEventListener('start', () => { state.tween = null; });
   function resize() {
@@ -162,25 +245,46 @@ export async function createBoard3D(canvas, opts = {}) {
   new ResizeObserver(resize).observe(canvas.parentElement);
   setQuality('high');
   const ray = new THREE.Raycaster(), pointer = new THREE.Vector2();
-  let activeKey = null;
+  let activeKey = null, rmbDrag = false;
   function pick(event) {
     const rect = canvas.getBoundingClientRect();
     pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
     ray.setFromCamera(pointer, camera);
-    const hit = ray.intersectObject(model, true)[0];
-    if (!hit) return null;
-    let obj = hit.object;
-    while (obj && obj !== model) {
-      if (obj.userData.key) return { type: 'key', id: obj.userData.key };
-      if (obj.userData.dip !== undefined) return { type: 'dip', index: obj.userData.dip };
-      obj = obj.parent;
+    const hits = ray.intersectObject(model, true);
+    for (const hit of hits) {
+      let obj = hit.object;
+      if (obj.parent?.name === 'pcb') return null;
+      let keyId = null, dipIdx = undefined, power = false, partId = null;
+      while (obj && obj !== model) {
+        if (!keyId && obj.userData.key) keyId = obj.userData.key;
+        if (dipIdx === undefined && obj.userData.dip !== undefined) dipIdx = obj.userData.dip;
+        if (!power && obj.userData.power) power = true;
+        if (!partId && obj.userData.partId) partId = obj.userData.partId;
+        obj = obj.parent;
+      }
+      if (partId || keyId || dipIdx !== undefined || power) {
+        return {
+          partId: partId || (dipIdx !== undefined ? `dip_${dipIdx}` : keyId),
+          type: keyId ? 'key' : dipIdx !== undefined ? 'dip' : power ? 'power' : 'part',
+          id: keyId,
+          index: dipIdx,
+        };
+      }
     }
     return null;
   }
   canvas.addEventListener('pointerdown', event => {
-    if (!state.power || event.button !== 0) return;
+    if (event.button === 2) { rmbDrag = true; canvas.style.cursor = 'grabbing'; return; }
+    if (event.button !== 0) return;
     const target = pick(event);
-    if (!target) return;
+    if (!target) { selectPart(null); return; }
+    selectPart(target.partId);
+    if (state.toolMode !== 'interact') return;
+    if (target.type === 'power') {
+      opts.onPower?.(!state.power);
+      return;
+    }
+    if (!state.power) return;
     if (target.type === 'key') {
       activeKey = target.id; controls.enabled = false;
       opts.onKey?.(target.id, true); canvas.setPointerCapture(event.pointerId);
@@ -188,15 +292,39 @@ export async function createBoard3D(canvas, opts = {}) {
       opts.onDip?.(target.index);
     }
   }, { capture: true });
-  function releaseKey() {
+  canvas.addEventListener('dblclick', event => {
+    if (event.button !== 0) return;
+    const target = pick(event);
+    if (!target) return;
+    if (state.toolMode === 'interact' && (target.type === 'key' || target.type === 'dip' || target.type === 'power')) return;
+    selectPart(target.partId);
+    centerSelected(target.partId);
+  });
+  function releaseKey(event) {
+    if (event?.button === 2) rmbDrag = false;
     if (!activeKey) return;
     opts.onKey?.(activeKey, false); activeKey = null; controls.enabled = true;
   }
   canvas.addEventListener('pointerup', releaseKey);
   canvas.addEventListener('pointercancel', releaseKey);
   canvas.addEventListener('lostpointercapture', releaseKey);
-  window.addEventListener('blur', releaseKey);
-  canvas.addEventListener('pointermove', event => { if (!activeKey) canvas.style.cursor = state.power && pick(event) ? 'pointer' : 'grab'; });
+  window.addEventListener('blur', () => { rmbDrag = false; releaseKey(); });
+  canvas.addEventListener('pointerleave', () => { state.hovered = null; hoverHighlight.visible = false; });
+  canvas.addEventListener('pointermove', event => {
+    if (rmbDrag) { canvas.style.cursor = 'grabbing'; return; }
+    if (activeKey) return;
+    const hit = pick(event);
+    state.hovered = hit?.partId || null;
+    if (state.hovered && state.hovered !== state.selected) {
+      computePartBox(state.hovered, hoverHighlight.box);
+      hoverHighlight.visible = true;
+    } else {
+      hoverHighlight.visible = false;
+    }
+    const meta = state.hovered ? BOARD_PARTS[state.hovered] : null;
+    canvas.title = meta ? `${meta.title} (${meta.part})` : '';
+    canvas.style.cursor = hit ? 'pointer' : 'default';
+  });
   let previous = performance.now(), fps = 60;
   function update(now, dt) {
     if (state.tween) {
@@ -213,6 +341,8 @@ export async function createBoard3D(canvas, opts = {}) {
       state.explode += delta * (reducedMotion ? 1 : Math.min(1, dt * 8));
       for (const { group, y, lift } of floating) group.position.y = y + lift * state.explode;
       renderer.shadowMap.needsUpdate = true;
+      if (state.selected) computePartBox(state.selected, highlight.box);
+      if (state.hovered) computePartBox(state.hovered, hoverHighlight.box);
     }
     for (const key of keys) {
       key.press += (key.target - key.press) * (reducedMotion ? 1 : Math.min(1, dt * 22));
@@ -236,7 +366,7 @@ export async function createBoard3D(canvas, opts = {}) {
     if (labels.visible) for (const sprite of labels.children) {
       sprite.userData.component.getWorldPosition(sprite.position); sprite.position.y += 17;
     }
-    highlight.visible = now < highlightUntil;
+    highlight.visible = !!state.selected || now < highlightUntil;
   }
   function frame(now) {
     requestAnimationFrame(frame);
@@ -270,10 +400,18 @@ export async function createBoard3D(canvas, opts = {}) {
     highlightPin(pin) {
       const net = PIN_NET[pin];
       const component = COMPONENTS.find(c => c.net === net);
-      const id = component?.id || (/^(seg_|dtube)/.test(net) ? 'display' : /^vga_/.test(net) ? 'vga' : /^uart_/.test(net) ? 'rs232' : net === 'clk' ? 'oscillator' : net === 'beep' ? 'buzzer' : null);
+      const id = component?.id || (/^dtube([1-4])$/.test(net) ? net : /^seg_/.test(net) ? 'display' : /^vga_/.test(net) ? 'vga' : /^uart_/.test(net) ? 'rs232' : /^i2c_/.test(net) ? 'eeprom' : /^ps2_/.test(net) ? 'p3' : net === 'ir_rx' ? 'ir' : net === 'clk' ? 'oscillator' : net === 'beep' ? 'buzzer' : null);
       if (!id) return;
-      highlight.box.setFromObject(groups[id]).expandByScalar(1); highlightUntil = performance.now() + 1800;
+      selectPart(id);
+      highlightUntil = performance.now() + 1800;
     },
+    selectPart,
+    centerSelected,
+    get selectedPart() { return state.selected ? BOARD_PARTS[state.selected] : null; },
+    setNavMode(mode) { state.navMode = mode === 'pan' ? 'pan' : 'orbit'; syncCameraButtons(); },
+    get navMode() { return state.navMode; },
+    setToolMode(mode) { state.toolMode = mode === 'select' ? 'select' : 'interact'; },
+    get toolMode() { return state.toolMode; },
     setExplode(value) { state.explodeTarget = value; },
     setPersistence(value) { state.persistence = value; },
     setGlow(value) { state.glow = value; },

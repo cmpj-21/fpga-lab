@@ -201,6 +201,11 @@ function sampleOutputs() {
   DIGIT_NETS.forEach((net, i) => board?.setSegDigit(i, byte, active && /[0L]/.test(boardValue(net))));
   const beep = active && /[1H]/.test(boardValue('beep')); board?.setBuzzer(beep);
   if (beep && S.running) audio.startBuzzer(); else audio.stopBuzzer();
+  $$('#ciNets [data-ci-net]').forEach(el => {
+    const val = S.power ? boardValue(el.dataset.ciNet) : '—';
+    el.textContent = val;
+    el.classList.toggle('hi', /[1H]/.test(val));
+  });
 }
 function consume(result) {
   result.logs?.forEach(m => log(m, /warning/i.test(m) ? 'warning' : 'info'));
@@ -340,8 +345,12 @@ function renderSignalChips() {
 }
 function renderPins() {
   $('#pinBody').replaceChildren();
+  const activeNets = board?.selectedPart?.nets || [];
   for (const [net, pin] of Object.entries(NET_PIN)) {
-    const tr = document.createElement('tr'); const netCell = document.createElement('td'); netCell.textContent = net;
+    const tr = document.createElement('tr'); tr.dataset.net = net; tr.dataset.pin = pin;
+    if (activeNets.includes(net)) tr.classList.add('selected-pin');
+    tr.onclick = e => { if (e.target.tagName !== 'INPUT') board?.highlightPin(pin); };
+    const netCell = document.createElement('td'); netCell.textContent = net;
     const port = document.createElement('td'), bound = S.bindings[net], input = document.createElement('input');
     input.value = S.assignments.get(pin) ?? (SEG_NETS.includes(net) ? `seven_seg[${SEG_NETS.indexOf(net)}]` : net);
     input.setAttribute('aria-label', `${net} design port`); input.title = bound ? 'Mapped · changing this restarts the design' : 'Unmapped · enter a port or leave blank to disconnect';
@@ -350,6 +359,49 @@ function renderPins() {
     port.append(input);
     const td = document.createElement('td'); td.textContent = pin; tr.append(netCell, port, td); $('#pinBody').append(tr);
   }
+  if (board?.selectedPart) renderInspector(board.selectedPart);
+}
+function renderInspector(part) {
+  const card = $('#compInspector'), centerBtn = $('#btnCenterComp');
+  $$('#pinBody tr').forEach(tr => tr.classList.toggle('selected-pin', !!part && part.nets.includes(tr.dataset.net)));
+  if (centerBtn) {
+    centerBtn.classList.toggle('has-target', !!part);
+    centerBtn.title = part ? `Center camera on ${part.title} (F)` : 'Center camera on selected component or reset view (F)';
+  }
+  if (!card) return;
+  if (!part) { card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  $('#ciCategory').textContent = part.category;
+  $('#ciTitle').textContent = part.title;
+  $('#ciPart').textContent = part.part;
+  $('#ciNote').textContent = part.note;
+  const netsBox = $('#ciNets'), pinsBtn = $('#ciPins');
+  netsBox.replaceChildren();
+  if (part.nets.length) {
+    netsBox.classList.remove('hidden');
+    pinsBtn.classList.remove('hidden');
+    for (const net of part.nets) {
+      const pin = NET_PIN[net], bound = S.bindings[net];
+      const portName = bound ? (bound.bit === null ? bound.signal.short : `${bound.signal.short}[${bound.bit}]`) : null;
+      const chip = document.createElement('span'); chip.className = 'ci-chip';
+      const label = document.createElement('b'); label.textContent = net;
+      const meta = document.createTextNode(`${pin ? ` · P${pin}` : ''}${portName && portName !== net ? ` → ${portName}` : ''}`);
+      const val = document.createElement('span'); val.className = 'ci-val'; val.dataset.ciNet = net;
+      const stateVal = S.power ? boardValue(net) : '—';
+      val.textContent = stateVal; val.classList.toggle('hi', /[1H]/.test(stateVal));
+      chip.append(label, meta, val); netsBox.append(chip);
+    }
+  } else {
+    netsBox.classList.add('hidden');
+    pinsBtn.classList.add('hidden');
+  }
+}
+function syncViewportHint() {
+  const hint = $('#viewportHint');
+  if (!hint) return;
+  const tool = board?.toolMode === 'select' ? 'LMB: Select only' : 'LMB: Interact / Select';
+  const nav = board?.navMode === 'pan' ? 'RMB drag: Pan (Shift: Orbit)' : 'RMB drag: Orbit (Shift: Pan)';
+  hint.innerHTML = `<i class="orbit-icon">↔</i> ${tool} <b>·</b> ${nav} <b>·</b> Scroll: Zoom`;
 }
 function uartSample() {
   const result = uart.sample(S.time, boardValue('uart_txd'), Number($('#uartBaud').value));
@@ -576,13 +628,36 @@ function wire() {
     button.onclick = () => toggleDip(Number(button.dataset.dip));
   });
   const keys = { '1': 's1', '2': 's2', '3': 's3', '4': 's4', r: 'reset_btn' };
+  const setTool = mode => { board?.setToolMode(mode); $$('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === mode)); syncViewportHint(); };
+  const setNav = mode => { board?.setNavMode(mode); $$('[data-nav]').forEach(b => b.classList.toggle('active', b.dataset.nav === mode)); syncViewportHint(); };
+  const centerSelection = () => {
+    if (board?.selectedPart) {
+      board.centerSelected();
+      $('#center').classList.add('closeup');
+      $$('[data-camera]').forEach(b => b.classList.remove('active'));
+    } else {
+      camera('hero');
+    }
+  };
+  $$('[data-tool]').forEach(b => b.onclick = () => setTool(b.dataset.tool));
+  $$('[data-nav]').forEach(b => b.onclick = () => setNav(b.dataset.nav));
+  $('#btnCenterComp').onclick = centerSelection;
+  $('#ciCenter').onclick = centerSelection;
+  $('#ciClose').onclick = () => board?.selectPart(null);
+  $('#ciPins').onclick = () => {
+    leftTab('pins');
+    if ($('#app').classList.contains('no-library') || window.innerWidth <= 1000) toggleLeft('pins');
+    $('#pinBody tr.selected-pin')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  };
   window.addEventListener('keydown', e => {
     if (e.target.closest('input,select,textarea,dialog') || e.repeat) return;
     if (e.altKey && ['1', '2', '3', '4'].includes(e.key)) { e.preventDefault(); toggleDip(Number(e.key) - 1); return; }
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); centerSelection(); return; }
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'v') { e.preventDefault(); setTool(board?.toolMode === 'select' ? 'interact' : 'select'); return; }
     if (keys[e.key.toLowerCase()]) { e.preventDefault(); keyInput(keys[e.key.toLowerCase()], true); }
     if (e.code === 'Space' && e.target.tagName !== 'BUTTON') { e.preventDefault(); $('#btnRun').click(); }
     if (e.key === '.') $('#btnStep').click();
-    if (e.key === 'Escape') { $('#right').classList.add('hidden'); $('#deck').classList.add('hidden'); $('#app').classList.remove('mobile-library'); syncNavigation(); }
+    if (e.key === 'Escape') { $('#right').classList.add('hidden'); $('#deck').classList.add('hidden'); $('#app').classList.remove('mobile-library'); board?.selectPart(null); syncNavigation(); }
   });
   window.addEventListener('keyup', e => { if (keys[e.key.toLowerCase()]) keyInput(keys[e.key.toLowerCase()], false); });
   window.addEventListener('blur', releaseKeys);
@@ -623,7 +698,7 @@ async function boot() {
   syncNavigation();
   audio.setMuted(true);
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; }).catch(() => {});
-  try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed), onDip: index => toggleDip(index) }); board.setPower(true); board.setGlow(.4); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
+  try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed), onDip: index => toggleDip(index), onSelect: part => renderInspector(part), onPower: on => { $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); } }); board.setPower(true); board.setGlow(.4); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames')); applyTheme(document.documentElement.dataset.theme); wire(); fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);
   window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, build, advance, loadFiles, toggleDip };
