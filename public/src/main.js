@@ -12,7 +12,7 @@ import * as audio from './ui/audio.js';
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
-const S = { sources: [], sim: null, running: false, power: true, building: false, busy: false, clkHz: 1000, speed: 55, time: 0, inputs: {}, assignments: new Map(), bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false };
+const S = { sources: [], sim: null, running: false, power: true, building: false, busy: false, clkHz: 1000, speed: 55, time: 0, inputs: {}, assignments: new Map(), bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0 };
 let board, waves, toastTimer, sourceIndex, consoleCount = 0, logFile = '', reportCount = 0;
 let lastFrame = performance.now(), accumulator = 0, lastDraw = 0;
 const uart = new UartReceiver();
@@ -142,7 +142,7 @@ async function build(top = $('#topSelect').value) {
     for (const signal of result.signals.filter(s => s.driveable && !result.ended)) {
       const bits = Array(signal.width).fill(signal.direction === 3 ? 'Z' : '0');
       for (const net of ['reset_btn', ...KEY_NETS, 'uart_rxd']) {
-        const bound = S.bindings[net]; if (bound?.signal.id === signal.id) bits[bound.offset] = '1';
+        const bound = S.bindings[net]; if (bound?.signal.id === signal.id) bits[bound.offset] = (net === 'uart_rxd' || !isNetActive(net)) ? '1' : '0';
       }
       const value = bits.join(''); S.inputs[signal.id] = value; S.pending.push({ id: signal.id, value });
     }
@@ -246,22 +246,66 @@ function setInput(id, value) {
   S.inputs[id] = value; S.pending.push({ id, value }); syncKeys();
   if (!S.running) advance(0);
 }
-function keyInput(net, pressed) {
+function isNetActive(net) {
+  if (net === 'reset_btn') return !!S.keys.reset_btn;
+  const idx = KEY_NETS.indexOf(net);
+  if (idx !== -1) return !!S.keys[net] || ((S.dip & (1 << idx)) !== 0);
+  return false;
+}
+function updateNetInput(net) {
   const bound = S.bindings[net]; if (!bound || bound.signal.direction !== 1) return;
+  const active = isNetActive(net);
   let value = S.inputs[bound.signal.id] ?? '1'.repeat(bound.signal.width);
-  if (bound.bit === null) value = pressed ? '0' : '1';
-  else { const bits = [...value]; bits[bound.offset] = pressed ? '0' : '1'; value = bits.join(''); }
+  if (bound.bit === null) value = active ? '0' : '1';
+  else { const bits = [...value]; bits[bound.offset] = active ? '0' : '1'; value = bits.join(''); }
   setInput(bound.signal.id, value);
+}
+function keyInput(net, pressed) {
+  S.keys[net] = pressed;
+  audio.click(pressed);
+  updateNetInput(net);
+  syncKeys();
+}
+function toggleDip(index) {
+  if (!S.power || S.building || S.importing || S.exporting || S.dirty || S.error || !!S.vcd || S.sim?.ended) return;
+  S.dip ^= (1 << index);
+  audio.click(true);
+  updateNetInput(KEY_NETS[index]);
+  syncKeys();
 }
 function syncKeys() {
   $$('.key-btn').forEach(button => {
     const net = button.dataset.key === 'reset' ? 'reset_btn' : button.dataset.key.replace('key', 's');
-    const bound = S.bindings[net]; const down = S.power && bound && S.inputs[bound.signal.id]?.[bound.offset] === '0';
-    button.classList.toggle('down', !!down); button.setAttribute('aria-pressed', String(!!down));
-    button.disabled = S.building || S.importing || S.exporting || S.dirty || S.error || !S.power || !bound?.signal.driveable || !!S.vcd || S.sim?.ended; board?.setKeyVisual(button.dataset.key, !!down);
+    const bound = S.bindings[net];
+    const isDown = !!S.keys[net];
+    const isNetLow = S.power && bound && S.inputs[bound.signal.id]?.[bound.offset] === '0';
+    button.classList.toggle('down', isDown || isNetLow);
+    button.setAttribute('aria-pressed', String(isDown || isNetLow));
+    button.disabled = S.building || S.importing || S.exporting || S.dirty || S.error || !S.power || !bound?.signal.driveable || !!S.vcd || S.sim?.ended;
+    board?.setKeyVisual(button.dataset.key, isDown);
   });
+  $$('.dip-btn').forEach(button => {
+    const index = Number(button.dataset.dip);
+    const isOn = (S.dip & (1 << index)) !== 0;
+    const net = KEY_NETS[index];
+    const bound = S.bindings[net];
+    button.classList.toggle('on', isOn);
+    button.setAttribute('aria-pressed', String(isOn));
+    button.disabled = S.building || S.importing || S.exporting || S.dirty || S.error || !S.power || !bound?.signal.driveable || !!S.vcd || S.sim?.ended;
+  });
+  board?.setDip(S.dip);
 }
-function releaseKeys() { for (const net of ['reset_btn', ...KEY_NETS]) { const bound = S.bindings[net]; if (bound && S.inputs[bound.signal.id]?.[bound.offset] === '0') keyInput(net, false); } }
+function releaseKeys() {
+  let changed = false;
+  for (const net of ['reset_btn', ...KEY_NETS]) {
+    if (S.keys[net]) {
+      S.keys[net] = false;
+      updateNetInput(net);
+      changed = true;
+    }
+  }
+  if (changed) syncKeys();
+}
 function renderVirtualInputs() {
   const wrap = $('#virtualInputs'); wrap.replaceChildren();
   const mapped = new Set(Object.values(S.bindings).map(b => b.signal.id));
@@ -528,9 +572,13 @@ function wire() {
     button.onkeydown = e => { if (['Enter', ' '].includes(e.key)) { e.preventDefault(); e.stopPropagation(); keyInput(net, true); } };
     button.onkeyup = e => { if (['Enter', ' '].includes(e.key)) { e.preventDefault(); e.stopPropagation(); keyInput(net, false); } };
   });
+  $$('.dip-btn').forEach(button => {
+    button.onclick = () => toggleDip(Number(button.dataset.dip));
+  });
   const keys = { '1': 's1', '2': 's2', '3': 's3', '4': 's4', r: 'reset_btn' };
   window.addEventListener('keydown', e => {
     if (e.target.closest('input,select,textarea,dialog') || e.repeat) return;
+    if (e.altKey && ['1', '2', '3', '4'].includes(e.key)) { e.preventDefault(); toggleDip(Number(e.key) - 1); return; }
     if (keys[e.key.toLowerCase()]) { e.preventDefault(); keyInput(keys[e.key.toLowerCase()], true); }
     if (e.code === 'Space' && e.target.tagName !== 'BUTTON') { e.preventDefault(); $('#btnRun').click(); }
     if (e.key === '.') $('#btnStep').click();
@@ -575,10 +623,10 @@ async function boot() {
   syncNavigation();
   audio.setMuted(true);
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; }).catch(() => {});
-  try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed) }); board.setPower(true); board.setGlow(.4); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
+  try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed), onDip: index => toggleDip(index) }); board.setPower(true); board.setGlow(.4); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames')); applyTheme(document.documentElement.dataset.theme); wire(); fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);
-  window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, build, advance, loadFiles };
+  window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, build, advance, loadFiles, toggleDip };
   try { const saved = localStorage.getItem('trace.project.v1'); if (saved) restoreProject(JSON.parse(saved)); } catch (e) { importError(new Error(`Saved project could not be restored: ${e.message}`)); S.sources = []; renderSources(); setStatus(); return; }
   await build();
 }

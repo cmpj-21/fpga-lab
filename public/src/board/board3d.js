@@ -74,6 +74,10 @@ export async function createBoard3D(canvas, opts = {}) {
     return { id, cap, baseY: cap.position.y, target: 0, press: 0 };
   });
   for (const { id } of keys) groups[id].traverse(object => { if (object.isMesh) object.userData.key = id; });
+  for (let i = 0; i < 4; i++) {
+    const lever = model.getObjectByName(`dip_${i}`);
+    if (lever) lever.userData.dip = i;
+  }
   const floating = Object.values(groups).filter(g => !['pcb', 'pcb_details', 'routing', 'passives'].includes(g.name)).map(g => ({ group: g, y: g.position.y, lift: g.name === 'fpga' ? .035 : .018 }));
   const labels = new THREE.Group();
   labels.visible = false;
@@ -154,14 +158,25 @@ export async function createBoard3D(canvas, opts = {}) {
     pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
     ray.setFromCamera(pointer, camera);
     const hit = ray.intersectObject(model, true)[0];
-    return hit?.object.userData.key || null;
+    if (!hit) return null;
+    let obj = hit.object;
+    while (obj && obj !== model) {
+      if (obj.userData.key) return { type: 'key', id: obj.userData.key };
+      if (obj.userData.dip !== undefined) return { type: 'dip', index: obj.userData.dip };
+      obj = obj.parent;
+    }
+    return null;
   }
   canvas.addEventListener('pointerdown', event => {
     if (!state.power || event.button !== 0) return;
-    const id = pick(event);
-    if (!id) return;
-    activeKey = id; controls.enabled = false;
-    opts.onKey?.(id, true); canvas.setPointerCapture(event.pointerId);
+    const target = pick(event);
+    if (!target) return;
+    if (target.type === 'key') {
+      activeKey = target.id; controls.enabled = false;
+      opts.onKey?.(target.id, true); canvas.setPointerCapture(event.pointerId);
+    } else if (target.type === 'dip') {
+      opts.onDip?.(target.index);
+    }
   }, { capture: true });
   function releaseKey() {
     if (!activeKey) return;

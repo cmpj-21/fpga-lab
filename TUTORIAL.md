@@ -103,7 +103,7 @@ Screenshots illustrate the layout; your design, clock, open panels, and signal v
 | Signals | Show or hide the logic analyzer |
 | Tools | Console, Truth table, UART, and Bitstream inspection |
 | About / Model limits | Explain supported behavior and what is not simulated |
-| Board I/O | S1–S4, Reset, LED indicators, and virtual Power |
+| Board I/O | S1–S4 tactile keys, 4-position DIP switches, Reset, LED indicators, and virtual Power |
 | Controls below the board | Additional top-level inputs not exclusively represented by board controls |
 | Bottom Clock and Rate | Generated clock frequency and simulation advancement rate |
 
@@ -608,7 +608,8 @@ The console's first compiler error is usually the best starting point. Fix that 
 |---|---|
 | `Space` | Toggle Run/Pause when not editing a field or activating a focused button |
 | `.` | Step |
-| Hold `1`, `2`, `3`, `4` | Hold S1, S2, S3, S4 respectively |
+| Hold `1`, `2`, `3`, `4` | Hold momentary tactile key S1, S2, S3, S4 respectively |
+| `Alt + 1`, `2`, `3`, `4` | Toggle latching DIP switch 1, 2, 3, 4 (ON/OFF, wired in parallel with S1–S4) |
 | Hold `R` | Hold the board's reset input |
 | `Escape` | Dismiss open overlay panels; native dialogs also support their normal close behavior |
 

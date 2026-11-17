@@ -83,11 +83,11 @@ Before modifying simulation or timing code, review these known architectural con
 ### D. Single Cursor Limitation (Hardware DIP Switch Controls vs. Artificial Latch Mode):
 * **Architectural Decision:** Do **NOT** implement an artificial software "latch mode" for the tactile push buttons `S1`–`S4`.
 * **Hardware Ground Truth:** On the physical RZ-EasyFPGA A2.2 schematic, tactile push buttons `S1`–`S4` are strictly momentary. The physical board provides hardware latching via the 4-position red DIP switch package (`dip_0`..`dip_3`), which is wired directly in parallel to the exact same FPGA pins: **88 (`s1`), 89 (`s2`), 90 (`s3`), 91 (`s4`)**.
-* **Implementation Plan:**
-  1. Add 4 bi-stable toggle switch controls for the DIP levers (`DIP1`–`DIP4`) to the **BOARD I/O** toolbar (and/or direct pointer interaction on the 3D DIP switch mesh).
-  2. Keep tactile keys `S1`–`S4` purely momentary (press to ground `0`, release to spring back to `1`).
+* **Implementation:**
+  1. Added 4 bi-stable toggle switch controls for the DIP levers (`1`–`4`) to the **BOARD I/O** toolbar with direct pointer interaction on the 3D DIP switch mesh (`onDip`) and `Alt+1..4` shortcuts.
+  2. Tactile keys `S1`–`S4` remain purely momentary (press to ground `0`, release to spring back to `1`).
   3. When a DIP lever is toggled `ON`, it holds the shared net grounded (`0`); toggling it `OFF` opens the circuit (relying on the pull-up to `1`). If a DIP lever is `ON`, pressing the corresponding push button has no effect because the net is already shorted to ground.
-  4. Animate the 3D DIP switch model dynamically via `board?.setDip(mask)` in `public/src/board/board3d.js` so the virtual 3D levers visually slide into position.
+  4. Animates the 3D DIP switch model dynamically via `board?.setDip(mask)` in `public/src/board/board3d.js` so the virtual 3D levers visually slide into position.
 
 ### E. Desktop Launching:
 * **Recommendation:** Rather than downloading heavy Rust/Tauri toolchains on metered data, launch Edge in application mode (`msedge.exe --app="http://127.0.0.1:8044"`) inside [start.bat](file:///C:/Users/cmpj/dev/fpga-lab/start.bat).
