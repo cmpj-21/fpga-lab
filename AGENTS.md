@@ -85,7 +85,20 @@ Before modifying simulation or timing code, review these known architectural con
 
 ---
 
-## 5. Useful Commands for User Reference
+## 5. Documentation Maintenance Guidelines (`TUTORIAL.md` vs `#aboutDialog`)
+
+Whenever making code modifications or feature enhancements, determine which documentation files require updates using this 4-question checklist:
+
+| Trigger / Change Type | Document(s) to Update | Target Sections |
+|---|---|---|
+| **1. UI Controls & Gestures:** Added or changed buttons, sliders, shortcuts, or mouse/touchpad gestures. | **`TUTORIAL.md` only** | Section 3 (*Find your way around*), Section 7 (*Waveforms*), Section 15 (*Keyboard reference*). |
+| **2. Hardware Pin Mappings:** Modified default pin assignments or board net names in `boardDef.js`. | **`TUTORIAL.md` only** | Section 6 (*Common reference mappings table*). |
+| **3. Hard Limits & Resource Caps:** Altered session limits, VCD buffer caps (64MB), or timing ceilings (9s limit). | **BOTH `TUTORIAL.md` & `About` Dialog** | `TUTORIAL.md` Section 15 (*Practical limits*) AND `public/index.html` (`#aboutDialog` `<dt>Resource limits</dt>`). |
+| **4. Engine Physics & Formats:** Added file extensions, vendor libraries (e.g. `altera_mf`), or peripheral models. | **`About` Dialog primarily** (+ `TUTORIAL.md` Sec 13) | `public/index.html` (`#aboutDialog` `<dt>Logic & timing</dt>` or `<dt>Not simulated</dt>`) AND `TUTORIAL.md` Section 13. |
+
+---
+
+## 6. Useful Commands for User Reference
 
 Always provide these to the user for manual execution:
 
