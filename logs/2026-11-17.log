@@ -24,3 +24,91 @@ Recent console (oldest first):
       Compiled bench_demo. 20 observable signals.
   [02:39:34] [0 fs] ERROR Cycles must be 0–4096.
 
+==== 2026-11-17 10:40:16.814 UTC+08:00 | client error ====
+Message:
+  Time is outside the supported exact waveform range; reset or reduce the duration.
+Page: http://127.0.0.1:8044/
+Design: bench_demo.vhd
+Top: bench_demo
+Language: VHDL-1993
+Status: Error
+Sim time: 9.00300 s
+Backend: GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]
+Theme: dark
+Viewport: 1920x995
+Browser: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0
+Recent console (oldest first):
+  [10:39:20] [0 fs] INFO loading VPI module 'C:\Users\cmpj\dev\fpga-lab\backend\bridge-9839de3aa113047c.vpi'
+  [10:39:20] [0 fs] INFO VPI module loaded!
+  [10:39:20] [0 fs] WARNING ../../src/ieee/v93/numeric_std-body.vhdl:2098:7:@0ms:(assertion warning): NUMERIC_STD.TO_INTEGER: metavalue detected, returning 0
+  [10:39:20] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]
+      Compiled bench_demo. 20 observable signals.
+  [10:40:16] [9.00300 s] ERROR Time is outside the supported exact waveform range; reset or reduce the duration.
+
+==== 2026-11-17 10:41:58.153 UTC+08:00 | client error ====
+Message:
+  Cycles must be 0–4096.
+Page: http://127.0.0.1:8044/
+Design: bench_demo.vhd
+Top: bench_demo
+Language: VHDL-1993
+Status: Error
+Sim time: 0 fs
+Backend: GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]
+Theme: dark
+Viewport: 1920x995
+Browser: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0
+Recent console (oldest first):
+  [10:39:20] [0 fs] INFO loading VPI module 'C:\Users\cmpj\dev\fpga-lab\backend\bridge-9839de3aa113047c.vpi'
+  [10:39:20] [0 fs] INFO VPI module loaded!
+  [10:39:20] [0 fs] WARNING ../../src/ieee/v93/numeric_std-body.vhdl:2098:7:@0ms:(assertion warning): NUMERIC_STD.TO_INTEGER: metavalue detected, returning 0
+  [10:39:20] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]
+      Compiled bench_demo. 20 observable signals.
+  [10:40:16] [9.00300 s] ERROR Time is outside the supported exact waveform range; reset or reduce the duration.
+  [10:41:56] [0 fs] INFO loading VPI module 'C:\Users\cmpj\dev\fpga-lab\backend\bridge-9839de3aa113047c.vpi'
+  [10:41:56] [0 fs] INFO VPI module loaded!
+  [10:41:56] [0 fs] WARNING ../../src/ieee/v93/numeric_std-body.vhdl:2098:7:@0ms:(assertion warning): NUMERIC_STD.TO_INTEGER: metavalue detected, returning 0
+  [10:41:56] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]
+      Compiled bench_demo. 20 observable signals.
+  [10:41:58] [0 fs] ERROR Cycles must be 0–4096.
+
+==== 2026-11-17 11:17:13.660 UTC+08:00 | client error ====
+Message:
+  Time is outside the supported exact waveform range; reset or reduce the duration.
+Page: http://127.0.0.1:8044/
+Design: bench_demo.vhd
+Top: bench_demo
+Language: VHDL-1993
+Status: Error
+Sim time: 9.00200 s
+Backend: GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]
+Theme: dark
+Viewport: 1920x995
+Browser: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0
+Recent console (oldest first):
+  [10:39:20] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]
+      Compiled bench_demo. 20 observable signals.
+  [10:40:16] [9.00300 s] ERROR Time is outside the supported exact waveform range; reset or reduce the duration.
+  [10:41:56] [0 fs] INFO loading VPI module 'C:\Users\cmpj\dev\fpga-lab\backend\bridge-9839de3aa113047c.vpi'
+  [10:41:56] [0 fs] INFO VPI module loaded!
+  [10:41:56] [0 fs] WARNING ../../src/ieee/v93/numeric_std-body.vhdl:2098:7:@0ms:(assertion warning): NUMERIC_STD.TO_INTEGER: metavalue detected, returning 0
+  [10:41:56] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]
+      Compiled bench_demo. 20 observable signals.
+  [10:41:58] [0 fs] ERROR Cycles must be 0–4096.
+  [11:15:15] [0 fs] INFO loading VPI module 'C:\Users\cmpj\dev\fpga-lab\backend\bridge-9839de3aa113047c.vpi'
+  [11:15:15] [0 fs] INFO VPI module loaded!
+  [11:15:15] [0 fs] WARNING ../../src/ieee/v93/numeric_std-body.vhdl:2098:7:@0ms:(assertion warning): NUMERIC_STD.TO_INTEGER: metavalue detected, returning 0
+  [11:15:15] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]
+      Compiled bench_demo. 20 observable signals.
+  [11:15:17] [0 fs] INFO loading VPI module 'C:\Users\cmpj\dev\fpga-lab\backend\bridge-9839de3aa113047c.vpi'
+  [11:15:17] [0 fs] INFO VPI module loaded!
+  [11:15:17] [0 fs] WARNING ../../src/ieee/v93/numeric_std-body.vhdl:2098:7:@0ms:(assertion warning): NUMERIC_STD.TO_INTEGER: metavalue detected, returning 0
+  [11:15:17] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]
+      Compiled bench_demo. 20 observable signals.
+  [11:15:18] [0 fs] INFO loading VPI module 'C:\Users\cmpj\dev\fpga-lab\backend\bridge-9839de3aa113047c.vpi'
+  [11:15:18] [0 fs] INFO VPI module loaded!
+  [11:15:18] [0 fs] WARNING ../../src/ieee/v93/numeric_std-body.vhdl:2098:7:@0ms:(assertion warning): NUMERIC_STD.TO_INTEGER: metavalue detected, returning 0
+  [11:15:18] [0 fs] INFO GHDL 6.0.0 (6.0.0.r0.ge589c698c.dirty) [Dunoon edition]
+      Compiled bench_demo. 20 observable signals.
+  [11:17:13] [9.00200 s] ERROR Time is outside the supported exact waveform range; reset or reduce the duration.
+
