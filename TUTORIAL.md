@@ -315,7 +315,8 @@ A QSF imports pin assignments and supported project metadata. It does not run Qu
 - **Follow** keeps the view following advancing simulation time.
 - **+ / −** zoom the timeline.
 - **Fit** fits the recorded range and turns off Follow.
-- Scroll over the plot to zoom around the pointer.
+- **Ctrl/⌘ + scroll** or **pinch** over the plot zooms smoothly around the pointer.
+- Scroll over the plot to pan the timeline at half speed; **Shift + scroll** or a two-finger horizontal swipe pans sideways.
 - Drag horizontally inside the plot to pan.
 - Move the pointer over the plot to inspect a time with the cursor. The value column corresponds to the cursor position, which may be earlier than the current simulation time.
 
@@ -600,6 +601,8 @@ The console's first compiler error is usually the best starting point. Fix that 
 | Hold `1`, `2`, `3`, `4` | Hold S1, S2, S3, S4 respectively |
 | Hold `R` | Hold the board's reset input |
 | `Escape` | Dismiss open overlay panels; native dialogs also support their normal close behavior |
+
+Mouse and touchpad: Ctrl/⌘ + wheel or pinch zooms the waveform plot around the pointer; Shift + wheel or a horizontal two-finger swipe pans the timeline. Firefox line-mode wheel deltas are normalized so panning has the same speed as other browsers.
 
 ### Practical limits
 
