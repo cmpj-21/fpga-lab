@@ -452,25 +452,9 @@ def start():
         for k in range(8):
             ang = k * math.tau / 8
             cylinder((x + 2.3*math.cos(ang), y + 2.3*math.sin(ang), .068), .22, .025, 'solder', 12, .1)
-    wire([(-66.8, -51.8), (66.8, -51.8), (66.8, 51.8), (-66.8, 51.8), (-66.8, -51.8)], .24, 'silk', .045)
-    for sx in (-1, 1):
-        for sy in (-1, 1):
-            cx, cy = -13 + sx*12.5, 1 + sy*12.5
-            wire([(cx - sx*2.5, cy), (cx, cy), (cx, cy - sy*2.5)], .18, 'silk', .045)
-            rx, ry = -14 + sx*12.8, -37.2 + sy*7.5
-            wire([(rx - sx*2.2, ry), (rx, ry), (rx, ry - sy*1.8)], .16, 'silk', .045)
-    wire([(-58, 24.5), (-20, 24.5), (-20, 38.5), (-58, 38.5), (-58, 24.5)], .16, 'silk', .045)
-    wire([(50, -39), (66, -39), (66, -7), (50, -7)], .16, 'silk', .045)
-    wire([(50, 1), (66, 1), (66, 33), (50, 33)], .16, 'silk', .045)
-    for step, rx, ry in [(0, 2.0, 1.5), (1, 1.5, 1.1), (2, 1.0, .7), (3, .5, .3)]:
-        cy = 22.1 - step*.62
-        arc = [(38.2 + step*.08 + rx*math.cos(a), cy + ry*.32*math.sin(a)) for a in [math.pi + math.pi*t/8 for t in range(9)]]
-        wire(arc, .22, 'silk', .055)
-    text('Cyclone IV', (25, 21, .065), 2.8, 'silk')
+    text('Cyclone IV', (26, 21, .065), 2.8, 'silk')
     text('RZ EASYFPGA A2.2', (-11, 41, .065), 1.65, 'brand')
     text('RZ TECHNOLOGY', (-7, 35.8, .065), 1.3, 'brand')
-    for lbl, lx, ly, sz in [('JTAG', -49, -9, 1.05), ('AS', -49, 16, 1.05), ('RESET', -49.5, -37, 1.0), ('VGA', 47.5, -23, 1.1), ('RS232', 52.8, 17, .95), ('PS2', 52.5, 35.2, 1.05), ('50MHz', -39, -14.8, .95), ('LED1..4', 10.25, -47.2, .95)]:
-        text(lbl, (lx, ly, .05), sz, 'silk')
     finish()
     print('Created separate board scene with 136 x 106 x 1.6 mm PCB and four real mounting holes.')
 
@@ -709,16 +693,6 @@ def detail():
     for i in range(10):
         yy = (i-4.5)*1.8
         wire([(67-68, 54+yy-53), (69-68, 54+yy-53), (76-68, 54+yy*1.41-53), (78.4-68, 54+yy*1.41-53)], .09, 'trace')
-    for i in range(16):
-        rx = 48 + i*1.1 - 68
-        wire([(rx, 26.8-53), (rx, 24.5-53), (54+(i-7.5)*.9-68, 22.8-53), (54+(i-7.5)*.9-68, 21.8-53)], .09, 'copper')
-    for i in range(8):
-        bx = 84 + i*4.4 - 68
-        wire([(bx, 79.4-53), (bx, 82.0-53), (bx+(1.5-i*.4), 83.2-53), (bx+(1.5-i*.4), 85.0-53)], .11, 'copper')
-    for i, lx in enumerate((73, 76.5, 80, 83.5)):
-        wire([(66-68, 25.0+i*.7-53), (71-68, 20.0-i*.6-53), (lx-68, 17.5-53), (lx-68, 15.6-53)], .1, 'copper')
-    for i, kx in enumerate((92, 100, 108, 116)):
-        wire([(74-68, 26.0+i*.7-53), (89-68, 19.5-i*.5-53), (kx-68, 15.5-53), (kx-68, 13.7-53)], .1, 'copper')
     for xx, yy in [(37,39),(37,68),(67,68),(70,39),(90,39),(113,19),(30,24),(18,78),(50,87),(76,72),(46,24),(64,24),(85,20),(102,20)]:
         cylinder((xx-68, yy-53, .035), .31, .04, 'gold', 16, .15)
     finish()
