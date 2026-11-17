@@ -218,12 +218,14 @@ export async function createBoard3D(canvas, opts = {}) {
     if (box.isEmpty()) { setCamera('hero'); return false; }
     const target = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
-    const span = Math.max(size.x, size.y, size.z, 8);
+    const maxDim = Math.max(size.x, size.y, size.z, 6);
+    const geomMean = Math.sqrt(Math.max(size.x, 4) * Math.max(size.z, 4));
+    const effectiveSpan = geomMean * .65 + maxDim * .35;
     const dir = camera.position.clone().sub(controls.target);
     if (dir.lengthSq() < 1e-4) dir.set(.45, .75, .55);
     dir.normalize();
     if (Math.abs(dir.y) < .28) { dir.y = dir.y < 0 ? -.45 : .55; dir.normalize(); }
-    const dist = THREE.MathUtils.clamp(span * 2.4 + 34, 42, 210);
+    const dist = THREE.MathUtils.clamp(effectiveSpan * 1.35 + 36, 42, 96);
     const pos = target.clone().addScaledVector(dir, dist);
     if (reducedMotion) { camera.position.copy(pos); controls.target.copy(target); controls.update(); }
     else state.tween = { pos, target };
