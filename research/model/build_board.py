@@ -242,11 +242,14 @@ def gullwing(x, y, side, mat='silver', small=False):
 def chip(name, x, y, w, h, pins, pitch, marking, height=1.4):
     assembly(name, x, y, footprint=(w+3.2, h, 0, height+0.35))
     box('', (0, 0, .3+height/2), (w, h, height), 'ic', .18)
+    box('', (-w/2+.45, 0, .3+height/2+.02), (.42, h-.35, height), 'darkmetal', .04)
     for sign in (-1, 1):
         for i in range(pins//2):
             yy = (i-(pins/2-1)/2)*pitch
             gullwing(sign*(w/2-.12), yy, 0 if sign == 1 else 180, small=True)
             pad(sign*(w/2+1), yy, 1.6, .65)
+            box('', (sign*(w/2+.55), yy, .2), (.65, .36, .22), 'solder', .05)
+        wire([(-w/2-.3, sign*(h/2+.35)), (w/2+.3, sign*(h/2+.35))], .12, 'silk', .04)
     cylinder((-w/2+.75, h/2-.65, height+.305), .24, .016, 'marking', 16)
     text(marking, (0, 0, height+.32), min(1.3, w/5), 'marking')
     finish()
@@ -291,10 +294,17 @@ def button(name, x, y):
     assembly(name, x, y, footprint=(6.4, 6.4, 0, 4.4))
     box('', (0, 0, 1), (6.1, 6.1, 2), 'plastic', .35)
     box('', (0, 0, 2.12), (6, 6, .38), 'silver', .3)
+    for sign in (-1, 1):
+        box('', (sign*2.72, 0, 2.34), (.46, 5.2, .12), 'silver', .04)
+        box('', (0, sign*2.72, 2.34), (5.2, .46, .12), 'silver', .04)
+    cylinder((0, 0, 2.38), 2.08, .2, 'darkmetal', 28, 1.78)
     for xx in (-2.15, 2.15):
         for yy in (-2.15, 2.15):
-            cylinder((xx, yy, 2.42), .43, .45, 'plastic', 16)
+            cylinder((xx, yy, 2.42), .43, .45, 'darkmetal', 16)
+            box('', (math.copysign(2.92, xx), math.copysign(2.6, yy), 1.15), (.48, .48, 2.1), 'silver', .06)
             pad(xx, math.copysign(3.4, yy), 1.3, 1.5)
+            box('', (xx, math.copysign(3.05, yy), .62), (.7, .42, .95), 'silver', .06)
+            box('', (xx, math.copysign(3.3, yy), .26), (.95, .95, .42), 'solder', .1)
     dynamic_cylinder('key_' + name + '_cap', (0, 0, 3.0), 1.75, 1.5, 'key')
     text('RESET' if name == 'reset' else name.replace('key', 'S'), (0, -4.75, .05), 1.35)
     finish()
@@ -302,27 +312,32 @@ def button(name, x, y):
 
 def dsub(name, x, y, rows, female, color):
     assembly(name, x, y, 90, (39, 17.3, 0, 12.8))
-    box('', (0, .8, 5.5), (30.8, 11.8, 10.5), color, .65)
-    box('', (0, -6.9, 6.2), (39, .8, 12.5), 'silver', .6)
-    outer = [(-12, -4.1), (-13.1, 3.4), (-11.6, 4.3), (11.6, 4.3), (13.1, 3.4), (12, -4.1)]
-    inner = [(a*.93, b*.87) for a, b in outer]
+    box('', (0, .1, 5.5), (30.8, 11.4, 10.6), color, .55)
+    box('', (0, 2.2, 10.85), (21.0, 6.2, .45), color, .15)
+    box('', (0, -5.95, 6.1), (30.8, .8, 12.2), 'silver', .45)
+    outer = [(-8.2, -3.8), (-9.1, 3.2), (-7.9, 4.1), (7.9, 4.1), (9.1, 3.2), (8.2, -3.8)]
+    inner = [(a*.91, b*.86) for a, b in outer]
     rot = Matrix.Rotation(math.pi/2, 3, 'X')
-    profile_ring(outer, inner, 4.3, 'silver', (0, -8.7, 6.25), rot)
-    polygon_extrude([(a*.925, b*.855) for a, b in outer], -.3, .3, color, (0, -7.5, 6.25), rot)
+    profile_ring(outer, inner, 3.6, 'silver', (0, -7.8, 6.15), rot)
+    polygon_extrude([(a*.905, b*.845) for a, b in outer], -.3, .3, color, (0, -6.6, 6.15), rot)
     counts = [5, 5, 5] if rows == 3 else [5, 4]
     for row, number in enumerate(counts):
-        z = 6.25 + ((len(counts)-1)/2-row)*2.3
+        z = 6.15 + ((len(counts)-1)/2-row)*2.3
         for col in range(number):
             xx = (col-(number-1)/2)*2.75
             if female:
-                cylinder((xx, -7.87, z), .63, .1, 'socket', 20, rot=rot)
-                cylinder((xx, -7.97, z), .49, .18, 'silver', 20, .34, rot)
+                cylinder((xx, -6.95, z), .63, .1, 'socket', 20, rot=rot)
+                cylinder((xx, -7.05, z), .49, .18, 'silver', 20, .34, rot)
             else:
-                cylinder((xx, -9.1, z), .39, 2.7, 'silver', 16, rot=rot)
+                cylinder((xx, -8.0, z), .39, 2.7, 'silver', 16, rot=rot)
     for sign in (-1, 1):
-        cylinder((sign*16.65, -8.8, 6.2), 2.65, 4.2, 'silver', 6, .95, rot)
-        cylinder((sign*16.65, -11, 6.2), .83, .13, 'socket', 20, rot=rot)
-        box('', (sign*13.2, 4.2, .35), (3.2, 3.8, .7), 'silver', .12)
+        box('', (sign*12.6, -2.2, 5.5), (5.4, 6.8, 10.6), color, .35)
+        box('', (sign*12.6, -2.4, 5.8), (4.8, 7.6, 11.2), 'silver', .2)
+        cylinder((sign*12.6, -2.2, 11.5), 1.35, .3, 'silver', 20)
+        cylinder((sign*12.5, -7.6, 6.15), 2.2, 3.2, 'silver', 6, .9, rot)
+        cylinder((sign*12.5, -9.22, 6.15), .85, .14, 'socket', 20, rot=rot)
+        box('', (sign*12.6, 2.2, .35), (3.0, 3.6, .7), 'silver', .1)
+        cylinder((sign*12.6, 2.2, -1.75), 1.1, .35, 'solder', 16)
     for i in range(sum(counts)):
         xx = ((i%8)-3.5)*2.3
         yy = 3.4+(i//8)*2.2
@@ -385,27 +400,31 @@ def start():
     _purge_orphans()
     SCENE.unit_settings.system = 'METRIC'
     SCENE.unit_settings.length_unit = 'MILLIMETERS'
-    material('mask', '16191b', .43, .12)
+    material('mask', '141719', .38, .12)
     material('edge', '4b4334', .7)
-    material('trace', '24292b', .45, .12)
-    material('silk', 'd9d7c8', .8)
+    material('trace', '24292b', .35, .18)
+    material('copper', 'b87333', .32, .88)
+    material('dielectric', '2d362e', .65, .05)
+    material('brass', 'd4af37', .26, .9)
+    material('darkmetal', '3a3f44', .32, .85)
+    material('silk', 'e3e1d3', .75)
     material('brand', 'c0a977', .65)
     material('marking', '7e8588', .6)
-    material('ic', '242629', .67)
-    material('plastic', '15191d', .52)
-    material('key', '22272c', .63)
+    material('ic', '242629', .62)
+    material('plastic', '15191d', .48)
+    material('key', '22272c', .6)
     material('socket', '07090a', .9)
-    material('silver', 'c3c6c7', .25, .92)
-    material('solder', 'aab0b3', .32, .85)
-    material('gold', 'd1aa48', .28, .78)
+    material('silver', 'c3c6c7', .22, .94)
+    material('solder', 'aab0b3', .28, .88)
+    material('gold', 'd1aa48', .25, .82)
     material('contact', '997638', .38, .7)
-    material('yellow', 'e2bd24', .4)
-    material('blue', '214d99', .4)
-    material('dipred', 'bd182e', .36)
-    material('white', 'e1e1d9', .5)
+    material('yellow', 'e2bd24', .38)
+    material('blue', '214d99', .38)
+    material('dipred', 'bd182e', .34)
+    material('white', 'e1e1d9', .48)
     material('resistor', '25252a', .7)
     material('ceramic', '94785a', .6)
-    material('tantalum', 'cfb458', .5)
+    material('tantalum', 'cfb458', .48)
     material('display', '181719', .45)
     material('segment', '48232a', .55, emission=True)
     material('ledred', 'c82b28', .28, emission=True)
@@ -430,9 +449,28 @@ def start():
         cylinder((x, y, .03), 2.95, .07, 'gold', 48, 1.62)
         cylinder((x, y, -1.63), 2.95, .07, 'gold', 48, 1.62)
         cylinder((x, y, -.8), 1.66, 1.6, 'gold', 48, 1.6)
-    text('Cyclone IV', (26, 21, .065), 2.8, 'silk')
+        for k in range(8):
+            ang = k * math.tau / 8
+            cylinder((x + 2.3*math.cos(ang), y + 2.3*math.sin(ang), .068), .22, .025, 'solder', 12, .1)
+    wire([(-66.8, -51.8), (66.8, -51.8), (66.8, 51.8), (-66.8, 51.8), (-66.8, -51.8)], .24, 'silk', .045)
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            cx, cy = -13 + sx*12.5, 1 + sy*12.5
+            wire([(cx - sx*2.5, cy), (cx, cy), (cx, cy - sy*2.5)], .18, 'silk', .045)
+            rx, ry = -14 + sx*12.8, -37.2 + sy*7.5
+            wire([(rx - sx*2.2, ry), (rx, ry), (rx, ry - sy*1.8)], .16, 'silk', .045)
+    wire([(-58, 24.5), (-20, 24.5), (-20, 38.5), (-58, 38.5), (-58, 24.5)], .16, 'silk', .045)
+    wire([(50, -39), (66, -39), (66, -7), (50, -7)], .16, 'silk', .045)
+    wire([(50, 1), (66, 1), (66, 33), (50, 33)], .16, 'silk', .045)
+    for step, rx, ry in [(0, 2.0, 1.5), (1, 1.5, 1.1), (2, 1.0, .7), (3, .5, .3)]:
+        cy = 22.1 - step*.62
+        arc = [(38.2 + step*.08 + rx*math.cos(a), cy + ry*.32*math.sin(a)) for a in [math.pi + math.pi*t/8 for t in range(9)]]
+        wire(arc, .22, 'silk', .055)
+    text('Cyclone IV', (25, 21, .065), 2.8, 'silk')
     text('RZ EASYFPGA A2.2', (-11, 41, .065), 1.65, 'brand')
     text('RZ TECHNOLOGY', (-7, 35.8, .065), 1.3, 'brand')
+    for lbl, lx, ly, sz in [('JTAG', -49, -9, 1.05), ('AS', -49, 16, 1.05), ('RESET', -49.5, -37, 1.0), ('VGA', 47.5, -23, 1.1), ('RS232', 52.8, 17, .95), ('PS2', 52.5, 35.2, 1.05), ('50MHz', -39, -14.8, .95), ('LED1..4', 10.25, -47.2, .95)]:
+        text(lbl, (lx, ly, .05), sz, 'silk')
     finish()
     print('Created separate board scene with 136 x 106 x 1.6 mm PCB and four real mounting holes.')
 
@@ -440,17 +478,24 @@ def start():
 def core():
     assembly('fpga', 55, 54, footprint=(24, 24, 0, 2.1))
     box('', (0, 0, 1.13), (20, 20, 1.6), 'ic', .28)
-    cylinder((-8.5, -8.5, 1.936), .45, .018, 'marking', 24)
+    box('', (0, 0, 1.88), (19.2, 19.2, .18), 'ic', .08)
+    cylinder((-8.0, -8.0, 1.972), .62, .02, 'marking', 24, .38)
+    cylinder((-8.0, -8.0, 1.97), .38, .025, 'socket', 24)
+    for sx in (-7.8, 7.8):
+        for sy in (-7.8, 7.8):
+            cylinder((sx, sy, 1.97), .52, .02, 'socket', 20)
     for side in range(4):
         angle = side*90
         rot = Matrix.Rotation(math.radians(angle), 3, 'Z')
         for i in range(36):
+            p = rot @ Vector((10.95, (i-17.5)*.5, 0))
+            box('', (p.x, p.y, .025), (.28 if side%2 else 1.85, 1.85 if side%2 else .28, .05), 'copper')
             p = rot @ Vector((9.8, (i-17.5)*.5, 0))
             gullwing(p.x, p.y, angle)
             p = rot @ Vector((11.35, (i-17.5)*.5, 0))
             box('', (p.x, p.y, .08), (.31 if side%2 else 1.55, 1.55 if side%2 else .31, .16), 'solder', .06)
     for label, yy, size in [('ALTERA', 5.7, 2.7), ('Cyclone IV', 2.7, 1.9), ('EP4CE6E22C8N', -.8, 1.15), ('EQFP 144', -3.0, 1.0), ('TAIWAN', -5.3, .9)]:
-        text(label, (0, yy, 1.944), size, 'marking')
+        text(label, (0, yy, 1.98), size, 'marking')
     finish()
     header('p1', 55, 78, 20)
     header('p2', 55, 30, 22)
@@ -460,6 +505,9 @@ def core():
     header('lcd', 74, 102, 20, rows=1, female=True)
     assembly('sdram', 54, 15.8, footprint=(22.2, 13.6, 0, 1.9))
     box('', (0, 0, 1), (22.2, 10.2, 1.45), 'ic', .16)
+    cylinder((-9.5, -3.4, 1.74), .48, .02, 'marking', 20, .28)
+    cylinder((-9.5, -3.4, 1.735), .28, .025, 'socket', 20)
+    cylinder((-11.0, 0, 1.4), .8, .66, 'socket', 20)
     for side in (-1, 1):
         for i in range(27):
             xx = (i-13)*.8
@@ -467,12 +515,18 @@ def core():
             box('', (xx, side*6.1, .08), (.45, 1.7, .16), 'solder', .06)
     text('SDRAM 64M', (0, 1.1, 1.742), 1.5, 'marking')
     text('HY57V641620', (0, -1.5, 1.742), 1.3, 'marking')
+    text('U6', (-12.8, -4.0, .05), 1.15)
     finish()
     chip('epcs', 25, 58, 4.1, 5, 8, 1.27, 'EPCS4')
     assembly('oscillator', 29, 43, footprint=(7.4, 5.4, 0, 1.8))
-    box('', (0, 0, .25), (7.4, 5.4, .5), 'gold', .45)
-    box('', (0, 0, 1.0), (7, 5, 1.2), 'silver', .5)
-    text('50.000', (0, 0, 1.61), 1.1, 'marking')
+    box('', (0, 0, .22), (7.5, 5.5, .44), 'ceramic', .15)
+    for sx in (-2.9, 2.9):
+        for sy in (-1.9, 1.9):
+            pad(sx, sy, 1.5, 1.4)
+            cylinder((sx*.95, sy*.95, .28), .45, .45, 'gold', 12)
+    box('', (0, 0, 1.05), (7.15, 5.15, .18), 'darkmetal', .06)
+    box('', (0, 0, 1.28), (6.9, 4.9, .78), 'silver', .38)
+    text('50.000', (0, 0, 1.68), 1.1, 'marking')
     text('X1', (-5, 0, .05), 1.1)
     finish()
     print('Built EQFP-144 with 144 bent leads, three male expansion headers, SDRAM and oscillator.')
@@ -495,12 +549,15 @@ def connectors():
     assembly('power_switch', 26, 99, footprint=(7.3, 7.3, 0, 10.3))
     box('', (0, 0, 2.3), (7.3, 7.3, 4.6), 'plastic', .35)
     box('', (0, 0, 4.85), (6.3, 6.3, .5), 'silver', .35)
+    cylinder((0, 0, 5.35), 2.7, .75, 'white', 32, 2.42)
+    cylinder((0, 0, 5.2), 2.05, .5, 'white', 24)
     dynamic_cylinder('power_cap', (0, 0, 7.5), 2.4, 5, 'dipred')
     text('POWER', (0, -5.1, .05), 1.1)
     finish()
     assembly('trim', 109.8, 100.2, footprint=(6.7, 6.7, 0, 4.1))
     box('', (0, 0, 1.8), (6.7, 6.7, 3.6), 'blue', .25)
-    cylinder((0, 0, 3.8), 2.2, .6, 'gold', 32)
+    cylinder((0, 0, 3.65), 2.55, .15, 'darkmetal', 32, 2.2)
+    cylinder((0, 0, 3.8), 2.2, .6, 'brass', 32)
     box('', (0, 0, 4.12), (2.9, .5, .04), 'socket')
     finish()
     print('Built hollow USB-B and barrel sockets, DB9 pins, VGA sockets, hex screw bores and power switch.')
@@ -512,20 +569,32 @@ def controls():
     button('reset', 12, 16)
     assembly('dip', 94, 34, footprint=(10.3, 12.8, 0, 6))
     box('', (0, 0, 2.7), (10.3, 10.1, 5.4), 'dipred', .38)
+    for sign in (-1, 1):
+        box('', (sign*4.55, 0, 5.52), (.75, 9.6, .24), 'dipred', .08)
     for i in range(4):
         xx = (i-1.5)*2.15
-        box('', (xx, 0, 5.46), (1.1, 3.5, .1), 'socket', .2)
+        box('', (xx, 0, 5.42), (1.28, 3.8, .16), 'socket', .08)
+        box('', (xx, 0, 5.45), (.48, 3.2, .06), 'gold')
+        if i < 3:
+            box('', ((i-1)*2.15, 0, 5.5), (.35, 3.8, .18), 'dipred', .05)
         dynamic_box('dip_'+str(i), (xx, .85, 5.6), (.9, 1.3, .6), 'white', .12)
         for sign in (-1, 1):
             pad(xx, sign*5.5, .7, 1.7)
+            box('', (xx, sign*4.9, .45), (.45, 1.1, .9), 'silver', .06)
         text(str(i+1), (xx, -3.75, 5.45), 1.05, 'white')
     text('ON  DIP', (0, 3.4, 5.45), 1.1, 'white')
     finish()
     buzzer()
     assembly('ir', 123.5, 6.5, footprint=(5.2, 5.1, 0, 8.7))
     box('', (0, 0, 4.7), (5, 3.8, 7.2), 'plastic', .65)
+    for sx in (-2.48, 2.48):
+        box('', (sx, .1, 4.7), (.28, 3.6, 7.0), 'silver', .08)
+    box('', (0, .1, 8.22), (5.1, 3.6, .34), 'silver', .08)
+    box('', (0, 2.02, 4.7), (4.6, .28, 6.8), 'silver', .08)
     rot = Matrix.Rotation(math.pi/2, 3, 'X')
-    cylinder((0, -2.2, 5), 2.0, .8, 'socket', 40, rot=rot)
+    cylinder((0, -2.05, 5), 2.1, .5, 'silver', 40, 1.72, rot=rot)
+    cylinder((0, -2.15, 5), 1.7, .65, 'socket', 40, rot=rot)
+    cylinder((0, -2.42, 5), 1.25, .45, 'darkmetal', 32, rot=rot)
     for xx in (-1.4, 0, 1.4):
         box('', (xx, 0, -.1), (.4, .4, 4.2), 'silver')
     finish()
@@ -540,8 +609,11 @@ def buzzer():
     assembly('buzzer', 94, 63, footprint=(12.2, 12.2, 0, 8.6))
     cylinder((0, 0, 4.1), 6, 8.2, 'plastic', 64, 1.2)
     cylinder((0, 0, 8.27), 5.7, .16, 'plastic', 64, 1.2)
-    cylinder((0, 0, 6.8), 1.2, .06, 'socket', 32)
-    text('+', (3, 2, 8.36), 2.0, 'marking')
+    cylinder((0, 0, 8.24), 5.88, .14, 'darkmetal', 64, 5.55)
+    cylinder((0, 0, 6.45), 1.2, .06, 'socket', 32)
+    cylinder((0, 0, 6.62), 1.15, .08, 'brass', 32)
+    cylinder((3, 2, 8.35), .85, .03, 'marking', 24, .7)
+    text('+', (3, 2, 8.37), 2.0, 'marking')
     finish()
 
 
@@ -573,6 +645,8 @@ def display():
     places = [(0, 4.7, horizontal), (2.55, 2.35, vertical), (2.55, -2.35, vertical), (0, -4.7, horizontal), (-2.55, -2.35, vertical), (-2.55, 2.35, vertical), (0, 0, horizontal)]
     for digit in range(4):
         cx = (digit-1.5)*9.35
+        wire([(-4.4+cx, -6.1), (4.4+cx, -6.1), (4.4+cx, 6.1), (-4.4+cx, 6.1), (-4.4+cx, -6.1)], .18, 'plastic', 8.208)
+        cylinder((cx+3.75, -4.7, 8.208), .72, .02, 'plastic', 20, .54)
         for bit in range(8):
             name = f'segment_{digit}_{bit}'
             saved = VERTS, FACES, MATIDS, SLOTS
@@ -601,10 +675,14 @@ def detail():
     for index, xx in enumerate((15, 29, 43)):
         assembly('regulator'+str(index), xx, 85, footprint=(6.5, 7.5, 0, 2.2))
         box('', (0, 0, 1), (6.4, 3.5, 1.6), 'ic', .18)
+        box('', (0, 2.8, .04), (3.8, 2.9, .08), 'copper', .04)
         box('', (0, 2.6, .24), (3.1, 2.5, .48), 'silver', .12)
+        box('', (0, 3.58, .26), (.95, .58, .5), 'darkmetal', .04)
+        box('', (0, 1.92, .34), (3.15, .65, .42), 'solder', .08)
         for dx in (-2.3, 0, 2.3):
             box('', (dx, -2.6, .24), (.65, 2.5, .48), 'silver', .07)
             pad(dx, -3.0, 1, 1.7)
+            box('', (dx, -1.92, .32), (.72, .78, .38), 'solder', .08)
         text('1117', (0, 0, 1.81), 1.1, 'marking')
         text(('3.3V', '1.2V', '2.5V')[index], (0, -5.3, .04), 1.15)
         finish()
@@ -631,7 +709,17 @@ def detail():
     for i in range(10):
         yy = (i-4.5)*1.8
         wire([(67-68, 54+yy-53), (69-68, 54+yy-53), (76-68, 54+yy*1.41-53), (78.4-68, 54+yy*1.41-53)], .09, 'trace')
-    for xx, yy in [(37,39),(37,68),(67,68),(70,39),(90,39),(113,19),(30,24),(18,78),(50,87),(76,72)]:
+    for i in range(16):
+        rx = 48 + i*1.1 - 68
+        wire([(rx, 26.8-53), (rx, 24.5-53), (54+(i-7.5)*.9-68, 22.8-53), (54+(i-7.5)*.9-68, 21.8-53)], .09, 'copper')
+    for i in range(8):
+        bx = 84 + i*4.4 - 68
+        wire([(bx, 79.4-53), (bx, 82.0-53), (bx+(1.5-i*.4), 83.2-53), (bx+(1.5-i*.4), 85.0-53)], .11, 'copper')
+    for i, lx in enumerate((73, 76.5, 80, 83.5)):
+        wire([(66-68, 25.0+i*.7-53), (71-68, 20.0-i*.6-53), (lx-68, 17.5-53), (lx-68, 15.6-53)], .1, 'copper')
+    for i, kx in enumerate((92, 100, 108, 116)):
+        wire([(74-68, 26.0+i*.7-53), (89-68, 19.5-i*.5-53), (kx-68, 15.5-53), (kx-68, 13.7-53)], .1, 'copper')
+    for xx, yy in [(37,39),(37,68),(67,68),(70,39),(90,39),(113,19),(30,24),(18,78),(50,87),(76,72),(46,24),(64,24),(85,20),(102,20)]:
         cylinder((xx-68, yy-53, .035), .31, .04, 'gold', 16, .15)
     finish()
     print('Added peripheral ICs, regulators, solder fillets, decouplers, silk and restrained photo-referenced fanout routes.')
