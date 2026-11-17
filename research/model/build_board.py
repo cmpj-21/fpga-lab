@@ -26,13 +26,15 @@ def material(name, color, roughness=0.45, metal=0.0, emission=False):
     linear = tuple(c/12.92 if c <= 0.04045 else ((c+0.055)/1.055)**2.4 for c in value)
     m = bpy.data.materials.new('Trace_' + name)
     m.use_nodes = True
-    p = m.node_tree.nodes.get('Principled BSDF')
+    p = next(n for n in m.node_tree.nodes if n.type == 'BSDF_PRINCIPLED')
     p.inputs['Base Color'].default_value = (*linear, 1)
     p.inputs['Roughness'].default_value = roughness
     p.inputs['Metallic'].default_value = metal
     if emission:
-        p.inputs['Emission Color'].default_value = (*linear, 1)
-        p.inputs['Emission Strength'].default_value = 0.0
+        if 'Emission Color' in p.inputs:
+            p.inputs['Emission Color'].default_value = (*linear, 1)
+        if 'Emission Strength' in p.inputs:
+            p.inputs['Emission Strength'].default_value = 0.0
     m.diffuse_color = (*linear, 1)
     MATS[name] = m
     return m
@@ -348,12 +350,39 @@ def usb(name, x, y):
     finish()
 
 
+def _purge_orphans():
+    for col in (bpy.data.objects, bpy.data.meshes, bpy.data.curves, bpy.data.materials, bpy.data.lights, bpy.data.cameras, bpy.data.worlds):
+        for item in list(col):
+            if item.users == 0:
+                col.remove(item)
+
+
 def start():
-    global SCENE
-    if bpy.data.scenes.get('Trace_RZ_A2_2'):
-        raise RuntimeError('Trace_RZ_A2_2 already exists; preserve it and inspect before rebuilding.')
+    global SCENE, CURRENT, VERTS, FACES, MATIDS, SLOTS
+    MATS.clear()
+    ASSEMBLIES.clear()
+    FOOTPRINTS.clear()
+    CACHE.clear()
+    DYNAMICS.clear()
+    CURRENT = None
+    VERTS, FACES, MATIDS, SLOTS = [], [], [], []
+    if bpy.context.mode != 'OBJECT' and bpy.context.active_object is not None:
+        bpy.ops.object.mode_set(mode='OBJECT')
+    old_scene = bpy.data.scenes.get('Trace_RZ_A2_2')
     SCENE = bpy.data.scenes.new('Trace_RZ_A2_2')
-    bpy.context.window.scene = SCENE
+    for window in bpy.context.window_manager.windows:
+        window.scene = SCENE
+    if old_scene is not None:
+        for obj in list(old_scene.objects):
+            bpy.data.objects.remove(obj, do_unlink=True)
+        bpy.data.scenes.remove(old_scene)
+        SCENE.name = 'Trace_RZ_A2_2'
+    default_scene = bpy.data.scenes.get('Scene')
+    if default_scene is not None and len(bpy.data.scenes) > 1:
+        for obj in list(default_scene.objects):
+            bpy.data.objects.remove(obj, do_unlink=True)
+        bpy.data.scenes.remove(default_scene)
+    _purge_orphans()
     SCENE.unit_settings.system = 'METRIC'
     SCENE.unit_settings.length_unit = 'MILLIMETERS'
     material('mask', '16191b', .43, .12)
@@ -478,10 +507,10 @@ def connectors():
 
 
 def controls():
-    for i, xx in enumerate((93, 101, 109, 117)):
+    for i, xx in enumerate((92, 100, 108, 116)):
         button('key'+str(i+1), xx, 10.5)
     button('reset', 12, 16)
-    assembly('dip', 97, 34, footprint=(10.3, 12.8, 0, 6))
+    assembly('dip', 94, 34, footprint=(10.3, 12.8, 0, 6))
     box('', (0, 0, 2.7), (10.3, 10.1, 5.4), 'dipred', .38)
     for i in range(4):
         xx = (i-1.5)*2.15
@@ -493,22 +522,22 @@ def controls():
     text('ON  DIP', (0, 3.4, 5.45), 1.1, 'white')
     finish()
     buzzer()
-    assembly('ir', 124, 6.5, footprint=(5.2, 5.1, 0, 8.7))
+    assembly('ir', 123.5, 6.5, footprint=(5.2, 5.1, 0, 8.7))
     box('', (0, 0, 4.7), (5, 3.8, 7.2), 'plastic', .65)
     rot = Matrix.Rotation(math.pi/2, 3, 'X')
     cylinder((0, -2.2, 5), 2.0, .8, 'socket', 40, rot=rot)
     for xx in (-1.4, 0, 1.4):
         box('', (xx, 0, -.1), (.4, .4, 4.2), 'silver')
     finish()
-    for i, xx in enumerate((72, 77, 82, 87)):
-        led('led'+str(i+1), xx, 10.5, 'ledred')
+    for i, xx in enumerate((73, 76.5, 80, 83.5)):
+        led('led'+str(i+1), xx, 14.0, 'ledred', angle=90)
     led('pwrled', 26, 90.5, 'ledgreen')
     display()
     print('Built five tactile switches, DIP toggles, infrared receiver, buzzer, LEDs and 32 independent display segments.')
 
 
 def buzzer():
-    assembly('buzzer', 94, 62, footprint=(12.2, 12.2, 0, 8.6))
+    assembly('buzzer', 94, 63, footprint=(12.2, 12.2, 0, 8.6))
     cylinder((0, 0, 4.1), 6, 8.2, 'plastic', 64, 1.2)
     cylinder((0, 0, 8.27), 5.7, .16, 'plastic', 64, 1.2)
     cylinder((0, 0, 6.8), 1.2, .06, 'socket', 32)
@@ -516,14 +545,17 @@ def buzzer():
     finish()
 
 
-def led(name, x, y, mat):
-    assembly(name, x, y, footprint=(3.2, 1.7, 0, 1.2))
+def led(name, x, y, mat, angle=0):
+    assembly(name, x, y, angle, footprint=(3.2, 1.7, 0, 1.2))
     box('', (0, 0, .28), (3.2, 1.6, .56), 'white', .12)
     for xx in (-1.25, 1.25):
         box('', (xx, 0, .35), (.7, 1.75, .68), 'silver', .06)
         pad(xx, 0, 1, 2.1)
     dynamic_box('led_' + name + '_lens', (0, 0, .83), (1.7, 1.48, .65), mat, .2)
-    text(name.upper(), (0, -2.25, .05), 1.05)
+    if angle % 180 == 90:
+        text(name.upper(), (2.55, 0, .05), .8, rotation=-angle)
+    else:
+        text(name.upper(), (0, -2.25, .05), 1.05)
     finish()
 
 
@@ -563,9 +595,9 @@ def display():
 
 
 def detail():
-    chip('max232', 111, 62, 5.4, 10.2, 16, 1.27, 'MAX232')
-    chip('lm75', 111, 48, 4.0, 5.0, 8, 1.27, 'LM75')
-    chip('eeprom', 87, 31, 4.0, 5.0, 8, 1.27, '24C08')
+    chip('max232', 109, 61, 5.4, 10.2, 16, 1.27, 'MAX232')
+    chip('lm75', 108, 47, 4.0, 5.0, 8, 1.27, 'LM75')
+    chip('eeprom', 89, 47, 4.0, 5.0, 8, 1.27, '24C08')
     for index, xx in enumerate((15, 29, 43)):
         assembly('regulator'+str(index), xx, 85, footprint=(6.5, 7.5, 0, 2.2))
         box('', (0, 0, 1), (6.4, 3.5, 1.6), 'ic', .18)
@@ -584,7 +616,7 @@ def detail():
         for dx in (-1.75, 1.75):
             box('', (xx-68+dx, 84-53, .45), (.6, 1.9, .9), 'solder', .08)
         box('', (xx-68-1, 84-53, 1.93), (.35, 1.5, .04), 'brand')
-    placements = [(72, 47, 90), (72, 51, 90), (72, 55, 90), (72, 59, 90), (39, 42, 0), (39, 45, 0), (38, 64, 0), (39, 68, 0), (47, 69, 0), (52, 69, 0), (57, 69, 0), (62, 69, 0), (45, 37, 0), (50, 37, 0), (55, 37, 0), (60, 37, 0), (65, 37, 0), (24, 50, 0), (29, 50, 0), (24, 64, 0), (30, 64, 0), (88, 54, 90), (90, 53, 90), (97, 53, 0), (103, 53, 0), (114, 52, 90), (117.5, 58, 90), (117.5, 63, 90), (107, 69, 0), (113, 69, 0), (114, 40, 0), (109, 37, 0), (109, 33, 0), (109, 29, 0), (92, 23, 0), (96, 23, 0), (100, 23, 0), (104, 23, 0), (108, 23, 0), (114, 23, 0), (72, 19, 90), (72, 15.5, 90), (77, 15.5, 90), (82, 15.5, 90), (87, 15.5, 90), (28, 24, 0), (23, 23, 0), (19, 23, 0)]
+    placements = [(72, 47, 90), (72, 51, 90), (72, 55, 90), (72, 59, 90), (39, 42, 0), (39, 45, 0), (38, 64, 0), (39, 68, 0), (47, 69, 0), (52, 69, 0), (57, 69, 0), (62, 69, 0), (45, 37, 0), (50, 37, 0), (55, 37, 0), (60, 37, 0), (65, 37, 0), (24, 50, 0), (29, 50, 0), (24, 64, 0), (30, 64, 0), (88, 54, 90), (90, 53, 90), (97, 53, 0), (103, 53, 0), (114, 52, 90), (117.5, 58, 90), (117.5, 63, 90), (107, 69, 0), (113, 69, 0), (114, 40, 0), (109, 37, 0), (109, 33, 0), (109, 29, 0), (92, 23, 0), (96, 23, 0), (100, 23, 0), (104, 23, 0), (108, 23, 0), (114, 23, 0), (72, 20.5, 90), (73, 8.5, 90), (76.5, 8.5, 90), (80, 8.5, 90), (83.5, 8.5, 90), (28, 24, 0), (23, 23, 0), (19, 23, 0)]
     for i, (x, y, a) in enumerate(placements):
         part(x, y, a, 'capacitor' if i%3 == 0 else 'resistor', ('C' if i%3 == 0 else 'R')+str(i+1))
     for i in range(8):
@@ -649,7 +681,12 @@ def stage_scene():
     data.clip_start = .001
     data.clip_end = 10
     SCENE.camera = camera
-    SCENE.render.engine = 'BLENDER_EEVEE'
+    for engine in ('BLENDER_EEVEE_NEXT', 'BLENDER_EEVEE'):
+        try:
+            SCENE.render.engine = engine
+            break
+        except TypeError:
+            pass
     SCENE.render.resolution_x = 1600
     SCENE.render.resolution_y = 1200
     SCENE.render.resolution_percentage = 100
