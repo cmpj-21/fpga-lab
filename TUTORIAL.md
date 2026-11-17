@@ -109,8 +109,9 @@ Screenshots illustrate the layout; your design, clock, open panels, and signal v
 
 ### Inspect the 3D board
 
-- **Left-click** any component, connector, header, LED, digit, or switch to select it and open its floating hardware inspector card (showing package details, mapped FPGA pins/nets, and live logic states).
-- Use the **Interact / Select** toggle (`V`) in the viewport toolbar to choose whether left-clicking interactive controls (`S1`–`S4`, `Reset`, `DIP 1–4`, `Power`) actuates them (`Interact`) or selects them for inspection without toggling (`Select`).
+- Use the **Interact / Select** toggle (`V`) in the viewport toolbar:
+  - **Interact mode:** Left-clicking only actuates hardware controls (`S1`–`S4`, `Reset`, `DIP 1–4`, `Power`).
+  - **Select mode:** Left-clicking selects any component, connector, header, LED, digit, or switch to open its floating hardware inspector card (without actuating switches).
 - Hold **left-click (LMB) and drag** to move the camera; use the **Orbit / Pan** toggle in the viewport toolbar to switch between orbiting and panning (designed for one-button laptop touchpads as well as mice). Scroll to zoom.
 - Click **Center** (`F`) or double-click a component to smoothly frame the camera and orbit pivot onto the selected component.
 - Use **Perspective**, **Top**, or **Detail** for quick views.

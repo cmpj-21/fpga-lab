@@ -281,7 +281,6 @@ export async function createBoard3D(canvas, opts = {}) {
     if (event.button !== 0) return;
     const target = pick(event);
     if (state.toolMode === 'interact' && state.power && target?.type === 'key') {
-      selectPart(target.partId);
       activeKey = target.id; controls.enabled = false;
       opts.onKey?.(target.id, true); canvas.setPointerCapture(event.pointerId);
       return;
@@ -289,10 +288,9 @@ export async function createBoard3D(canvas, opts = {}) {
     pointerState = { x: event.clientX, y: event.clientY, dragged: false, target };
   }, { capture: true });
   canvas.addEventListener('dblclick', event => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || state.toolMode !== 'select') return;
     const target = pick(event);
     if (!target) return;
-    if (state.toolMode === 'interact' && (target.type === 'key' || target.type === 'dip' || target.type === 'power')) return;
     selectPart(target.partId);
     centerSelected(target.partId);
   });
@@ -301,14 +299,11 @@ export async function createBoard3D(canvas, opts = {}) {
       const { dragged, target } = pointerState;
       pointerState = null;
       if (!dragged && event?.type === 'pointerup') {
-        if (!target) {
-          selectPart(null);
-        } else {
-          selectPart(target.partId);
-          if (state.toolMode === 'interact') {
-            if (target.type === 'power') opts.onPower?.(!state.power);
-            else if (target.type === 'dip' && state.power) opts.onDip?.(target.index);
-          }
+        if (state.toolMode === 'select') {
+          selectPart(target ? target.partId : null);
+        } else if (target) {
+          if (target.type === 'power') opts.onPower?.(!state.power);
+          else if (target.type === 'dip' && state.power) opts.onDip?.(target.index);
         }
       }
     }
@@ -327,16 +322,24 @@ export async function createBoard3D(canvas, opts = {}) {
     }
     if (activeKey) return;
     const hit = pick(event);
-    state.hovered = hit?.partId || null;
-    if (state.hovered && state.hovered !== state.selected) {
-      computePartBox(state.hovered, hoverHighlight.box);
-      hoverHighlight.visible = true;
+    if (state.toolMode === 'select') {
+      state.hovered = hit?.partId || null;
+      if (state.hovered && state.hovered !== state.selected) {
+        computePartBox(state.hovered, hoverHighlight.box);
+        hoverHighlight.visible = true;
+      } else {
+        hoverHighlight.visible = false;
+      }
+      const meta = state.hovered ? BOARD_PARTS[state.hovered] : null;
+      canvas.title = meta ? `${meta.title} (${meta.part})` : '';
+      canvas.style.cursor = hit ? 'pointer' : 'grab';
     } else {
+      state.hovered = null;
       hoverHighlight.visible = false;
+      canvas.title = '';
+      const canInteract = hit && (hit.type === 'power' || (state.power && (hit.type === 'key' || hit.type === 'dip')));
+      canvas.style.cursor = canInteract ? 'pointer' : 'grab';
     }
-    const meta = state.hovered ? BOARD_PARTS[state.hovered] : null;
-    canvas.title = meta ? `${meta.title} (${meta.part})` : '';
-    canvas.style.cursor = hit ? 'pointer' : 'grab';
   });
   let previous = performance.now(), fps = 60;
   function update(now, dt) {
@@ -423,7 +426,14 @@ export async function createBoard3D(canvas, opts = {}) {
     get selectedPart() { return state.selected ? BOARD_PARTS[state.selected] : null; },
     setNavMode(mode) { state.navMode = mode === 'pan' ? 'pan' : 'orbit'; syncCameraButtons(); },
     get navMode() { return state.navMode; },
-    setToolMode(mode) { state.toolMode = mode === 'select' ? 'select' : 'interact'; },
+    setToolMode(mode) {
+      state.toolMode = mode === 'select' ? 'select' : 'interact';
+      if (state.toolMode !== 'select') {
+        state.hovered = null;
+        hoverHighlight.visible = false;
+        selectPart(null);
+      }
+    },
     get toolMode() { return state.toolMode; },
     setExplode(value) { state.explodeTarget = value; },
     setPersistence(value) { state.persistence = value; },

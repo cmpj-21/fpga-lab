@@ -399,7 +399,7 @@ function renderInspector(part) {
 function syncViewportHint() {
   const hint = $('#viewportHint');
   if (!hint) return;
-  const tool = board?.toolMode === 'select' ? 'Click: Select only' : 'Click: Interact / Select';
+  const tool = board?.toolMode === 'select' ? 'Click: Select' : 'Click: Interact';
   const nav = board?.navMode === 'pan' ? 'Drag: Pan' : 'Drag: Orbit';
   hint.innerHTML = `<i class="orbit-icon">↔</i> ${tool} <b>·</b> ${nav} <b>·</b> Scroll: Zoom`;
 }
