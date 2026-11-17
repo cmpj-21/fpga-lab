@@ -120,8 +120,15 @@ Screenshots illustrate the layout; your design, clock, open panels, and signal v
 - **Display persistence** changes how multiplexed digits remain visible between activations; it does not change VHDL timing.
 - **LED intensity** changes rendering brightness, not an electrical current.
 - **Labels**, **Grid**, and **Net guides** are visual aids. Net guides are not a complete PCB routing or connectivity verification tool.
-- **Render quality > Low** can help on a slower computer.
+- **Render quality** ranges from **Low** (for slower computers) up to **Ultra** and **Extreme** (supersampled with 4K shadow maps).
 - **Save image** downloads a PNG of the board viewport, not the whole website.
+- **Graphics & FX Suite** (inside **View & graphics**):
+  - **Visual presets:** One-click studio looks including *Studio Product Shot*, *Cyberpunk Neon*, *Automata Bunker*, *Golden Hour Sun*, *Macro Tilt-Shift Bokeh*, *Engineering Blueprint*, *FLIR Thermal Imaging*, *1980s Lab CRT*, *Holographic X-Ray*, *Studio Clay Maquette*, and *Technical Cel / Ink*.
+  - **Shading & materials:** Switch between *PBR Realistic*, *Flat Faceted*, *Wireframe Mesh*, *Wireframe on Shaded*, *Studio Clay*, *Surface Normals*, *Linear Depth Map*, *UV Diagnostic Grid*, *X-Ray Hologram*, *Cel-Shaded Toon*, and *Unlit Albedo*. Customize the PCB solder-mask color theme, surface roughness/metalness, clearcoat lacquer, LED/7-segment color palette, and 3D LED surface light bleed.
+  - **Lighting rig & IBL:** Choose lighting presets, procedural IBL environment domes, 3-point light intensities/colors/angles, ambient hemisphere colors, and an interactive **Cursor flashlight** that follows the pointer across the board.
+  - **Post-FX, optics & color grading:** Perspective vs. Orthographic CAD projection, FOV/focal length, Dutch roll tilt, tone mapping operators (*ACES*, *AgX*, *Khronos Neutral*, *Reinhard*, *Cineon*, *Linear*), HDR bloom, SSAO cavity shading, depth-of-field bokeh blur, CAS sharpening, Sobel ink outlines, chromatic aberration, lens distortion, vignette, film grain, color grading, LUT filters, shadow controls, floor surfaces, and studio backdrops.
+- **Photo Studio (`P` or camera icon in the viewport toolbar):**
+  - Opens a dedicated viewfinder with aspect-ratio framing (*Free*, *16:9*, *21:9*, *4:3*, *1:1*, *9:16*), composition grids (*Rule of Thirds*, *Golden Ratio*, *Crosshair*, *Diagonals*, *Safe Area*), **Focus pick** (click any component on the 3D board to lock DoF focus distance), **Maximize** theater mode, **Hide HUD (`H`)**, custom board pose staging (custom 7-segment text and LED states), optional metadata watermark stamps, multi-resolution capture (*Viewport*, *1080p*, *1440p*, *4K UHD*) in *PNG*, *WebP*, or *JPEG* (with optional transparent alpha cutout), clipboard copy, and a session filmstrip.
 
 On smaller screens, **Files** opens a drawer. Close it with its **×** button to uncover the board.
 
@@ -617,7 +624,9 @@ The console's first compiler error is usually the best starting point. Fix that 
 | Hold `R` | Hold the board's reset input |
 | `F` | Center and frame the 3D camera on the selected board component (or reset view if none is selected) |
 | `V` | Toggle the 3D viewport left-click mode between **Interact** and **Select** |
-| `Escape` | Clear the active 3D component selection and dismiss open overlay panels |
+| `P` | Toggle **Photo Studio** mode |
+| `H` | Hide or show the studio HUD overlays while inside **Photo Studio** |
+| `Escape` | Exit **Photo Studio**, clear the active 3D component selection, and dismiss open overlay panels |
 
 Mouse and touchpad: Ctrl/⌘ + wheel or pinch zooms the waveform plot around the pointer; Shift + wheel or a horizontal two-finger swipe pans the timeline. Firefox line-mode wheel deltas are normalized so panning has the same speed as other browsers.
 

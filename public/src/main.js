@@ -655,23 +655,194 @@ function wire() {
     if (e.altKey && ['1', '2', '3', '4'].includes(e.key)) { e.preventDefault(); toggleDip(Number(e.key) - 1); return; }
     if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); centerSelection(); return; }
     if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'v') { e.preventDefault(); setTool(board?.toolMode === 'select' ? 'interact' : 'select'); return; }
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'p') { e.preventDefault(); togglePhotoMode(); return; }
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'h' && $('#center').classList.contains('photo-mode')) { e.preventDefault(); $('#pmHideHudBtn').click(); return; }
     if (keys[e.key.toLowerCase()]) { e.preventDefault(); keyInput(keys[e.key.toLowerCase()], true); }
     if (e.code === 'Space' && e.target.tagName !== 'BUTTON') { e.preventDefault(); $('#btnRun').click(); }
     if (e.key === '.') $('#btnStep').click();
-    if (e.key === 'Escape') { $('#right').classList.add('hidden'); $('#deck').classList.add('hidden'); $('#app').classList.remove('mobile-library'); board?.selectPart(null); syncNavigation(); }
+    if (e.key === 'Escape') { if ($('#center').classList.contains('photo-mode')) togglePhotoMode(false); $('#right').classList.add('hidden'); $('#deck').classList.add('hidden'); $('#app').classList.remove('mobile-library'); board?.selectPart(null); syncNavigation(); }
   });
   window.addEventListener('keyup', e => { if (keys[e.key.toLowerCase()]) keyInput(keys[e.key.toLowerCase()], false); });
   window.addEventListener('blur', releaseKeys);
   document.addEventListener('visibilitychange', () => { if (document.hidden) { releaseKeys(); pause(); } });
   $('#pwrToggle').onchange = async e => { S.power = e.target.checked; pause(); board?.setPower(S.power); if (!S.power) { releaseKeys(); board?.clearOutputs(); sampleOutputs(); } else if (S.sim && !S.vcd) await build(S.sim.top); else sampleOutputs(); syncKeys(); };
-  const camera = name => { board?.setCamera(name); $('#center').classList.toggle('closeup', ['leds','fpga','display','dtubes','io'].includes(name)); $('#camPreset').value = name; $$('[data-camera]').forEach(b => b.classList.toggle('active', b.dataset.camera === name)); };
+  const camera = name => { board?.setCamera(name); $('#center').classList.toggle('closeup', ['leds','fpga','display','dtubes','io','macro_low'].includes(name)); if ($('#camPreset').querySelector(`option[value="${name}"]`)) $('#camPreset').value = name; if ($('#pmCamSelect')) $('#pmCamSelect').value = name; $$('[data-camera]').forEach(b => b.classList.toggle('active', b.dataset.camera === name)); };
   $$('[data-camera]').forEach(b => b.onclick = () => camera(b.dataset.camera)); $('#camPreset').onchange = e => camera(e.target.value);
   $('#btnViewSettings').onclick = () => { $('#deck').classList.toggle('hidden'); $('#btnViewSettings').setAttribute('aria-expanded', String(!$('#deck').classList.contains('hidden'))); };
   $('#deckCollapse').onclick = () => $('#btnViewSettings').click();
-  for (const [id, display, setter] of [['explode', 'explodeVal', 'setExplode'], ['persistence', 'persistVal', 'setPersistence'], ['glow', 'glowVal', 'setGlow']]) $('#' + id).oninput = e => { $('#' + display).textContent = `${e.target.value}%`; board?.[setter](Number(e.target.value) / 100); };
-  for (const [id, setter] of [['tglOrbit', 'setAutoOrbit'], ['tglLabels', 'setLabels'], ['tglGrid', 'setGrid'], ['tglTraces', 'setTraces']]) $('#' + id).onchange = e => board?.[setter](e.target.checked);
-  $('#quality').onchange = e => board?.setQuality(e.target.value); $('#btnResetView').onclick = () => camera('hero');
+  for (const [id, display, setter] of [['explode', 'explodeVal', 'setExplode'], ['persistence', 'persistVal', 'setPersistence'], ['glow', 'glowVal', 'setGlow']]) $('#' + id).oninput = e => { $('#' + display).textContent = `${e.target.value}%`; if (id === 'explode' && $('#pmExplode')) { $('#pmExplode').value = e.target.value; $('#pmExplodeVal').textContent = `${e.target.value}%`; } board?.[setter](Number(e.target.value) / 100); };
+  for (const [id, setter] of [['tglOrbit', 'setAutoOrbit'], ['tglLabels', 'setLabels'], ['tglGrid', 'setGrid'], ['tglTraces', 'setTraces']]) $('#' + id).onchange = e => { if (id === 'tglOrbit' && $('#pmTglOrbit')) $('#pmTglOrbit').checked = e.target.checked; board?.[setter](e.target.checked); };
+  $('#quality').onchange = e => { board?.setQuality(e.target.value); syncGfxUI(); }; $('#btnResetView').onclick = () => camera('hero');
   $('#btnShot').onclick = () => { if (!board) return; const a = document.createElement('a'); a.href = board.screenshot(); a.download = 'trace-board.png'; a.click(); };
+  let pmAspect = 'free';
+  function formatGfxVal(key, val) {
+    if (['fov', 'cameraRoll', 'envRotation', 'keyAzimuth', 'keyElevation', 'rimAzimuth', 'rimElevation'].includes(key)) return `${val}°`;
+    if (key === 'dofFocus') return `${val}mm`;
+    if (key === 'orbitSpeed') return `${val}×`;
+    if (['exposure', 'keyIntensity', 'rimIntensity', 'fillIntensity', 'hemiIntensity', 'cursorLightInt', 'temperature', 'tint', 'shadowBias'].includes(key)) return String(val);
+    return `${val}%`;
+  }
+  function syncGfxUI() {
+    const g = board?.getGfx();
+    if (!g) return;
+    $$('[data-gfx]').forEach(el => {
+      const k = el.dataset.gfx;
+      if (g[k] === undefined) return;
+      if (el.type === 'checkbox') el.checked = !!g[k];
+      else if (document.activeElement !== el || el.tagName === 'SELECT') el.value = String(g[k]);
+    });
+    $$('[data-gfx-val]').forEach(el => {
+      const k = el.dataset.gfxVal;
+      if (g[k] !== undefined) el.textContent = formatGfxVal(k, g[k]);
+    });
+    $('#center').classList.toggle('bg-transparent', g.bgMode === 'transparent');
+    const focalMm = Math.round(24 / (2 * Math.tan((g.fov * 0.5) * Math.PI / 180)));
+    if ($('#pmReadout')) $('#pmReadout').textContent = `${focalMm}mm · ${g.fov}° · ${g.shadingMode.toUpperCase()}${g.dof > 0 ? ` · DoF ${g.dofFocus}mm` : ''}`;
+  }
+  $$('[data-gfx]').forEach(el => {
+    const handler = () => {
+      const k = el.dataset.gfx;
+      const val = el.type === 'checkbox' ? el.checked : (el.type === 'range' || k === 'fpsCap') ? Number(el.value) : el.value;
+      if (k === 'quality') board?.setQuality(val);
+      board?.setGfx({ [k]: val });
+      syncGfxUI();
+    };
+    el.addEventListener('input', handler);
+    el.addEventListener('change', handler);
+  });
+  function updatePhotoFrameBox() {
+    const wrap = $('#pmFrameWrap'), box = $('#pmFrameBox');
+    if (!wrap || !box) return;
+    const w = wrap.clientWidth, h = wrap.clientHeight;
+    if (!w || !h || pmAspect === 'free') { box.style.width = '100%'; box.style.height = '100%'; return; }
+    const ratios = { '16:9': 16 / 9, '21:9': 21 / 9, '4:3': 4 / 3, '3:2': 3 / 2, '1:1': 1, '9:16': 9 / 16 };
+    const r = ratios[pmAspect] || (w / h);
+    let bw = w, bh = Math.round(w / r);
+    if (bh > h) { bh = h; bw = Math.round(h * r); }
+    box.style.width = `${bw}px`; box.style.height = `${bh}px`;
+  }
+  if ($('#pmFrameWrap')) new ResizeObserver(updatePhotoFrameBox).observe($('#pmFrameWrap'));
+  function togglePhotoMode(force) {
+    const active = force !== undefined ? !!force : !$('#center').classList.contains('photo-mode');
+    $('#center').classList.toggle('photo-mode', active);
+    $('#photoStudio').classList.toggle('hidden', !active);
+    $('#btnPhotoMode').classList.toggle('active', active);
+    $('#btnPhotoMode').setAttribute('aria-expanded', String(active));
+    if (active) {
+      $('#deck').classList.add('hidden');
+      $('#btnViewSettings').setAttribute('aria-expanded', 'false');
+      syncGfxUI();
+      requestAnimationFrame(updatePhotoFrameBox);
+    } else {
+      $('#app').classList.remove('photo-theater');
+      $('#pmTheaterBtn').classList.remove('active');
+      $('#pmTheaterBtn').textContent = 'Maximize';
+      $('#photoStudio').classList.remove('hud-hidden');
+      $('#pmHideHudBtn').classList.remove('active');
+      board?.setPhotoFocusMode(false);
+      $('#pmFocusPickBtn')?.classList.remove('active');
+      if (board?.stagePose?.enabled) {
+        board.setStagePose({ enabled: false });
+        if ($('#pmStageEnable')) $('#pmStageEnable').checked = false;
+        sampleOutputs();
+      }
+    }
+  }
+  $('#btnPhotoMode').onclick = () => togglePhotoMode();
+  $('#btnOpenPhotoStudio').onclick = () => togglePhotoMode(true);
+  $('#pmCloseBtn').onclick = () => togglePhotoMode(false);
+  $('#btnResetGfx').onclick = $('#pmResetFxBtn').onclick = () => { board?.resetGfx(); syncGfxUI(); toast('Graphics, lighting and post-FX reset to defaults.'); };
+  $$('[data-pm-aspect]').forEach(b => b.onclick = () => {
+    pmAspect = b.dataset.pmAspect;
+    $$('[data-pm-aspect]').forEach(x => x.classList.toggle('active', x === b));
+    updatePhotoFrameBox();
+  });
+  $('#pmGridSelect').onchange = e => { $('#pmFrameBox').dataset.grid = e.target.value; };
+  $('#pmFocusPickBtn').onclick = () => {
+    const next = !board?.photoFocusMode;
+    board?.setPhotoFocusMode(next);
+    $('#pmFocusPickBtn').classList.toggle('active', next);
+    if (next) toast('Click any part on the 3D board to focus the lens on that surface.');
+  };
+  $('#pmTheaterBtn').onclick = () => {
+    const on = $('#app').classList.toggle('photo-theater');
+    $('#pmTheaterBtn').classList.toggle('active', on);
+    $('#pmTheaterBtn').textContent = on ? 'Restore' : 'Maximize';
+    setTimeout(updatePhotoFrameBox, 50);
+  };
+  $('#pmHideHudBtn').onclick = () => {
+    const on = $('#photoStudio').classList.toggle('hud-hidden');
+    $('#pmHideHudBtn').classList.toggle('active', on);
+    $('#pmHideHudBtn').textContent = on ? 'Show HUD' : 'Hide HUD';
+  };
+  $$('[data-pmtab]').forEach(b => b.onclick = () => {
+    $$('[data-pmtab]').forEach(t => t.classList.toggle('active', t === b));
+    $$('.pm-tab-body').forEach(p => p.classList.toggle('active', p.id === 'pmtab-' + b.dataset.pmtab));
+  });
+  $('#pmCamSelect').onchange = e => camera(e.target.value);
+  $('#pmTglOrbit').onchange = e => { $('#tglOrbit').checked = e.target.checked; board?.setAutoOrbit(e.target.checked); };
+  $('#pmExplode').oninput = e => { $('#explode').value = e.target.value; $('#explodeVal').textContent = $('#pmExplodeVal').textContent = `${e.target.value}%`; board?.setExplode(Number(e.target.value) / 100); };
+  const syncStagePose = () => {
+    board?.setStagePose({
+      enabled: $('#pmStageEnable').checked,
+      text: $('#pmStageText').value,
+      leds: $$('.pm-stage-led').map(c => c.checked),
+    });
+    if (!$('#pmStageEnable').checked) sampleOutputs();
+  };
+  $('#pmStageEnable').onchange = syncStagePose;
+  $('#pmStageText').oninput = () => { if (!$('#pmStageEnable').checked) $('#pmStageEnable').checked = true; syncStagePose(); };
+  $$('.pm-stage-led').forEach(c => c.onchange = () => { if (!$('#pmStageEnable').checked) $('#pmStageEnable').checked = true; syncStagePose(); });
+  function triggerShutterFlash() {
+    const fl = $('#pmFlash');
+    if (!fl) return;
+    fl.classList.add('active');
+    audio.click(true);
+    requestAnimationFrame(() => requestAnimationFrame(() => fl.classList.remove('active')));
+  }
+  function captureStudioShot(downloadFile = true) {
+    if (!board) return null;
+    triggerShutterFlash();
+    const shot = board.capturePhoto({
+      resolution: $('#pmResolution').value,
+      aspect: pmAspect,
+      format: $('#pmFormat').value,
+      transparent: $('#pmTransparent').checked,
+      stamp: $('#pmStampPos').value,
+      caption: $('#pmStampCaption').value.trim(),
+      simInfo: S.sim ? `${S.sim.top} · ${fmtTime(S.time)}` : '',
+    });
+    const ext = shot.format === 'jpeg' ? 'jpg' : shot.format;
+    const filename = `trace-photo-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.${ext}`;
+    if (downloadFile) {
+      const a = document.createElement('a'); a.href = shot.dataUrl; a.download = filename; a.click();
+      toast(`Saved ${filename} (${shot.width}×${shot.height}).`);
+    }
+    const strip = $('#pmFilmstrip');
+    if (strip) {
+      const btn = document.createElement('button'); btn.className = 'pm-thumb'; btn.title = `Download ${filename} (${shot.width}×${shot.height})`;
+      const img = document.createElement('img'); img.src = shot.dataUrl; img.alt = filename;
+      const badge = document.createElement('span'); badge.textContent = `${shot.width}×${shot.height}`;
+      btn.append(img, badge);
+      btn.onclick = () => { const a = document.createElement('a'); a.href = shot.dataUrl; a.download = filename; a.click(); };
+      strip.prepend(btn);
+      while (strip.children.length > 8) strip.lastChild.remove();
+    }
+    return shot;
+  }
+  $('#pmShutterBtn').onclick = () => captureStudioShot(true);
+  $('#pmCopyBtn').onclick = async () => {
+    const shot = captureStudioShot(false);
+    if (!shot) return;
+    try {
+      const blob = await fetch(shot.dataUrl).then(r => r.blob());
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+      toast(`Copied ${shot.width}×${shot.height} studio photo to clipboard.`);
+    } catch {
+      const a = document.createElement('a'); a.href = shot.dataUrl; a.download = `trace-photo.${shot.format}`; a.click();
+      toast(`Clipboard image copy unavailable; downloaded ${shot.width}×${shot.height} image instead.`);
+    }
+  };
   $('#btnVcd').onclick = exportVcd; $('#waveZoomIn').onclick = () => { $('#waveFollow').checked = false; waves.zoom(1 / 1.4); }; $('#waveZoomOut').onclick = () => { $('#waveFollow').checked = false; waves.zoom(1.4); }; $('#waveFit').onclick = () => { $('#waveFollow').checked = false; waves.fit(); };
   waves.onCursor = time => $('#waveCursor').textContent = `Cursor ${fmtTime(time)}`; waves.onNavigate = () => $('#waveFollow').checked = false;
   $('#btnLibrary').onclick = () => toggleLeft('library');
@@ -699,7 +870,7 @@ async function boot() {
   syncNavigation();
   audio.setMuted(true);
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; }).catch(() => {});
-  try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed), onDip: index => toggleDip(index), onSelect: part => renderInspector(part), onPower: on => { $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); } }); board.setPower(true); board.setGlow(.4); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
+  try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed), onDip: index => toggleDip(index), onSelect: part => renderInspector(part), onPower: on => { $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.4); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames')); applyTheme(document.documentElement.dataset.theme); wire(); fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);
   window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, build, advance, loadFiles, toggleDip };

@@ -66,18 +66,196 @@
     <section id="center" aria-label="Interactive 3D FPGA board">
       <canvas id="view3d" aria-label="FPGA board. Click to select or interact, hold left-click and drag to orbit or pan, scroll to zoom."></canvas>
       <div class="viewport-heading"><span class="eyebrow">RZ–EASYFPGA A2.2</span><span class="board-device">Cyclone IV E</span><span class="board-part">EP4CE6E22C8N</span></div>
-      <div class="view-toolbar"><div class="view-presets tool-modes" aria-label="Click mode"><button data-tool="interact" class="active" title="Click actuates switches and push buttons only (V)">Interact</button><button data-tool="select" title="Click selects and inspects components (V)">Select</button></div><label id="lblHideOutline" class="view-check-btn hidden" title="Hide selection and hover bounding box outlines"><input id="chkHideOutline" type="checkbox"><span>Hide outline</span></label><div class="view-presets nav-modes" aria-label="Drag camera mode"><button data-nav="orbit" class="active" title="Hold left-click and drag to orbit camera">Orbit</button><button data-nav="pan" title="Hold left-click and drag to pan camera">Pan</button></div><button id="btnCenterComp" class="view-action-btn" title="Center camera on selected component (F)" aria-label="Center camera on selected component">Center</button><div class="view-presets" aria-label="Board camera"><button data-camera="hero" class="active">Perspective</button><button data-camera="top">Top</button><button data-camera="fpga">Detail</button></div><button id="btnViewSettings" class="icon-btn" aria-label="View settings" aria-expanded="false" title="View settings"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="8" cy="7" r="3"/><circle cx="16" cy="17" r="3"/></svg></button></div>
+      <div class="view-toolbar"><div class="view-presets tool-modes" aria-label="Click mode"><button data-tool="interact" class="active" title="Click actuates switches and push buttons only (V)">Interact</button><button data-tool="select" title="Click selects and inspects components (V)">Select</button></div><label id="lblHideOutline" class="view-check-btn hidden" title="Hide selection and hover bounding box outlines"><input id="chkHideOutline" type="checkbox"><span>Hide outline</span></label><div class="view-presets nav-modes" aria-label="Drag camera mode"><button data-nav="orbit" class="active" title="Hold left-click and drag to orbit camera">Orbit</button><button data-nav="pan" title="Hold left-click and drag to pan camera">Pan</button></div><button id="btnCenterComp" class="view-action-btn" title="Center camera on selected component (F)" aria-label="Center camera on selected component">Center</button><div class="view-presets" aria-label="Board camera"><button data-camera="hero" class="active">Perspective</button><button data-camera="top">Top</button><button data-camera="fpga">Detail</button></div><button id="btnPhotoMode" class="icon-btn" aria-label="Photo mode" aria-expanded="false" title="Photo mode studio (P)"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-2h6l2 2h3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z"/><circle cx="12" cy="13.5" r="3.5"/></svg></button><button id="btnViewSettings" class="icon-btn" aria-label="View settings" aria-expanded="false" title="View settings"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="8" cy="7" r="3"/><circle cx="16" cy="17" r="3"/></svg></button></div>
       <div id="glOverlay" class="gl-overlay hidden"><h2>3D rendering is unavailable</h2><p>Enable WebGL to see the board. The digital simulator and analyzer still work.</p></div>
-      <div id="deck" class="deck hidden"><div class="panel-heading"><h2>View settings</h2><button id="deckCollapse" class="icon-btn small" aria-label="Close view settings">×</button></div><div class="deck-body">
+      <div id="deck" class="deck hidden"><div class="panel-heading"><h2>View &amp; graphics</h2><button id="deckCollapse" class="icon-btn small" aria-label="Close view settings">×</button></div><div class="deck-body">
         <label class="field">Camera<select id="camPreset"><option value="hero">Perspective</option><option value="top">Top-down</option><option value="fpga">FPGA detail</option><option value="display">Display detail</option><option value="dtubes">Four dtubes</option><option value="leds">Four LEDs</option><option value="io">Connectors</option><option value="underside">Underside</option></select></label>
         <label class="field">Exploded view <span id="explodeVal">0%</span><input id="explode" type="range" min="0" max="100" value="0"></label>
         <label class="field">Display persistence <span id="persistVal">60%</span><input id="persistence" type="range" min="0" max="100" value="60"></label>
         <label class="field">LED intensity <span id="glowVal">40%</span><input id="glow" type="range" min="0" max="100" value="40"></label>
         <div class="ctl-row"><label><input id="tglOrbit" type="checkbox"> Auto-rotate</label><label><input id="tglLabels" type="checkbox"> Labels</label></div>
         <div class="ctl-row"><label><input id="tglGrid" type="checkbox"> Grid</label><label><input id="tglTraces" type="checkbox"> Net guides</label></div>
-        <label class="field">Render quality<select id="quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high" selected>High</option></select></label>
+        <label class="field">Render quality<select id="quality" data-gfx="quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high" selected>High</option><option value="ultra">Ultra (2.25× · 4K)</option><option value="extreme">Extreme (2.75× · 4K)</option></select></label>
         <div class="lib-actions"><button id="btnResetView" class="btn">Reset view</button><button id="btnShot" class="btn">Save image</button></div>
+        <button id="btnOpenPhotoStudio" class="btn dark block">Photo Studio <span>P</span></button>
+        <div class="gfx-divider"><span>GRAPHICS &amp; FX SUITE</span><button id="btnResetGfx" class="text-btn" title="Reset all graphics, lighting and shader settings">Reset FX</button></div>
+        <label class="field">Visual preset<select id="gfxPreset" data-gfx="preset"><option value="default">Default Workbench</option><option value="studio-pro">Studio Product Shot</option><option value="cyberpunk">Cyberpunk Neon</option><option value="automata">Automata Bunker</option><option value="golden-hour">Golden Hour Sun</option><option value="macro-tilt">Macro Tilt-Shift Bokeh</option><option value="cad-blueprint">Engineering Blueprint</option><option value="thermal-flir">FLIR Thermal Imaging</option><option value="retro-crt">1980s Lab CRT</option><option value="xray-holo">Holographic X-Ray</option><option value="clay-sculpt">Studio Clay Maquette</option><option value="anime-cel">Technical Cel / Ink</option></select></label>
+        <details class="gfx-acc"><summary>Shading &amp; materials</summary><div class="gfx-acc-body">
+          <label class="field">Shading mode<select data-gfx="shadingMode"><option value="pbr">PBR Realistic</option><option value="flat">Flat Faceted</option><option value="wireframe">Wireframe Mesh</option><option value="wire-on-shaded">Wireframe on Shaded</option><option value="clay">Studio Clay</option><option value="normals">Surface Normals</option><option value="depth">Linear Depth Map</option><option value="uv">UV Diagnostic Grid</option><option value="xray">X-Ray Hologram</option><option value="toon">Cel-Shaded Toon</option><option value="unlit">Unlit Albedo</option></select></label>
+          <label class="field">PCB solder mask<select data-gfx="pcbTheme"><option value="default">Factory Original</option><option value="emerald">Altera Emerald</option><option value="matte-black">Stealth Matte Black</option><option value="osh-purple">OSH Park Purple</option><option value="crimson">Industrial Crimson</option><option value="arctic-white">Arctic Lab White</option><option value="cyber-gold">Kapton Gold</option><option value="custom">Custom Color…</option></select></label>
+          <label class="field">Custom PCB color<input type="color" data-gfx="pcbCustomColor" value="#165432"></label>
+          <label class="field">Roughness scale <span data-gfx-val="roughnessMult">100%</span><input type="range" min="10" max="200" value="100" data-gfx="roughnessMult"></label>
+          <label class="field">Metalness scale <span data-gfx-val="metalnessMult">100%</span><input type="range" min="0" max="200" value="100" data-gfx="metalnessMult"></label>
+          <label class="field">Clearcoat lacquer <span data-gfx-val="clearcoat">0%</span><input type="range" min="0" max="100" value="0" data-gfx="clearcoat"></label>
+          <label class="field">LED &amp; 7-seg palette<select data-gfx="ledTheme"><option value="default">Factory Red / Green</option><option value="amber">Vintage HP Amber</option><option value="emerald">Oscilloscope Green</option><option value="ice-blue">Cryo Cyan / Blue</option><option value="ultraviolet">Synthwave Violet</option><option value="pure-white">Xenon Pure White</option><option value="custom">Custom Color…</option></select></label>
+          <label class="field">Custom LED color<input type="color" data-gfx="ledCustomColor" value="#ff2921"></label>
+          <label class="field">3D LED surface bleed <span data-gfx-val="ledLightBleed">0%</span><input type="range" min="0" max="100" value="0" data-gfx="ledLightBleed"></label>
+        </div></details>
+        <details class="gfx-acc"><summary>Lighting rig &amp; IBL</summary><div class="gfx-acc-body">
+          <label class="field">Lighting preset<select data-gfx="lightPreset"><option value="default">Workbench Default</option><option value="studio-three-point">3-Point Studio</option><option value="dramatic-noir">Dramatic Low-Key</option><option value="cyberpunk">Neon Synthwave</option><option value="golden-hour">Golden Hour Sun</option><option value="clean-lab">Cleanroom Overheads</option><option value="inspect-macro">Macro Ring Inspection</option></select></label>
+          <label class="field">Environment dome<select data-gfx="envPreset"><option value="room">Studio Room</option><option value="studio-soft">Softbox Dome</option><option value="cyber-grid">Cyber Neon Chamber</option><option value="sunset">Sunset Horizon</option><option value="dark-void">Dark Void</option><option value="off">Disabled (No IBL)</option></select></label>
+          <label class="field">IBL intensity <span data-gfx-val="envIntensity">65%</span><input type="range" min="0" max="250" value="65" data-gfx="envIntensity"></label>
+          <label class="field">IBL rotation <span data-gfx-val="envRotation">0°</span><input type="range" min="0" max="360" value="0" data-gfx="envRotation"></label>
+          <label class="field">Key light intensity <span data-gfx-val="keyIntensity">2.7</span><input type="range" min="0" max="6" step="0.1" value="2.7" data-gfx="keyIntensity"></label>
+          <label class="field">Key light color<input type="color" data-gfx="keyColor" value="#fffaf2"></label>
+          <label class="field">Key azimuth <span data-gfx-val="keyAzimuth">-39°</span><input type="range" min="-180" max="180" value="-39" data-gfx="keyAzimuth"></label>
+          <label class="field">Key elevation <span data-gfx-val="keyElevation">55°</span><input type="range" min="5" max="90" value="55" data-gfx="keyElevation"></label>
+          <label class="field">Rim light intensity <span data-gfx-val="rimIntensity">1.5</span><input type="range" min="0" max="5" step="0.1" value="1.5" data-gfx="rimIntensity"></label>
+          <label class="field">Rim light color<input type="color" data-gfx="rimColor" value="#e8eeff"></label>
+          <label class="field">Rim azimuth <span data-gfx-val="rimAzimuth">146°</span><input type="range" min="-180" max="180" value="146" data-gfx="rimAzimuth"></label>
+          <label class="field">Rim elevation <span data-gfx-val="rimElevation">35°</span><input type="range" min="-45" max="90" value="35" data-gfx="rimElevation"></label>
+          <label class="field">Fill light intensity <span data-gfx-val="fillIntensity">0</span><input type="range" min="0" max="4" step="0.1" value="0" data-gfx="fillIntensity"></label>
+          <label class="field">Fill light color<input type="color" data-gfx="fillColor" value="#ffdfc2"></label>
+          <label class="field">Ambient hemisphere <span data-gfx-val="hemiIntensity">1.4</span><input type="range" min="0" max="4" step="0.1" value="1.4" data-gfx="hemiIntensity"></label>
+          <div class="ctl-row"><label>Sky <input type="color" data-gfx="skyColor" value="#ffffff"></label><label>Ground <input type="color" data-gfx="groundColor" value="#8b8d85"></label></div>
+          <div class="ctl-row"><label><input type="checkbox" data-gfx="cursorLight"> Cursor flashlight</label><input type="color" data-gfx="cursorLightColor" value="#fff6e5"></div>
+          <label class="field">Flashlight power <span data-gfx-val="cursorLightInt">2.5</span><input type="range" min="0.2" max="6" step="0.1" value="2.5" data-gfx="cursorLightInt"></label>
+        </div></details>
+        <details class="gfx-acc"><summary>Post-FX &amp; camera optics</summary><div class="gfx-acc-body">
+          <label class="field">Projection<select data-gfx="projection"><option value="perspective">Perspective Lens</option><option value="orthographic">Orthographic CAD</option></select></label>
+          <label class="field">Field of view <span data-gfx-val="fov">38°</span><input type="range" min="12" max="75" value="38" data-gfx="fov"></label>
+          <label class="field">Camera roll <span data-gfx-val="cameraRoll">0°</span><input type="range" min="-45" max="45" value="0" data-gfx="cameraRoll"></label>
+          <label class="field">Tone mapping<select data-gfx="toneMapping"><option value="aces">ACES Filmic</option><option value="agx">AgX Cinematic</option><option value="neutral">Khronos PBR Neutral</option><option value="reinhard">Reinhard</option><option value="cineon">Cineon Film</option><option value="linear">Linear Unmapped</option></select></label>
+          <label class="field">Exposure <span data-gfx-val="exposure">1.15</span><input type="range" min="0.2" max="3" step="0.05" value="1.15" data-gfx="exposure"></label>
+          <label class="field">HDR bloom <span data-gfx-val="bloom">0%</span><input type="range" min="0" max="150" value="0" data-gfx="bloom"></label>
+          <label class="field">Bloom threshold <span data-gfx-val="bloomThreshold">65%</span><input type="range" min="10" max="100" value="65" data-gfx="bloomThreshold"></label>
+          <label class="field">Bloom radius <span data-gfx-val="bloomRadius">50%</span><input type="range" min="10" max="100" value="50" data-gfx="bloomRadius"></label>
+          <label class="field">SSAO cavity <span data-gfx-val="ssao">0%</span><input type="range" min="0" max="100" value="0" data-gfx="ssao"></label>
+          <label class="field">SSAO radius <span data-gfx-val="ssaoRadius">50%</span><input type="range" min="10" max="100" value="50" data-gfx="ssaoRadius"></label>
+          <label class="field">DoF bokeh blur <span data-gfx-val="dof">0%</span><input type="range" min="0" max="100" value="0" data-gfx="dof"></label>
+          <label class="field">Focus distance <span data-gfx-val="dofFocus">175mm</span><input type="range" min="20" max="450" value="175" data-gfx="dofFocus"></label>
+          <label class="field">Aperture <span data-gfx-val="dofAperture">45%</span><input type="range" min="10" max="100" value="45" data-gfx="dofAperture"></label>
+          <div class="ctl-row"><label><input type="checkbox" data-gfx="dofAutoFocus" checked> Auto-focus target</label></div>
+          <label class="field">CAS sharpen <span data-gfx-val="sharpen">0%</span><input type="range" min="0" max="100" value="0" data-gfx="sharpen"></label>
+          <label class="field">Ink edge outline <span data-gfx-val="edgeOutline">0%</span><input type="range" min="0" max="100" value="0" data-gfx="edgeOutline"></label>
+          <label class="field">Outline color<input type="color" data-gfx="edgeColor" value="#1b2217"></label>
+          <label class="field">Chromatic aberration <span data-gfx-val="chromaticAberration">0%</span><input type="range" min="0" max="100" value="0" data-gfx="chromaticAberration"></label>
+          <label class="field">Lens distortion <span data-gfx-val="lensDistortion">0%</span><input type="range" min="-50" max="50" value="0" data-gfx="lensDistortion"></label>
+          <label class="field">Vignette <span data-gfx-val="vignette">0%</span><input type="range" min="0" max="100" value="0" data-gfx="vignette"></label>
+          <label class="field">Film grain <span data-gfx-val="grain">0%</span><input type="range" min="0" max="100" value="0" data-gfx="grain"></label>
+        </div></details>
+        <details class="gfx-acc"><summary>Color grading &amp; LUTs</summary><div class="gfx-acc-body">
+          <label class="field">Color filter / LUT<select data-gfx="lutPreset"><option value="none">None (Neutral)</option><option value="cinema-teal-orange">Cinema Teal &amp; Orange</option><option value="kodak-portra">Kodak Portra 400</option><option value="fuji-velvia">Fuji Velvia 50</option><option value="noir-bw">Silver Noir B&amp;W</option><option value="automata">Automata Tactical</option><option value="blueprint">Cyanotype Blueprint</option><option value="thermal">FLIR Thermal Infrared</option><option value="night-vision">Phosphor Night Vision</option><option value="crt-retro">CRT Scanline Mask</option></select></label>
+          <label class="field">Contrast <span data-gfx-val="contrast">100%</span><input type="range" min="50" max="160" value="100" data-gfx="contrast"></label>
+          <label class="field">Saturation <span data-gfx-val="saturation">100%</span><input type="range" min="0" max="200" value="100" data-gfx="saturation"></label>
+          <label class="field">Brightness lift <span data-gfx-val="brightness">0%</span><input type="range" min="-40" max="40" value="0" data-gfx="brightness"></label>
+          <label class="field">Temperature <span data-gfx-val="temperature">0</span><input type="range" min="-100" max="100" value="0" data-gfx="temperature"></label>
+          <label class="field">Green / Magenta tint <span data-gfx-val="tint">0</span><input type="range" min="-100" max="100" value="0" data-gfx="tint"></label>
+        </div></details>
+        <details class="gfx-acc"><summary>Shadows, floor &amp; backdrop</summary><div class="gfx-acc-body">
+          <label class="field">Resolution scale <span data-gfx-val="resScale">100%</span><input type="range" min="25" max="200" step="5" value="100" data-gfx="resScale"></label>
+          <label class="field">Frame rate cap<select data-gfx="fpsCap"><option value="0">Unlimited (VSync)</option><option value="60">60 FPS</option><option value="30">30 FPS</option><option value="20">20 FPS (Battery saver)</option></select></label>
+          <label class="field">Turntable speed <span data-gfx-val="orbitSpeed">0.6×</span><input type="range" min="-5" max="5" step="0.2" value="0.6" data-gfx="orbitSpeed"></label>
+          <label class="field">Shadow filtering<select data-gfx="shadowType"><option value="pcf-soft">PCF Soft Shadows</option><option value="pcf">Standard PCF</option><option value="basic">Hard Crisp Shadows</option><option value="off">Shadows Disabled</option></select></label>
+          <label class="field">Shadow darkness <span data-gfx-val="shadowOpacity">13%</span><input type="range" min="0" max="90" value="13" data-gfx="shadowOpacity"></label>
+          <label class="field">Shadow bias <span data-gfx-val="shadowBias">-15</span><input type="range" min="-80" max="80" value="-15" data-gfx="shadowBias"></label>
+          <label class="field">Floor surface<select data-gfx="floorMode"><option value="shadow">Invisible Shadow Catcher</option><option value="matte">Matte Studio Desk</option><option value="reflective">Polished Reflective Acrylic</option><option value="grid-floor">Technical Cutting Mat</option><option value="none">None (Floating)</option></select></label>
+          <label class="field">Backdrop mode<select data-gfx="bgMode"><option value="theme">Match App Theme</option><option value="solid">Custom Solid Color</option><option value="gradient">Studio Horizon Gradient</option><option value="darkroom">Pitch Black Darkroom</option><option value="paper">Warm Drafting Paper</option><option value="transparent">Transparent Checker</option></select></label>
+          <div class="ctl-row"><label>Top/Solid <input type="color" data-gfx="bgColor" value="#1a1f18"></label><label>Bottom <input type="color" data-gfx="bgColorBottom" value="#0a0c09"></label></div>
+        </div></details>
       </div></div>
+      <div id="photoStudio" class="photo-studio hidden" role="region" aria-label="Photo mode studio">
+        <div id="pmFrameWrap" class="pm-frame-wrap">
+          <div id="pmFrameBox" class="pm-frame-box" data-grid="thirds">
+            <svg class="pm-grid-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <g class="pm-g-thirds"><line x1="33.33" y1="0" x2="33.33" y2="100"/><line x1="66.67" y1="0" x2="66.67" y2="100"/><line x1="0" y1="33.33" x2="100" y2="33.33"/><line x1="0" y1="66.67" x2="100" y2="66.67"/></g>
+              <g class="pm-g-golden"><line x1="38.2" y1="0" x2="38.2" y2="100"/><line x1="61.8" y1="0" x2="61.8" y2="100"/><line x1="0" y1="38.2" x2="100" y2="38.2"/><line x1="0" y1="61.8" x2="100" y2="61.8"/></g>
+              <g class="pm-g-diagonals"><line x1="0" y1="0" x2="100" y2="100"/><line x1="100" y1="0" x2="0" y2="100"/></g>
+              <g class="pm-g-crosshair"><line x1="46" y1="50" x2="54" y2="50"/><line x1="50" y1="46" x2="50" y2="54"/><circle cx="50" cy="50" r="6"/></g>
+              <g class="pm-g-safe"><rect x="5" y="5" width="90" height="90"/><rect x="10" y="10" width="80" height="80"/></g>
+            </svg>
+          </div>
+          <div id="pmFocusRing" class="pm-focus-ring hidden"><span id="pmFocusDistLabel">175mm</span></div>
+          <div id="pmFlash" class="pm-flash"></div>
+        </div>
+        <div id="pmTopBar" class="pm-top-bar">
+          <div class="pm-brand"><span class="pm-badge">PHOTO STUDIO</span><span id="pmReadout" class="pm-readout mono">35mm · 38° · PBR</span></div>
+          <div class="pm-top-controls">
+            <div class="view-presets pm-aspect-btns" aria-label="Aspect ratio">
+              <button data-pm-aspect="free" class="active">Free</button>
+              <button data-pm-aspect="16:9">16:9</button>
+              <button data-pm-aspect="21:9">21:9</button>
+              <button data-pm-aspect="4:3">4:3</button>
+              <button data-pm-aspect="1:1">1:1</button>
+              <button data-pm-aspect="9:16">9:16</button>
+            </div>
+            <select id="pmGridSelect" class="pm-select" aria-label="Composition grid" title="Viewfinder composition guide"><option value="thirds">Rule of Thirds</option><option value="golden">Golden Ratio</option><option value="crosshair">Crosshair</option><option value="diagonals">Diagonals</option><option value="safe">Safe Area</option><option value="none">No Grid</option></select>
+            <button id="pmFocusPickBtn" class="view-action-btn" title="Click any component on the board to set Depth of Field focus distance">Focus pick</button>
+            <button id="pmTheaterBtn" class="view-action-btn" title="Maximize 3D viewport across the workspace">Maximize</button>
+            <button id="pmHideHudBtn" class="view-action-btn" title="Toggle studio HUD overlays (H)">Hide HUD</button>
+            <button id="pmCloseBtn" class="view-action-btn pm-exit-btn" title="Exit Photo Studio (Esc or P)">Exit ×</button>
+          </div>
+        </div>
+        <aside id="pmDock" class="pm-dock">
+          <div class="pm-tabs" role="tablist">
+            <button class="pm-tab active" data-pmtab="camera" role="tab">Lens</button>
+            <button class="pm-tab" data-pmtab="fx" role="tab">FX &amp; Grade</button>
+            <button class="pm-tab" data-pmtab="light" role="tab">Light &amp; Mat</button>
+            <button class="pm-tab" data-pmtab="stage" role="tab">Stage &amp; Export</button>
+          </div>
+          <div id="pmtab-camera" class="pm-tab-body active">
+            <label class="field">Camera angle<select id="pmCamSelect"><option value="hero">Hero Perspective</option><option value="isometric">Isometric CAD</option><option value="macro_low">Low Angle Macro</option><option value="side_profile">Side Horizon Profile</option><option value="top">Top-Down Plan</option><option value="fpga">FPGA Die Detail</option><option value="display">7-Segment Display</option><option value="dtubes">Four Dtubes</option><option value="leds">Four LEDs</option><option value="io">Connectors &amp; Ports</option><option value="underside">Underside Solder</option></select></label>
+            <label class="field">Lens projection<select data-gfx="projection"><option value="perspective">Perspective Lens</option><option value="orthographic">Orthographic CAD</option></select></label>
+            <label class="field">FOV / Focal length <span data-gfx-val="fov">38°</span><input type="range" min="12" max="75" value="38" data-gfx="fov"></label>
+            <label class="field">Dutch roll tilt <span data-gfx-val="cameraRoll">0°</span><input type="range" min="-45" max="45" value="0" data-gfx="cameraRoll"></label>
+            <label class="field">Depth of field bokeh <span data-gfx-val="dof">0%</span><input type="range" min="0" max="100" value="0" data-gfx="dof"></label>
+            <label class="field">Focus distance <span data-gfx-val="dofFocus">175mm</span><input type="range" min="20" max="450" value="175" data-gfx="dofFocus"></label>
+            <label class="field">Aperture bokeh <span data-gfx-val="dofAperture">45%</span><input type="range" min="10" max="100" value="45" data-gfx="dofAperture"></label>
+            <div class="ctl-row"><label><input type="checkbox" data-gfx="dofAutoFocus" checked> Auto-focus orbit target</label><label><input id="pmTglOrbit" type="checkbox"> Turntable</label></div>
+            <label class="field">Turntable speed <span data-gfx-val="orbitSpeed">0.6×</span><input type="range" min="-5" max="5" step="0.2" value="0.6" data-gfx="orbitSpeed"></label>
+            <label class="field">Exploded assembly <span id="pmExplodeVal">0%</span><input id="pmExplode" type="range" min="0" max="100" value="0"></label>
+          </div>
+          <div id="pmtab-fx" class="pm-tab-body">
+            <label class="field">Master visual preset<select data-gfx="preset"><option value="default">Default Workbench</option><option value="studio-pro">Studio Product Shot</option><option value="cyberpunk">Cyberpunk Neon</option><option value="automata">Automata Bunker</option><option value="golden-hour">Golden Hour Sun</option><option value="macro-tilt">Macro Tilt-Shift Bokeh</option><option value="cad-blueprint">Engineering Blueprint</option><option value="thermal-flir">FLIR Thermal Imaging</option><option value="retro-crt">1980s Lab CRT</option><option value="xray-holo">Holographic X-Ray</option><option value="clay-sculpt">Studio Clay Maquette</option><option value="anime-cel">Technical Cel / Ink</option></select></label>
+            <label class="field">Shading mode<select data-gfx="shadingMode"><option value="pbr">PBR Realistic</option><option value="flat">Flat Faceted</option><option value="wireframe">Wireframe Mesh</option><option value="wire-on-shaded">Wireframe on Shaded</option><option value="clay">Studio Clay</option><option value="normals">Surface Normals</option><option value="depth">Linear Depth Map</option><option value="uv">UV Diagnostic Grid</option><option value="xray">X-Ray Hologram</option><option value="toon">Cel-Shaded Toon</option><option value="unlit">Unlit Albedo</option></select></label>
+            <label class="field">Color filter / LUT<select data-gfx="lutPreset"><option value="none">None (Neutral)</option><option value="cinema-teal-orange">Cinema Teal &amp; Orange</option><option value="kodak-portra">Kodak Portra 400</option><option value="fuji-velvia">Fuji Velvia 50</option><option value="noir-bw">Silver Noir B&amp;W</option><option value="automata">Automata Tactical</option><option value="blueprint">Cyanotype Blueprint</option><option value="thermal">FLIR Thermal Infrared</option><option value="night-vision">Phosphor Night Vision</option><option value="crt-retro">CRT Scanline Mask</option></select></label>
+            <label class="field">Exposure <span data-gfx-val="exposure">1.15</span><input type="range" min="0.2" max="3" step="0.05" value="1.15" data-gfx="exposure"></label>
+            <label class="field">HDR bloom <span data-gfx-val="bloom">0%</span><input type="range" min="0" max="150" value="0" data-gfx="bloom"></label>
+            <label class="field">SSAO cavity <span data-gfx-val="ssao">0%</span><input type="range" min="0" max="100" value="0" data-gfx="ssao"></label>
+            <label class="field">CAS sharpen <span data-gfx-val="sharpen">0%</span><input type="range" min="0" max="100" value="0" data-gfx="sharpen"></label>
+            <label class="field">Ink edge outline <span data-gfx-val="edgeOutline">0%</span><input type="range" min="0" max="100" value="0" data-gfx="edgeOutline"></label>
+            <label class="field">Chromatic aberration <span data-gfx-val="chromaticAberration">0%</span><input type="range" min="0" max="100" value="0" data-gfx="chromaticAberration"></label>
+            <label class="field">Lens distortion <span data-gfx-val="lensDistortion">0%</span><input type="range" min="-50" max="50" value="0" data-gfx="lensDistortion"></label>
+            <label class="field">Vignette <span data-gfx-val="vignette">0%</span><input type="range" min="0" max="100" value="0" data-gfx="vignette"></label>
+            <label class="field">Film grain <span data-gfx-val="grain">0%</span><input type="range" min="0" max="100" value="0" data-gfx="grain"></label>
+            <label class="field">Contrast <span data-gfx-val="contrast">100%</span><input type="range" min="50" max="160" value="100" data-gfx="contrast"></label>
+            <label class="field">Saturation <span data-gfx-val="saturation">100%</span><input type="range" min="0" max="200" value="100" data-gfx="saturation"></label>
+            <label class="field">Temperature <span data-gfx-val="temperature">0</span><input type="range" min="-100" max="100" value="0" data-gfx="temperature"></label>
+          </div>
+          <div id="pmtab-light" class="pm-tab-body">
+            <label class="field">Lighting preset<select data-gfx="lightPreset"><option value="default">Workbench Default</option><option value="studio-three-point">3-Point Studio</option><option value="dramatic-noir">Dramatic Low-Key</option><option value="cyberpunk">Neon Synthwave</option><option value="golden-hour">Golden Hour Sun</option><option value="clean-lab">Cleanroom Overheads</option><option value="inspect-macro">Macro Ring Inspection</option></select></label>
+            <label class="field">Environment IBL<select data-gfx="envPreset"><option value="room">Studio Room</option><option value="studio-soft">Softbox Dome</option><option value="cyber-grid">Cyber Neon Chamber</option><option value="sunset">Sunset Horizon</option><option value="dark-void">Dark Void</option><option value="off">Disabled</option></select></label>
+            <label class="field">Key azimuth <span data-gfx-val="keyAzimuth">-39°</span><input type="range" min="-180" max="180" value="-39" data-gfx="keyAzimuth"></label>
+            <label class="field">Key elevation <span data-gfx-val="keyElevation">55°</span><input type="range" min="5" max="90" value="55" data-gfx="keyElevation"></label>
+            <div class="ctl-row"><label>Key <input type="color" data-gfx="keyColor" value="#fffaf2"></label><label>Rim <input type="color" data-gfx="rimColor" value="#e8eeff"></label><label><input type="checkbox" data-gfx="cursorLight"> Flashlight</label></div>
+            <label class="field">PCB solder mask<select data-gfx="pcbTheme"><option value="default">Factory Original</option><option value="emerald">Altera Emerald</option><option value="matte-black">Stealth Matte Black</option><option value="osh-purple">OSH Park Purple</option><option value="crimson">Industrial Crimson</option><option value="arctic-white">Arctic Lab White</option><option value="cyber-gold">Kapton Gold</option><option value="custom">Custom Color…</option></select></label>
+            <label class="field">Clearcoat finish <span data-gfx-val="clearcoat">0%</span><input type="range" min="0" max="100" value="0" data-gfx="clearcoat"></label>
+            <label class="field">LED color theme<select data-gfx="ledTheme"><option value="default">Factory Red / Green</option><option value="amber">Vintage HP Amber</option><option value="emerald">Oscilloscope Green</option><option value="ice-blue">Cryo Cyan / Blue</option><option value="ultraviolet">Synthwave Violet</option><option value="pure-white">Xenon Pure White</option><option value="custom">Custom Color…</option></select></label>
+            <label class="field">3D LED surface bleed <span data-gfx-val="ledLightBleed">0%</span><input type="range" min="0" max="100" value="0" data-gfx="ledLightBleed"></label>
+            <label class="field">Floor surface<select data-gfx="floorMode"><option value="shadow">Shadow Catcher</option><option value="matte">Matte Studio Desk</option><option value="reflective">Reflective Acrylic</option><option value="grid-floor">Technical Cutting Mat</option><option value="none">None (Floating)</option></select></label>
+            <label class="field">Backdrop<select data-gfx="bgMode"><option value="theme">Match App Theme</option><option value="solid">Custom Solid Color</option><option value="gradient">Studio Horizon Gradient</option><option value="darkroom">Pitch Black Darkroom</option><option value="paper">Warm Drafting Paper</option><option value="transparent">Transparent Checker</option></select></label>
+            <div class="ctl-row"><label>Top/Bg <input type="color" data-gfx="bgColor" value="#1a1f18"></label><label>Bottom <input type="color" data-gfx="bgColorBottom" value="#0a0c09"></label></div>
+          </div>
+          <div id="pmtab-stage" class="pm-tab-body">
+            <div class="ctl-row"><label><input id="pmStageEnable" type="checkbox"> Stage custom board pose</label></div>
+            <label class="field">7-seg display text<input id="pmStageText" class="search mono" maxlength="8" value="FPGA" placeholder="FPGA, CAFE, 1337"></label>
+            <div class="ctl-row"><label><input class="pm-stage-led" data-sled="0" type="checkbox" checked> LED1</label><label><input class="pm-stage-led" data-sled="1" type="checkbox"> LED2</label><label><input class="pm-stage-led" data-sled="2" type="checkbox" checked> LED3</label><label><input class="pm-stage-led" data-sled="3" type="checkbox"> LED4</label></div>
+            <label class="field">Metadata watermark<select id="pmStampPos"><option value="off">No Watermark Stamp</option><option value="bottom-left">Bottom-Left Badge</option><option value="bottom-right">Bottom-Right Badge</option><option value="top-left">Top-Left Badge</option></select></label>
+            <label class="field">Custom stamp title<input id="pmStampCaption" class="search" maxlength="64" placeholder="RZ-EasyFPGA A2.2 · Cyclone IV"></label>
+            <label class="field">Capture resolution<select id="pmResolution"><option value="viewport">Viewport Native (1×)</option><option value="1080p" selected>1080p Full HD</option><option value="1440p">1440p Quad HD</option><option value="4k">4K Ultra HD (2160p)</option></select></label>
+            <label class="field">Image format<select id="pmFormat"><option value="png">PNG (Lossless)</option><option value="webp">WebP (High efficiency)</option><option value="jpeg">JPEG (95%)</option></select></label>
+            <div class="ctl-row"><label><input id="pmTransparent" type="checkbox"> Transparent alpha cutout</label></div>
+          </div>
+        </aside>
+        <div id="pmBottomBar" class="pm-bottom-bar">
+          <div class="pm-shutter-group">
+            <button id="pmShutterBtn" class="btn dark pm-shutter-btn" title="Capture high-resolution studio photo"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg><span>Capture Photo</span></button>
+            <button id="pmCopyBtn" class="btn" title="Copy rendered photo to clipboard">Copy image</button>
+            <button id="pmResetFxBtn" class="text-btn" title="Reset all graphics and camera FX to defaults">Reset FX</button>
+          </div>
+          <div id="pmFilmstrip" class="pm-filmstrip" aria-label="Captured session photos"></div>
+        </div>
+      </div>
       <div id="compInspector" class="comp-inspector hidden" role="region" aria-label="Selected component"><div class="ci-head"><div class="ci-titles"><span id="ciCategory" class="ci-cat"></span><strong id="ciTitle"></strong><span id="ciPart" class="ci-part"></span></div><div class="ci-actions"><button id="ciCenter" class="ci-btn" title="Center camera on component (F)">Center</button><button id="ciPins" class="ci-btn hidden" title="Locate in Pin map">Pins ↗</button><button id="ciClose" class="ci-close" aria-label="Clear selection" title="Deselect (Esc)">×</button></div></div><p id="ciNote" class="ci-note"></p><div id="ciNets" class="ci-nets hidden"></div></div>
       <div class="viewport-footer"><span id="viewportHint"><i class="orbit-icon">↔</i> Click: Interact <b>·</b> Drag: Orbit <b>·</b> Scroll: Zoom</span><span class="model-note">Reference model <span id="roFps">—</span> fps</span></div>
     </section>

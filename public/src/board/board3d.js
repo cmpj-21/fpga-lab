@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFLoader } from '../../vendor/GLTFLoader.js';
 import { PIN_NET, COMPONENTS, BOARD_PARTS } from './boardDef.js';
+import { createGfxStudio } from './gfxStudio.js';
 
 export async function createBoard3D(canvas, opts = {}) {
   const asset = await new GLTFLoader().loadAsync('/assets/rz-easyfpga-a2.2.glb');
@@ -38,7 +39,8 @@ export async function createBoard3D(canvas, opts = {}) {
   scene.add(key);
   const rim = new THREE.DirectionalLight(0xe8eeff, 1.5);
   rim.position.set(80, 100, -120);
-  scene.add(rim, new THREE.HemisphereLight(0xffffff, 0x8b8d85, 1.4));
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x8b8d85, 1.4);
+  scene.add(rim, hemi);
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(1200, 1200), new THREE.ShadowMaterial({ opacity: .13 }));
   floor.rotation.x = -Math.PI / 2;
   floor.position.y = -4;
@@ -145,9 +147,15 @@ export async function createBoard3D(canvas, opts = {}) {
   }
   const grid = new THREE.GridHelper(300, 30, 0xa5ac9c, 0xc9cec0);
   grid.position.y = -4; grid.visible = false; scene.add(grid);
+  let studio = null;
   function setTheme() {
     const style = getComputedStyle(document.documentElement);
-    scene.background.set(style.getPropertyValue('--board-bg').trim());
+    if (!studio || studio.gfx.bgMode === 'theme') {
+      if (!scene.background) scene.background = new THREE.Color();
+      scene.background.set(style.getPropertyValue('--board-bg').trim());
+    } else {
+      studio.syncToneMappingAndBackdrop();
+    }
     grid.material.transparent = true;
     grid.material.opacity = document.documentElement.dataset.theme === 'dark' ? .2 : 1;
     for (const sprite of labels.children) {
@@ -203,7 +211,10 @@ export async function createBoard3D(canvas, opts = {}) {
     display: { pos: [36, 52, 24], target: [25.3, 6, -35.8] },
     dtubes: { pos: [25.3, 65, -16], target: [25.3, 9.8, -35.8] },
     leds: { pos: [10.25, 45, 60], target: [10.25, 2, 39] },
-    io: { pos: [162, 43, 38], target: [58, 5, 4] }
+    io: { pos: [162, 43, 38], target: [58, 5, 4] },
+    isometric: { pos: [148, 148, 148], target: [0, 2, 0] },
+    macro_low: { pos: [62, 24, 96], target: [-6, 4, 8] },
+    side_profile: { pos: [0, 24, 172], target: [0, 3, 0] }
   };
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   function setCamera(name) {
@@ -240,15 +251,22 @@ export async function createBoard3D(canvas, opts = {}) {
     camera.updateProjectionMatrix();
   }
   function setQuality(quality) {
-    const config = { low: [1, 512], medium: [1.5, 1024], high: [1.75, 2048] }[quality];
-    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, config[0]));
+    const config = { low: [1, 512], medium: [1.5, 1024], high: [1.75, 2048], ultra: [2.25, 4096], extreme: [2.75, 4096] }[quality] || [1.75, 2048];
+    if (studio) studio.gfx.quality = quality;
+    const scale = studio ? THREE.MathUtils.clamp(studio.gfx.resScale / 100, 0.25, 2.5) : 1;
+    renderer.setPixelRatio(Math.min((devicePixelRatio || 1) * scale, config[0] * scale));
     key.shadow.mapSize.setScalar(config[1]);
     key.shadow.map?.dispose(); key.shadow.map = null;
     renderer.shadowMap.needsUpdate = true; resize();
   }
   new ResizeObserver(resize).observe(canvas.parentElement);
   setQuality('high');
-  const ray = new THREE.Raycaster(), pointer = new THREE.Vector2();
+  studio = createGfxStudio({
+    renderer, scene, camera, controls, model, groups, key, rim, hemi, floor, leds, segments,
+    grid, labels, netGuides, highlight, hoverHighlight, resize,
+    getSelectedBox: () => state.selected ? computePartBox(state.selected) : null,
+  });
+  const ray = new THREE.Raycaster(), pointer = new THREE.Vector2(), groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), groundHit = new THREE.Vector3();
   let activeKey = null, pointerState = null;
   function pick(event) {
     const rect = canvas.getBoundingClientRect();
@@ -299,7 +317,17 @@ export async function createBoard3D(canvas, opts = {}) {
       const { dragged, target } = pointerState;
       pointerState = null;
       if (!dragged && event?.type === 'pointerup') {
-        if (state.toolMode === 'select') {
+        if (state.photoFocusPick) {
+          const rect = canvas.getBoundingClientRect();
+          pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
+          ray.setFromCamera(pointer, camera);
+          const hits = ray.intersectObject(model, true).filter(h => !h.object.userData.isTouchBox);
+          if (hits.length) {
+            const dist = Math.round(hits[0].distance);
+            studio.applyGfx({ dofFocus: dist, dofAutoFocus: false });
+            opts.onFocusPick?.(dist, event.clientX - rect.left, event.clientY - rect.top);
+          }
+        } else if (state.toolMode === 'select') {
           selectPart(target ? target.partId : null);
         } else if (target) {
           if (target.type === 'power') opts.onPower?.(!state.power);
@@ -321,6 +349,12 @@ export async function createBoard3D(canvas, opts = {}) {
       if (pointerState.dragged) { hoverHighlight.visible = false; canvas.style.cursor = 'grabbing'; return; }
     }
     if (activeKey) return;
+    if (studio?.gfx.cursorLight) {
+      const rect = canvas.getBoundingClientRect();
+      pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
+      ray.setFromCamera(pointer, camera);
+      if (ray.ray.intersectPlane(groundPlane, groundHit)) studio.updateCursorLightPosition(groundHit);
+    }
     const hit = pick(event);
     if (state.toolMode === 'select') {
       state.hovered = hit?.partId || null;
@@ -379,16 +413,25 @@ export async function createBoard3D(canvas, opts = {}) {
         material.color.setHex(on ? 0xe84e3c : 0x361c22);
       }
     }
+    if (studio && (studio.gfx.ledTheme !== 'default' || studio.gfx.ledLightBleed > 0 || studio.stagePose.enabled)) {
+      studio.updateLedsAndSegments(now, state);
+    }
+    studio?.updateCameraOptics();
     if (labels.visible) for (const sprite of labels.children) {
       sprite.userData.component.getWorldPosition(sprite.position); sprite.position.y += 17;
     }
     highlight.visible = !state.hideOutline && (!!state.selected || now < highlightUntil);
   }
+  let lastRender = 0;
   function frame(now) {
     requestAnimationFrame(frame);
+    if (studio?.gfx.fpsCap > 0 && now - lastRender < (1000 / studio.gfx.fpsCap) * 0.92) return;
+    lastRender = now;
     const dt = Math.min(.05, (now - previous) / 1000); previous = now;
     fps += (1 / Math.max(dt, .0001) - fps) * .04;
-    update(now, dt); renderer.render(scene, camera);
+    update(now, dt);
+    if (studio) studio.renderFrame(now);
+    else renderer.render(scene, camera);
   }
   requestAnimationFrame(frame);
   return {
@@ -446,10 +489,19 @@ export async function createBoard3D(canvas, opts = {}) {
     setLabels(value) { labels.visible = value; },
     setGrid(value) { grid.visible = value; },
     setTraces(value) { netGuides.visible = value; },
-    setAutoOrbit(value) { controls.autoRotate = value; controls.autoRotateSpeed = .6; },
+    setAutoOrbit(value) { controls.autoRotate = value; controls.autoRotateSpeed = studio ? studio.gfx.orbitSpeed : .6; },
     setQuality, setCamera, setTheme,
-    screenshot() { update(performance.now(), .05); renderer.render(scene, camera); return canvas.toDataURL('image/png'); },
+    screenshot() { update(performance.now(), .05); if (studio) studio.renderFrame(performance.now()); else renderer.render(scene, camera); return canvas.toDataURL('image/png'); },
     resetView() { setCamera('hero'); },
-    get fps() { return fps; }
+    get fps() { return fps; },
+    studio,
+    getGfx() { return studio.gfx; },
+    setGfx(patch) { return studio.applyGfx(patch); },
+    resetGfx() { return studio.resetGfx(); },
+    setStagePose(patch) { return studio.setStagePose(patch); },
+    get stagePose() { return studio.stagePose; },
+    setPhotoFocusMode(on) { state.photoFocusPick = !!on; },
+    get photoFocusMode() { return !!state.photoFocusPick; },
+    capturePhoto(options) { update(performance.now(), .05); return studio.capturePhoto(options); }
   };
 }
