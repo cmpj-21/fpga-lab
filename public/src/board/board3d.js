@@ -74,9 +74,19 @@ export async function createBoard3D(canvas, opts = {}) {
     return { id, cap, baseY: cap.position.y, target: 0, press: 0 };
   });
   for (const { id } of keys) groups[id].traverse(object => { if (object.isMesh) object.userData.key = id; });
-  for (let i = 0; i < 4; i++) {
-    const lever = model.getObjectByName(`dip_${i}`);
-    if (lever) lever.userData.dip = i;
+  const dipLevers = [0, 1, 2, 3].map(i => model.getObjectByName(`dip_${i}`));
+  dipLevers.forEach((lever, i) => { if (lever) lever.userData.dip = i; });
+  if (groups.dip && dipLevers.every(Boolean)) {
+    const dipTouchMat = new THREE.MeshBasicMaterial({ visible: false });
+    const dipEdges = [-.0056, ...[0, 1, 2].map(i => (dipLevers[i].position.x + dipLevers[i + 1].position.x) / 2), .0056];
+    for (let i = 0; i < 4; i++) {
+      // Expand raycast touch boxes to cover each full switch lane (ON label, slot, lever, and digit)
+      const hitBox = new THREE.Mesh(new THREE.BoxGeometry(dipEdges[i + 1] - dipEdges[i], .0043, .0112), dipTouchMat);
+      hitBox.name = `dip_touch_${i}`;
+      hitBox.position.set((dipEdges[i] + dipEdges[i + 1]) / 2, .00465, 0);
+      hitBox.userData.dip = i;
+      groups.dip.add(hitBox);
+    }
   }
   const floating = Object.values(groups).filter(g => !['pcb', 'pcb_details', 'routing', 'passives'].includes(g.name)).map(g => ({ group: g, y: g.position.y, lift: g.name === 'fpga' ? .035 : .018 }));
   const labels = new THREE.Group();
