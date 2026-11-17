@@ -261,9 +261,15 @@ def header(name, x, y, columns, rows=2, angle=0, shroud=False, female=False):
     assembly(name, x, y, angle, (w+(3 if shroud else 0), d+(3 if shroud else 0), 0, 8.9 if shroud else 6.5))
     if shroud:
         box('', (0, 0, .9), (w+3, d+3, 1.8), 'plastic', .25)
+        hw = ((w+1)-4.2)/2
         for sign in (-1, 1):
             box('', (sign*(w/2+1), 0, 4.5), (1, d+3, 7.2), 'plastic', .12)
-            box('', (0, sign*(d/2+1), 4.5), (w+1, 1, 7.2), 'plastic', .12)
+            if sign == 1:
+                box('', (0, d/2+1, 4.5), (w+1, 1, 7.2), 'plastic', .12)
+            else:
+                box('', (0, -(d/2+1), 2.1), (w+1, 1, 2.4), 'plastic', .12)
+                for sx in (-1, 1):
+                    box('', (sx*(2.1+hw/2), -(d/2+1), 5.7), (hw, 1, 4.8), 'plastic', .12)
         for i in range(columns):
             for j in range(rows):
                 through_pin((i-(columns-1)/2)*2.54, (j-(rows-1)/2)*2.54, 8.1, 'silver')
@@ -348,15 +354,31 @@ def dsub(name, x, y, rows, female, color):
 def usb(name, x, y):
     assembly(name, x, y, footprint=(12.2, 15.2, 0, 11.5))
     outer = [(-6, -4.8), (6, -4.8), (6, 3), (4.3, 4.9), (-4.3, 4.9), (-6, 3)]
-    inner = [(a*.88, b*.85) for a, b in outer]
+    inner = [(a*.90, b*.88) for a, b in outer]
     rot = Matrix.Rotation(math.pi/2, 3, 'X')
-    profile_ring(outer, inner, 13, 'silver', (0, 0, 6.1), rot)
-    box('', (0, -6.15, 6.1), (10.5, .5, 8.6), 'silver', .15)
-    box('', (0, 3.25, 5.8), (8.1, 6, 5.6), 'socket', .4)
-    box('', (0, 6.2, 5.5), (4.9, .45, 2.5), 'plastic', .2)
-    for xx in (-1.1, 1.1):
-        for zz in (4.75, 6.25):
-            box('', (xx, 6.5, zz), (.65, .13, .55), 'gold', .07)
+    profile_ring(outer, inner, 13.6, 'silver', (0, .2, 6.1), rot)
+    box('', (0, -4.2, 5.3), (11.6, 5.2, 10.2), 'plastic', .25)
+    box('', (0, -6.45, 6.1), (10.5, .5, 8.6), 'silver', .15)
+    cavity_outer = [(a*.89, b*.87) for a, b in outer]
+    cavity_inner = [(a*.76, b*.72) for a, b in outer]
+    profile_ring(cavity_outer, cavity_inner, 8.2, 'socket', (0, 2.5, 6.1), rot)
+    polygon_extrude(cavity_outer, -.2, .2, 'socket', (0, -1.5, 6.1), rot)
+    box('', (0, 7.12, 1.15), (9.6, .55, .45), 'silver', .1, Matrix.Rotation(math.radians(-18), 3, 'X'))
+    box('', (0, 7.12, 11.05), (6.8, .55, .45), 'silver', .1, Matrix.Rotation(math.radians(18), 3, 'X'))
+    for sign in (-1, 1):
+        box('', (sign*6.08, 7.12, 5.4), (.45, .55, 6.6), 'silver', .1, Matrix.Rotation(math.radians(-sign*18), 3, 'Z'))
+    box('', (0, 2.15, 6.55), (4.8, 7.3, .65), 'white', .12)
+    box('', (0, 2.15, 4.65), (4.8, 7.3, .65), 'white', .12)
+    for sign in (-1, 1):
+        box('', (sign*2.05, 2.15, 5.6), (.7, 7.3, 1.35), 'white', .08)
+    box('', (0, 2.0, 5.6), (3.4, 7.1, 1.25), 'socket')
+    for xx in (-1.15, 1.15):
+        box('', (xx, 2.1, 6.92), (.55, 6.6, .16), 'gold', .04)
+        box('', (xx, 4.85, 7.04), (.55, .9, .22), 'gold', .06)
+        box('', (xx, 2.1, 4.28), (.55, 6.6, .16), 'gold', .04)
+        box('', (xx, 4.85, 4.16), (.55, .9, .22), 'gold', .06)
+    for xx in (-2.2, 2.2):
+        box('', (xx, 1.5, 11.02), (1.4, 3.2, .18), 'darkmetal', .05)
     for sign in (-1, 1):
         box('', (sign*6, -.4, 1.4), (.4, 4, 3.8), 'silver', .12)
         box('', (sign*6.7, -.4, .1), (1.2, 4, .25), 'solder', .08)
@@ -522,13 +544,27 @@ def connectors():
     usb('usb_power', 38, 99)
     usb('usb_data', 120.5, 99)
     assembly('dcjack', 15, 98, footprint=(9.3, 13, 0, 11))
-    box('', (0, 0, 4.9), (9.3, 13, 9.8), 'plastic', .65)
+    box('', (0, -1.15, 4.9), (9.1, 10.7, 9.8), 'plastic', .55)
+    box('', (0, -2.0, 10.0), (6.8, 7.5, .5), 'plastic', .18)
+    for sx in (-4.58, 4.58):
+        box('', (sx, -1.5, 5.2), (.18, 6.5, 5.4), 'socket', .05)
     rot = Matrix.Rotation(math.pi/2, 3, 'X')
-    cylinder((0, 6.6, 5.6), 3.9, .5, 'plastic', 48, 2.85, rot)
-    cylinder((0, 6.55, 5.6), 2.83, .1, 'socket', 40, rot=rot)
-    cylinder((0, 7.5, 5.6), .75, 3.5, 'silver', 24, rot=rot)
-    for xx in (-4.8, 4.8):
-        box('', (xx, -2, .4), (.6, 4, .8), 'silver', .12)
+    cylinder((0, 5.5, 5.5), 4.25, 4.2, 'plastic', 48, 3.05, rot)
+    cylinder((0, 7.65, 5.5), 4.05, .35, 'plastic', 48, 3.05, rot)
+    cylinder((0, 2.9, 5.5), 3.04, 9.4, 'socket', 40, 2.85, rot)
+    cylinder((0, -1.8, 5.5), 3.0, .2, 'socket', 40, rot=rot)
+    cylinder((0, -1.2, 5.5), 1.45, .8, 'plastic', 24, rot=rot)
+    cylinder((0, 2.5, 5.5), .98, 8.6, 'silver', 28, rot=rot)
+    cylinder((0, 6.85, 5.5), .78, .3, 'silver', 24, rot=rot)
+    box('', (0, 3.2, 2.65), (2.2, 5.8, .28), 'silver', .06)
+    cylinder((0, 4.8, 2.95), .65, 2.1, 'silver', 16, rot=Matrix.Rotation(math.pi/2, 3, 'Y'))
+    for xx in (-4.7, 4.7):
+        box('', (xx, -2.0, .4), (.6, 3.2, .8), 'silver', .1)
+        pad(xx, -2.0, 1.3, 3.6)
+        box('', (xx, -2.0, .15), (.9, 3.3, .25), 'solder', .08)
+    box('', (0, -6.55, .4), (2.2, .5, .8), 'silver', .1)
+    pad(0, -6.7, 2.6, 1.2)
+    box('', (0, -6.7, .15), (2.4, .9, .25), 'solder', .08)
     finish()
     assembly('power_switch', 26, 99, footprint=(7.3, 7.3, 0, 10.3))
     box('', (0, 0, 2.3), (7.3, 7.3, 4.6), 'plastic', .35)
@@ -685,6 +721,8 @@ def detail():
         part(84+i*4.4, 78.2, 90, 'resistor')
     finish()
     assembly('routing', 68, 53)
+    def route(pts, w=.09):
+        wire([(px-68, py-53) for px, py in pts], w, 'trace')
     for i in range(36):
         sx = 55+(i-17.5)*.5-68
         target = 55+(i/2-8.75)*2.54-68
@@ -693,7 +731,62 @@ def detail():
     for i in range(10):
         yy = (i-4.5)*1.8
         wire([(67-68, 54+yy-53), (69-68, 54+yy-53), (76-68, 54+yy*1.41-53), (78.4-68, 54+yy*1.41-53)], .09, 'trace')
-    for xx, yy in [(37,39),(37,68),(67,68),(70,39),(90,39),(113,19),(30,24),(18,78),(50,87),(76,72),(46,24),(64,24),(85,20),(102,20)]:
+    for i in range(4):
+        y_ep = 56.1 + i*1.27
+        route([(43.2, y_ep), (28.1, y_ep)])
+        route([(21.9, y_ep), (16.8+i*.6, y_ep), (16.8+i*.6, 64.0+i*1.8), (11.3, 64.0+i*1.8)])
+    for i in range(3):
+        route([(43.2, 61.0+i*.7), (35.8-i*.8, 61.0+i*.7), (30.5-i*.8, 66.3+i*1.6), (11.3, 66.3+i*1.6)])
+    route([(32.0, 44.9), (38.0, 44.9), (41.1, 48.0), (43.2, 48.0)])
+    route([(32.0, 41.1), (37.5, 41.1), (41.4, 45.0), (43.2, 45.0)])
+    for i in range(4):
+        yt = 42.5 + i*1.7
+        route([(11.3, yt), (15.5+i*.8, yt), (20.5+i*.8, 52.0+i*.55), (37.2+i*.5, 52.0+i*.55), (39.5, 49.5+i*1.4), (43.2, 49.5+i*1.4)])
+    for i, px in enumerate((9.2, 10.8)):
+        route([(px, 38.9), (px, 24.5-i*.8), (11.5+i*2.6, 22.0-i*.8), (11.5+i*2.6, 19.4)])
+    route([(15, 92.5), (15, 87.6)], .18)
+    route([(15, 92.5), (26, 92.5), (26, 95.3)], .18)
+    route([(26, 92.5), (38, 92.5), (38, 94.2)], .18)
+    route([(29, 92.5), (29, 87.6)], .18)
+    route([(38, 92.5), (43, 92.5), (43, 87.6)], .18)
+    for xx in (15, 29, 43):
+        route([(xx-2.3, 82.0), (xx-2.3, 80.5), (xx+5.5, 80.5)], .12)
+        route([(xx+2.3, 82.0), (xx+2.3, 79.8), (xx+8.5, 79.8)], .12)
+    for i in range(24):
+        xx = 44.8 + i*.8
+        route([(xx, 27.2), (xx, 22.0)])
+    for i in range(16):
+        xx = 48.0 + i*.8
+        route([(xx, 9.0), (xx, 7.2)])
+        cylinder((xx-68, 7.2-53, .035), .24, .03, 'gold', 12, .11)
+    for i in range(8):
+        bx = 84 + i*4.4
+        route([(bx, 79.4), (bx, 82.2)])
+        yt = 62.0 + i*.8
+        xk = 83.4 + i*.35
+        y_el = 70.6 + i*.55
+        route([(82.3, yt), (xk, yt), (xk, y_el), (bx, 75.2), (bx, 77.0)])
+    for i, lx in enumerate((73, 76.5, 80, 83.5)):
+        route([(lx, 27.2), (lx, 15.8)])
+        route([(lx, 12.2), (lx, 9.8)])
+        kx = 92 + i*8
+        dx = 90.775 + i*2.15
+        y_el = 19.6 - i*.7
+        route([(dx, 27.5), (dx, y_el), (kx, 16.5), (kx, 13.7)])
+    for i in range(4):
+        yp = 45.1 + i*1.27
+        route([(82.3, yp), (85.5, yp)])
+        route([(92.5, yp), (104.5, yp)])
+    for dy in (-1.0, 1.0):
+        route([(82.3, 61.5+dy), (86.5, 61.5+dy), (88.2, 62.5+dy)])
+    for i in range(5):
+        ym = 57.5 + i*1.7
+        yr = 65.5 + i*1.9
+        xk = 115.2 + (4-i)*.65
+        route([(113.2, ym), (xk, ym), (120.0 + (4-i)*.45, yr), (124.4, yr)])
+        yv = 26.0 + i*2.0
+        route([(110.5, 29.0+i*1.8), (114.5+i*.5, 29.0+i*1.8), (118.5+i*.5, yv), (124.4, yv)])
+    for xx, yy in [(37,39),(37,68),(67,68),(70,39),(90,39),(113,19),(30,24),(18,78),(50,87),(76,72),(46,24),(64,24),(85,20),(102,20),(35,58),(18,67),(18,48),(95,21),(119,60),(119,32)]:
         cylinder((xx-68, yy-53, .035), .31, .04, 'gold', 16, .15)
     finish()
     print('Added peripheral ICs, regulators, solder fillets, decouplers, silk and restrained photo-referenced fanout routes.')
@@ -779,10 +872,12 @@ def export():
         bpy.ops.object.select_all(action='DESELECT')
         for obj in objects:
             obj.select_set(True)
-        bpy.context.view_layer.objects.active = objects[0]
+        static_obj = next((o for o in objects if o.name.endswith('_static')), objects[0])
+        bpy.context.view_layer.objects.active = static_obj
         bpy.ops.object.convert(target='MESH')
         if len(bpy.context.selected_objects) > 1:
             bpy.ops.object.join()
+        bpy.context.view_layer.objects.active.name = f'{root.name}_static'
     for obj in SCENE.objects:
         if obj.type == 'MESH':
             bm = bmesh.new()
