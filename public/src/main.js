@@ -399,8 +399,8 @@ function renderInspector(part) {
 function syncViewportHint() {
   const hint = $('#viewportHint');
   if (!hint) return;
-  const tool = board?.toolMode === 'select' ? 'LMB: Select only' : 'LMB: Interact / Select';
-  const nav = board?.navMode === 'pan' ? 'RMB drag: Pan (Shift: Orbit)' : 'RMB drag: Orbit (Shift: Pan)';
+  const tool = board?.toolMode === 'select' ? 'Click: Select only' : 'Click: Interact / Select';
+  const nav = board?.navMode === 'pan' ? 'Drag: Pan' : 'Drag: Orbit';
   hint.innerHTML = `<i class="orbit-icon">↔</i> ${tool} <b>·</b> ${nav} <b>·</b> Scroll: Zoom`;
 }
 function uartSample() {

@@ -111,7 +111,7 @@ Screenshots illustrate the layout; your design, clock, open panels, and signal v
 
 - **Left-click** any component, connector, header, LED, digit, or switch to select it and open its floating hardware inspector card (showing package details, mapped FPGA pins/nets, and live logic states).
 - Use the **Interact / Select** toggle (`V`) in the viewport toolbar to choose whether left-clicking interactive controls (`S1`–`S4`, `Reset`, `DIP 1–4`, `Power`) actuates them (`Interact`) or selects them for inspection without toggling (`Select`).
-- Hold **right-click (RMB) and drag** to move the camera; use the **Orbit / Pan** toggle in the viewport toolbar (or hold `Shift + RMB`) to switch between orbiting and panning. Scroll to zoom.
+- Hold **left-click (LMB) and drag** to move the camera; use the **Orbit / Pan** toggle in the viewport toolbar to switch between orbiting and panning (designed for one-button laptop touchpads as well as mice). Scroll to zoom.
 - Click **Center** (`F`) or double-click a component to smoothly frame the camera and orbit pivot onto the selected component.
 - Use **Perspective**, **Top**, or **Detail** for quick views.
 - Open the sliders-shaped **View settings** button for more camera views, including **Four LEDs**, **Display detail**, **Connectors**, and **Underside**.

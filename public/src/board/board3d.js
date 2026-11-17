@@ -53,9 +53,11 @@ export async function createBoard3D(canvas, opts = {}) {
   const groups = Object.fromEntries(model.children.map(object => [object.name, object]));
   const state = { power: true, persistence: .6, glow: .4, explode: 0, explodeTarget: 0, tween: null, navMode: 'orbit', toolMode: 'interact', selected: null, hovered: null };
   function syncCameraButtons() {
-    controls.mouseButtons.LEFT = -1;
+    const mode = state.navMode === 'pan' ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+    controls.mouseButtons.LEFT = mode;
     controls.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
-    controls.mouseButtons.RIGHT = state.navMode === 'orbit' ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN;
+    controls.mouseButtons.RIGHT = state.navMode === 'pan' ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN;
+    if (controls.touches) controls.touches.ONE = state.navMode === 'pan' ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE;
   }
   syncCameraButtons();
   canvas.addEventListener('contextmenu', event => event.preventDefault());
@@ -245,7 +247,7 @@ export async function createBoard3D(canvas, opts = {}) {
   new ResizeObserver(resize).observe(canvas.parentElement);
   setQuality('high');
   const ray = new THREE.Raycaster(), pointer = new THREE.Vector2();
-  let activeKey = null, rmbDrag = false;
+  let activeKey = null, pointerState = null;
   function pick(event) {
     const rect = canvas.getBoundingClientRect();
     pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
@@ -274,23 +276,15 @@ export async function createBoard3D(canvas, opts = {}) {
     return null;
   }
   canvas.addEventListener('pointerdown', event => {
-    if (event.button === 2) { rmbDrag = true; canvas.style.cursor = 'grabbing'; return; }
     if (event.button !== 0) return;
     const target = pick(event);
-    if (!target) { selectPart(null); return; }
-    selectPart(target.partId);
-    if (state.toolMode !== 'interact') return;
-    if (target.type === 'power') {
-      opts.onPower?.(!state.power);
-      return;
-    }
-    if (!state.power) return;
-    if (target.type === 'key') {
+    if (state.toolMode === 'interact' && state.power && target?.type === 'key') {
+      selectPart(target.partId);
       activeKey = target.id; controls.enabled = false;
       opts.onKey?.(target.id, true); canvas.setPointerCapture(event.pointerId);
-    } else if (target.type === 'dip') {
-      opts.onDip?.(target.index);
+      return;
     }
+    pointerState = { x: event.clientX, y: event.clientY, dragged: false, target };
   }, { capture: true });
   canvas.addEventListener('dblclick', event => {
     if (event.button !== 0) return;
@@ -301,17 +295,34 @@ export async function createBoard3D(canvas, opts = {}) {
     centerSelected(target.partId);
   });
   function releaseKey(event) {
-    if (event?.button === 2) rmbDrag = false;
+    if (pointerState && (!event || event.button === undefined || event.button === 0)) {
+      const { dragged, target } = pointerState;
+      pointerState = null;
+      if (!dragged && event?.type === 'pointerup') {
+        if (!target) {
+          selectPart(null);
+        } else {
+          selectPart(target.partId);
+          if (state.toolMode === 'interact') {
+            if (target.type === 'power') opts.onPower?.(!state.power);
+            else if (target.type === 'dip' && state.power) opts.onDip?.(target.index);
+          }
+        }
+      }
+    }
     if (!activeKey) return;
     opts.onKey?.(activeKey, false); activeKey = null; controls.enabled = true;
   }
   canvas.addEventListener('pointerup', releaseKey);
-  canvas.addEventListener('pointercancel', releaseKey);
-  canvas.addEventListener('lostpointercapture', releaseKey);
-  window.addEventListener('blur', () => { rmbDrag = false; releaseKey(); });
+  canvas.addEventListener('pointercancel', () => { pointerState = null; releaseKey(); });
+  canvas.addEventListener('lostpointercapture', () => { pointerState = null; releaseKey(); });
+  window.addEventListener('blur', () => { pointerState = null; releaseKey(); });
   canvas.addEventListener('pointerleave', () => { state.hovered = null; hoverHighlight.visible = false; });
   canvas.addEventListener('pointermove', event => {
-    if (rmbDrag) { canvas.style.cursor = 'grabbing'; return; }
+    if (pointerState) {
+      if (Math.hypot(event.clientX - pointerState.x, event.clientY - pointerState.y) > 4) pointerState.dragged = true;
+      if (pointerState.dragged) { hoverHighlight.visible = false; canvas.style.cursor = 'grabbing'; return; }
+    }
     if (activeKey) return;
     const hit = pick(event);
     state.hovered = hit?.partId || null;
@@ -323,7 +334,7 @@ export async function createBoard3D(canvas, opts = {}) {
     }
     const meta = state.hovered ? BOARD_PARTS[state.hovered] : null;
     canvas.title = meta ? `${meta.title} (${meta.part})` : '';
-    canvas.style.cursor = hit ? 'pointer' : 'default';
+    canvas.style.cursor = hit ? 'pointer' : 'grab';
   });
   let previous = performance.now(), fps = 60;
   function update(now, dt) {
