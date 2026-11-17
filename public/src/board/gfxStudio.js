@@ -22,6 +22,8 @@ export const DEFAULT_GFX = {
   clearcoat: 0,
   ledTheme: 'default',
   ledCustomColor: '#ff2921',
+  ledGlow: 40,
+  segGlow: 40,
   ledLightBleed: 0,
   // Lighting & Environment
   lightPreset: 'default',
@@ -380,11 +382,13 @@ varying vec2 vUv;
 void main() {
   vec4 col = texture2D(tDiffuse, vUv);
   float luma = dot(col.rgb, vec3(0.2126, 0.7152, 0.0722));
-  float knee = uThreshold * 0.35 + 0.0001;
-  float soft = clamp(luma - uThreshold + knee, 0.0, 2.0 * knee);
+  float peak = max(col.r, max(col.g, col.b));
+  float brightness = max(luma, peak * 0.94);
+  float knee = uThreshold * 0.42 + 0.0001;
+  float soft = clamp(brightness - uThreshold + knee, 0.0, 2.0 * knee);
   soft = (soft * soft) / (4.0 * knee);
-  float contrib = max(soft, luma - uThreshold) / max(luma, 0.0001);
-  gl_FragColor = vec4(col.rgb * clamp(contrib, 0.0, 4.0), 1.0);
+  float contrib = max(soft, brightness - uThreshold) / max(brightness, 0.0001);
+  gl_FragColor = vec4(col.rgb * clamp(contrib, 0.0, 8.0), 1.0);
 }
 `;
 
@@ -573,29 +577,37 @@ void main() {
     col = max(vec3(0.0), col + detail * uSharpen * 1.45);
   }
 
-  // Screen-Space Ambient Occlusion (SSAO / Cavity)
+  // Screen-Space Ambient Occlusion (Symmetric Paired Valley SSAO — slope-invariant on flat surfaces)
   if (uSsao > 0.001 && !isBackground) {
     float occ = 0.0;
     float radPx = (1.5 + uSsaoRadius * 4.5);
-    for (int i = 0; i < 8; i++) {
+    float jitter = fract(sin(dot(uv * uResolution, vec2(12.9898, 78.233))) * 43758.5453) * 0.785398;
+    for (int i = 0; i < 6; i++) {
       float fi = float(i);
-      float ang = fi * 0.785398 + fract(sin(dot(uv * uResolution, vec2(12.9898, 78.233))) * 43758.5453) * 0.78;
-      float r = (0.35 + 0.65 * fract(fi * 0.37)) * radPx;
-      vec2 oUv = uv + vec2(cos(ang), sin(ang)) * texel * r;
-      float dSample = readLinearDepth(oUv);
-      float diff = centerDepth - dSample;
-      if (diff > 0.08 && diff < 6.5) {
-        occ += smoothstep(6.5, 0.15, diff);
+      float ang = fi * 0.5235988 + jitter;
+      float r = (0.4 + 0.6 * fract(fi * 0.41)) * radPx;
+      vec2 off = vec2(cos(ang), sin(ang)) * texel * r;
+      float dPlus = readLinearDepth(uv + off);
+      float dMinus = readLinearDepth(uv - off);
+      if (abs(dPlus - centerDepth) < 7.0 && abs(dMinus - centerDepth) < 7.0) {
+        float avgDepth = 0.5 * (dPlus + dMinus);
+        float valley = centerDepth - avgDepth;
+        if (valley > 0.05) {
+          occ += smoothstep(0.05, 1.8, valley) * smoothstep(7.0, 0.4, valley);
+        }
       }
     }
-    float ao = clamp(1.0 - (occ / 8.0) * uSsao * 1.35, 0.18, 1.0);
+    float ao = clamp(1.0 - (occ / 6.0) * uSsao * 1.45, 0.22, 1.0);
     col *= ao;
   }
 
-  // Add HDR Bloom
+  // Add HDR Bloom (Pre-Tonemap + Post-Tonemap Optical Halo)
+  vec3 bloomCol = vec3(0.0);
   if (uBloom > 0.001) {
-    vec3 bloomCol = texture2D(tBloom, uv).rgb;
-    col += bloomCol * uBloom * 1.35;
+    bloomCol = texture2D(tBloom, uv).rgb;
+    float bPeak = max(bloomCol.r, max(bloomCol.g, bloomCol.b));
+    vec3 hotCore = vec3(max(bPeak - 0.55, 0.0) * 0.24);
+    col += (bloomCol + hotCore) * uBloom * 1.45;
   }
 
   // Exposure & Tone Mapping
@@ -608,6 +620,11 @@ void main() {
   else col = clamp(col, 0.0, 1.0);
 
   col = linearToSrgb(col);
+
+  if (uBloom > 0.001) {
+    vec3 srgbHalo = linearToSrgb(bloomCol * uBloom * 0.65);
+    col = clamp(col + srgbHalo * (1.0 - col * 0.42), 0.0, 1.0);
+  }
 
   // Sobel Depth & Luma Edge Outline
   if (uEdgeOutline > 0.001) {
@@ -831,17 +848,21 @@ export function createGfxStudio(ctx) {
   studioGroup.add(cursorLight);
 
   // 3D LED & Display Point Lights for real PCB surface light bleed
+  const tmpBox = new THREE.Box3();
   const ledPointLights = leds.map(l => {
-    const pos = l.mesh.getWorldPosition(new THREE.Vector3());
-    const pl = new THREE.PointLight(l.id === 'pwrled' ? 0x39d66b : 0xff2921, 0, 28, 1.8);
-    pl.position.set(pos.x, pos.y + 3.2, pos.z);
+    const pos = tmpBox.setFromObject(l.mesh).getCenter(new THREE.Vector3());
+    const pl = new THREE.PointLight(l.id === 'pwrled' ? 0x39d66b : 0xff2921, 0, 32, 1.6);
+    pl.position.set(pos.x, pos.y + 3.0, pos.z);
     studioGroup.add(pl);
     return { id: l.id, light: pl, led: l };
   });
-  const displayPos = groups.display ? groups.display.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3(25.3, 9, -35.8);
-  const displayPointLight = new THREE.PointLight(0xff2921, 0, 48, 1.6);
-  displayPointLight.position.set(displayPos.x, displayPos.y + 6, displayPos.z);
-  studioGroup.add(displayPointLight);
+  const digitPointLights = segments.map(seg => {
+    const pos = tmpBox.setFromObject(seg.meshes[6]).getCenter(new THREE.Vector3());
+    const pl = new THREE.PointLight(0xff2921, 0, 38, 1.5);
+    pl.position.set(pos.x, pos.y + 4.2, pos.z);
+    studioGroup.add(pl);
+    return pl;
+  });
 
   // Floor materials
   const shadowFloorMat = floor.material;
@@ -1326,40 +1347,53 @@ export function createGfxStudio(ctx) {
   function updateLedsAndSegments(now, state) {
     const pal = getLedPalette();
     const powerOn = stagePose.enabled ? stagePose.pwr : state.power;
-    const bleed = gfx.ledLightBleed / 100;
+    const ledGlowNorm = (gfx.ledGlow ?? (state.glow * 100)) / 100;
+    const segGlowNorm = (gfx.segGlow ?? (state.glow * 100)) / 100;
+    const bleed = Math.max(gfx.ledLightBleed / 100, (gfx.bloom / 100) * 0.42);
+    const ledOverdrive = Math.max(0, ledGlowNorm - 1.0);
+    const segOverdrive = Math.max(0, segGlowNorm - 1.0);
 
     for (let i = 0; i < leds.length; i++) {
       const led = leds[i];
       const isPwr = led.id === 'pwrled';
       const active = powerOn && (isPwr ? true : (stagePose.enabled ? !!stagePose.leds[i] : led.on));
       led.mesh.material.emissive.setHex(isPwr ? pal.pwrEm : pal.em);
-      led.mesh.material.emissiveIntensity = active ? 0.7 + state.glow * 2.4 : 0;
+      if (active && ledOverdrive > 0) {
+        led.mesh.material.emissive.lerp(new THREE.Color(0xfff4d8), Math.min(0.45, ledOverdrive * 0.22));
+      }
+      led.mesh.material.emissiveIntensity = active ? 0.7 + ledGlowNorm * 2.4 + ledOverdrive * 1.8 : 0;
       led.mesh.material.color.setHex(isPwr ? (active ? pal.pwrOn : 0x183520) : (active ? pal.on : pal.off));
       const pl = ledPointLights[i];
       if (pl) {
         pl.light.color.setHex(isPwr ? pal.pwrEm : pal.em);
-        pl.light.intensity = active && bleed > 0 ? bleed * (1.2 + state.glow * 3.8) : 0;
+        pl.light.intensity = active && bleed > 0 ? bleed * (1.2 + ledGlowNorm * 4.2) : 0;
       }
     }
 
     const stagedDigits = stagePose.enabled ? encode7SegText(stagePose.text) : null;
-    let litSegCount = 0;
     for (let d = 0; d < segments.length; d++) {
       const digit = segments[d];
       const retained = state.persistence > 0 && now - digit.lastActive < 20 + state.persistence * 240;
       const byte = stagePose.enabled ? stagedDigits[d] : (digit.enabled ? digit.segs : digit.latched);
       const digActive = stagePose.enabled ? true : (digit.enabled || retained);
+      let digLitBits = 0;
       for (let bit = 0; bit < 8; bit++) {
         const on = powerOn && digActive && !!(byte & (1 << bit));
-        if (on) litSegCount++;
+        if (on) digLitBits++;
         const material = digit.meshes[bit].material;
         material.emissive.setHex(pal.em);
-        material.emissiveIntensity = on ? 1 + state.glow * 1.7 : 0;
+        if (on && segOverdrive > 0) {
+          material.emissive.lerp(new THREE.Color(0xfff4d8), Math.min(0.45, segOverdrive * 0.22));
+        }
+        material.emissiveIntensity = on ? 1 + segGlowNorm * 1.7 + segOverdrive * 1.8 : 0;
         material.color.setHex(on ? pal.segOn : pal.segOff);
       }
+      const dLight = digitPointLights[d];
+      if (dLight) {
+        dLight.color.setHex(pal.em);
+        dLight.intensity = bleed > 0 && digLitBits > 0 ? bleed * (digLitBits / 7) * (1.5 + segGlowNorm * 3.8) : 0;
+      }
     }
-    displayPointLight.color.setHex(pal.em);
-    displayPointLight.intensity = bleed > 0 && litSegCount > 0 ? bleed * (litSegCount / 24) * (2.2 + state.glow * 4.5) : 0;
   }
 
   function updateCameraOptics() {
@@ -1427,15 +1461,16 @@ export function createGfxStudio(ctx) {
     // 2. Render Bloom Passes if enabled
     if (gfx.bloom > 0) {
       bloomExtractMat.uniforms.tDiffuse.value = rtScene.texture;
-      bloomExtractMat.uniforms.uThreshold.value = (gfx.bloomThreshold / 100) * 1.4;
+      bloomExtractMat.uniforms.uThreshold.value = (gfx.bloomThreshold / 100) * 1.25;
       postQuad.material = bloomExtractMat;
       renderer.setRenderTarget(rtBloomA);
       renderer.render(postScene, postCamera);
 
-      const radiusScale = 0.5 + (gfx.bloomRadius / 100) * 2.2;
+      const radiusScale = 0.65 + (gfx.bloomRadius / 100) * 2.6;
       const bw = rtBloomA.width, bh = rtBloomA.height;
-      for (let i = 0; i < 2; i++) {
-        const spread = (i + 1) * radiusScale;
+      const passes = [1.0, 2.2, 4.0, 6.8];
+      for (let i = 0; i < passes.length; i++) {
+        const spread = passes[i] * radiusScale;
         bloomBlurMat.uniforms.tDiffuse.value = rtBloomA.texture;
         bloomBlurMat.uniforms.uStep.value.set(spread / bw, 0);
         postQuad.material = bloomBlurMat;

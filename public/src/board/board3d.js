@@ -395,8 +395,10 @@ export async function createBoard3D(canvas, opts = {}) {
       if (state.hovered) computePartBox(state.hovered, hoverHighlight.box);
     }
     for (const key of keys) {
+      const prevPress = key.press;
       key.press += (key.target - key.press) * (reducedMotion ? 1 : Math.min(1, dt * 22));
       key.cap.position.y = key.baseY - key.press * .0006;
+      if (Math.abs(key.press - prevPress) > 1e-4) renderer.shadowMap.needsUpdate = true;
     }
     for (const led of leds) {
       const on = state.power && (led.id === 'pwrled' || led.on);
@@ -413,9 +415,7 @@ export async function createBoard3D(canvas, opts = {}) {
         material.color.setHex(on ? 0xe84e3c : 0x361c22);
       }
     }
-    if (studio && (studio.gfx.ledTheme !== 'default' || studio.gfx.ledLightBleed > 0 || studio.stagePose.enabled)) {
-      studio.updateLedsAndSegments(now, state);
-    }
+    studio?.updateLedsAndSegments(now, state);
     studio?.updateCameraOptics();
     if (labels.visible) for (const sprite of labels.children) {
       sprite.userData.component.getWorldPosition(sprite.position); sprite.position.y += 17;
@@ -455,7 +455,7 @@ export async function createBoard3D(canvas, opts = {}) {
       renderer.shadowMap.needsUpdate = true;
       if (!on) { releaseKey(); for (const key of keys) key.target = 0; }
     },
-    setDip(mask) { for (let i = 0; i < 4; i++) model.getObjectByName(`dip_${i}`).position.z = mask & (1 << i) ? -.00085 : .00085; },
+    setDip(mask) { for (let i = 0; i < 4; i++) model.getObjectByName(`dip_${i}`).position.z = mask & (1 << i) ? -.00085 : .00085; renderer.shadowMap.needsUpdate = true; },
     highlightPin(pin) {
       const net = PIN_NET[pin];
       const component = COMPONENTS.find(c => c.net === net);
@@ -485,7 +485,7 @@ export async function createBoard3D(canvas, opts = {}) {
     get hideOutline() { return state.hideOutline; },
     setExplode(value) { state.explodeTarget = value; },
     setPersistence(value) { state.persistence = value; },
-    setGlow(value) { state.glow = value; },
+    setGlow(value) { state.glow = value; if (studio) { studio.gfx.ledGlow = Math.round(value * 100); studio.gfx.segGlow = Math.round(value * 100); } },
     setLabels(value) { labels.visible = value; },
     setGrid(value) { grid.visible = value; },
     setTraces(value) { netGuides.visible = value; },

@@ -670,7 +670,7 @@ function wire() {
   $$('[data-camera]').forEach(b => b.onclick = () => camera(b.dataset.camera)); $('#camPreset').onchange = e => camera(e.target.value);
   $('#btnViewSettings').onclick = () => { $('#deck').classList.toggle('hidden'); $('#btnViewSettings').setAttribute('aria-expanded', String(!$('#deck').classList.contains('hidden'))); };
   $('#deckCollapse').onclick = () => $('#btnViewSettings').click();
-  for (const [id, display, setter] of [['explode', 'explodeVal', 'setExplode'], ['persistence', 'persistVal', 'setPersistence'], ['glow', 'glowVal', 'setGlow']]) $('#' + id).oninput = e => { $('#' + display).textContent = `${e.target.value}%`; if (id === 'explode' && $('#pmExplode')) { $('#pmExplode').value = e.target.value; $('#pmExplodeVal').textContent = `${e.target.value}%`; } board?.[setter](Number(e.target.value) / 100); };
+  for (const [id, display, setter] of [['explode', 'explodeVal', 'setExplode'], ['persistence', 'persistVal', 'setPersistence'], ['glow', 'glowVal', 'setGlow']]) $('#' + id).oninput = e => { $('#' + display).textContent = `${e.target.value}%`; if (id === 'explode' && $('#pmExplode')) { $('#pmExplode').value = e.target.value; $('#pmExplodeVal').textContent = `${e.target.value}%`; } if (id === 'persistence' && $('#pmPersistence')) { $('#pmPersistence').value = e.target.value; $('#pmPersistVal').textContent = `${e.target.value}%`; } board?.[setter](Number(e.target.value) / 100); if (id === 'glow') syncGfxUI(); };
   for (const [id, setter] of [['tglOrbit', 'setAutoOrbit'], ['tglLabels', 'setLabels'], ['tglGrid', 'setGrid'], ['tglTraces', 'setTraces']]) $('#' + id).onchange = e => { if (id === 'tglOrbit' && $('#pmTglOrbit')) $('#pmTglOrbit').checked = e.target.checked; board?.[setter](e.target.checked); };
   $('#quality').onchange = e => { board?.setQuality(e.target.value); syncGfxUI(); }; $('#btnResetView').onclick = () => camera('hero');
   $('#btnShot').onclick = () => { if (!board) return; const a = document.createElement('a'); a.href = board.screenshot(); a.download = 'trace-board.png'; a.click(); };
@@ -695,6 +695,10 @@ function wire() {
       const k = el.dataset.gfxVal;
       if (g[k] !== undefined) el.textContent = formatGfxVal(k, g[k]);
     });
+    if ($('#glow') && document.activeElement !== $('#glow')) {
+      $('#glow').value = String(Math.min(100, g.ledGlow));
+      $('#glowVal').textContent = `${g.ledGlow}%`;
+    }
     $('#center').classList.toggle('bg-transparent', g.bgMode === 'transparent');
     const focalMm = Math.round(24 / (2 * Math.tan((g.fov * 0.5) * Math.PI / 180)));
     if ($('#pmReadout')) $('#pmReadout').textContent = `${focalMm}mm · ${g.fov}° · ${g.shadingMode.toUpperCase()}${g.dof > 0 ? ` · DoF ${g.dofFocus}mm` : ''}`;
@@ -782,6 +786,7 @@ function wire() {
   $('#pmCamSelect').onchange = e => camera(e.target.value);
   $('#pmTglOrbit').onchange = e => { $('#tglOrbit').checked = e.target.checked; board?.setAutoOrbit(e.target.checked); };
   $('#pmExplode').oninput = e => { $('#explode').value = e.target.value; $('#explodeVal').textContent = $('#pmExplodeVal').textContent = `${e.target.value}%`; board?.setExplode(Number(e.target.value) / 100); };
+  if ($('#pmPersistence')) $('#pmPersistence').oninput = e => { $('#persistence').value = e.target.value; $('#persistVal').textContent = $('#pmPersistVal').textContent = `${e.target.value}%`; board?.setPersistence(Number(e.target.value) / 100); };
   const syncStagePose = () => {
     board?.setStagePose({
       enabled: $('#pmStageEnable').checked,
