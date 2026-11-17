@@ -50,6 +50,7 @@ The board model is strictly referenced against the physical **RZ-EasyFPGA A2.2 (
 | **Clock** | `clk` | **23** | 50 MHz onboard crystal oscillator |
 | **Reset** | `reset_btn` | **25** | **Active-Low** (`0` = pressed, `1` = released) |
 | **Tactile Keys** | `s1`, `s2`, `s3`, `s4` | **88, 89, 90, 91** | **Active-Low** (`0` = pressed, `1` = released) |
+| **DIP Switches** | `s1`, `s2`, `s3`, `s4` (shared) | **88, 89, 90, 91** | **Active-Low** (`0` = ON / Grounded, `1` = OFF / Open). Wired in parallel with tactile keys S1–S4. |
 | **User LEDs** | `led1`, `led2`, `led3`, `led4` | **87, 86, 85, 84** | **Active-Low** (`0` = ON, `1` = OFF) |
 | **7-Seg Digits** | `dtube1`, `dtube2`, `dtube3`, `dtube4` | **133, 135, 136, 137** | **Active-Low** (`0` = Enabled, `1` = Disabled) |
 | **7-Seg Segments**| `seg_a`..`seg_g`, `seg_dp` | **128, 121, 125, 129, 132, 126, 124, 127** | **Active-Low** (`0` = Lit, `1` = Dark) |
@@ -79,8 +80,14 @@ Before modifying simulation or timing code, review these known architectural con
 ### C. Touchpad & Waveform Gestures:
 * **Issue:** Firefox reports wheel events in `DOM_DELTA_LINE` (`deltaMode === 1`), making touchpad panning crawl unless scaled by line height (~20px). Touchpad pinch-to-zoom emits `e.ctrlKey === true` and should use exponential scaling `Math.exp(-deltaPixels * 0.005)`.
 
-### D. Single Cursor Limitation (Latch Mode):
-* **Feature:** Provide a latch/toggle mode for keys `S1`–`S4` so mouse users can keep multiple buttons held down simultaneously (e.g. for multi-key lamp tests).
+### D. Single Cursor Limitation (Hardware DIP Switch Controls vs. Artificial Latch Mode):
+* **Architectural Decision:** Do **NOT** implement an artificial software "latch mode" for the tactile push buttons `S1`–`S4`.
+* **Hardware Ground Truth:** On the physical RZ-EasyFPGA A2.2 schematic, tactile push buttons `S1`–`S4` are strictly momentary. The physical board provides hardware latching via the 4-position red DIP switch package (`dip_0`..`dip_3`), which is wired directly in parallel to the exact same FPGA pins: **88 (`s1`), 89 (`s2`), 90 (`s3`), 91 (`s4`)**.
+* **Implementation Plan:**
+  1. Add 4 bi-stable toggle switch controls for the DIP levers (`DIP1`–`DIP4`) to the **BOARD I/O** toolbar (and/or direct pointer interaction on the 3D DIP switch mesh).
+  2. Keep tactile keys `S1`–`S4` purely momentary (press to ground `0`, release to spring back to `1`).
+  3. When a DIP lever is toggled `ON`, it holds the shared net grounded (`0`); toggling it `OFF` opens the circuit (relying on the pull-up to `1`). If a DIP lever is `ON`, pressing the corresponding push button has no effect because the net is already shorted to ground.
+  4. Animate the 3D DIP switch model dynamically via `board?.setDip(mask)` in `public/src/board/board3d.js` so the virtual 3D levers visually slide into position.
 
 ### E. Desktop Launching:
 * **Recommendation:** Rather than downloading heavy Rust/Tauri toolchains on metered data, launch Edge in application mode (`msedge.exe --app="http://127.0.0.1:8044"`) inside [start.bat](file:///C:/Users/cmpj/dev/fpga-lab/start.bat).
