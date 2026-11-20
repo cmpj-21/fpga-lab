@@ -94,7 +94,7 @@ function setStatus() {
 function pause() { S.running = false; accumulator = 0; audio.stopBuzzer(); setStatus(); }
 function fail(e) { S.error = true; S.pending = []; pause(); log(e.message, 'error'); toast(e.message, 'err'); ide?.reportBuildFailure(e.message); openTools('console'); }
 function markDirty() { S.dirty = true; S.error = false; S.pending = []; ++S.generation; pause(); saveProject(); }
-function projectData() { return { format: 'trace-project', version: 1, sources: S.sources, assignments: [...S.assignments], top: $('#topSelect').value, topLibrary: $('#topLibrary').value, standard: $('#standardSelect').value, generics: $('#genericInput').value, sdf: S.sdf ? { ...S.sdf, instance: $('#sdfInstance').value, corner: $('#sdfCorner').value } : null }; }
+function projectData() { ide?.commitAll(); return { format: 'trace-project', version: 1, sources: S.sources, assignments: [...S.assignments], top: $('#topSelect').value, topLibrary: $('#topLibrary').value, standard: $('#standardSelect').value, generics: $('#genericInput').value, sdf: S.sdf ? { ...S.sdf, instance: $('#sdfInstance').value, corner: $('#sdfCorner').value } : null }; }
 function saveProject() { try { localStorage.setItem('trace.project.v1', JSON.stringify(projectData())); } catch { toast('Browser storage is full or unavailable. Use Save project to keep your files.', 'err'); } }
 function restoreProject(project) {
   if (!project || project.format !== 'trace-project' || project.version !== 1 || !Array.isArray(project.sources) || project.sources.length > 100 || !project.sources.every(s => s && typeof s.name === 'string' && typeof s.text === 'string' && /^[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i.test(s.name) && (!s.library || /^[a-z][a-z0-9_]*$/i.test(s.library))) || !['93','02','08'].includes(project.standard) || !/^[a-z][a-z0-9_]*$/i.test(project.topLibrary || 'work') || typeof project.generics !== 'string' || !Array.isArray(project.assignments) || !project.assignments.every(p => Array.isArray(p) && p.length === 2 && Number.isInteger(p[0]) && p[0] >= 1 && p[0] <= 144 && typeof p[1] === 'string') || (project.sdf && (typeof project.sdf.text !== 'string' || typeof project.sdf.instance !== 'string' || !['min','typ','max'].includes(project.sdf.corner)))) throw new Error('Invalid Trace project file.');
@@ -126,6 +126,12 @@ function renderSources() {
 async function closeSession(sim) { if (sim?.id) await api(`/api/sim/${sim.id}`, undefined, 'DELETE').catch(() => {}); }
 async function build(top = $('#topSelect').value) {
   if (S.building || S.exporting) return;
+  if (ide?.hasUnsaved()) {
+    if (!ide.validateLibraries()) return;
+    ide.commitAll();
+    renderSources();
+    if (!top) top = $('#topSelect').value;
+  }
   S.dirty = true; S.pending = []; pause();
   if (!S.sources.length) return toast('Open VHDL sources first.', 'err');
   S.standard = $('#standardSelect').value; S.topLibrary = $('#topLibrary').value.trim(); S.generics = {};
@@ -232,10 +238,26 @@ function consume(result) {
     if (input.type === 'checkbox') input.checked = value === '1'; else input.value = value ?? '';
   }
 }
+const MAX_SIM_FS = 9007199254740991;
+function remainingSimCycles() {
+  if (!S.sim || S.vcd) return Infinity;
+  const stepFs = 2 * Number(halfPeriod()) * 10 ** (15 + (S.sim.precision ?? -15));
+  return stepFs > 0 ? Math.max(0, Math.floor((MAX_SIM_FS - S.time) / stepFs)) : Infinity;
+}
 async function advance(cycles = 1) {
   if (!Number.isInteger(cycles) || cycles < 0) return;
   if (!S.sim || S.sim.ended || S.dirty || S.error || !S.power || S.busy || S.building || S.importing || S.exporting) return;
   if (S.vcd) { stepPlayback(cycles); return; }
+  if (cycles > 0) {
+    const maxCycles = remainingSimCycles();
+    if (maxCycles <= 0) {
+      pause();
+      log('Reached 9 s exact femtosecond waveform window (2^53 fs). Click Run or Restart to continue.', 'info');
+      toast('Reached 9 s capture window. Click Run or Restart to continue.');
+      return;
+    }
+    if (cycles > maxCycles) cycles = maxCycles;
+  }
   S.busy = true; const generation = S.generation;
   const pending = S.pending.splice(0);
   const batches = [[]]; let ids = new Set();
@@ -251,6 +273,11 @@ async function advance(cycles = 1) {
       if (S.sim.ended) break;
     }
     S.cycles += cycles;
+    if (S.running && remainingSimCycles() <= 0) {
+      pause();
+      log('Reached 9 s exact femtosecond waveform window (2^53 fs). Click Run or Restart to continue.', 'info');
+      toast('Reached 9 s capture window. Click Run or Restart to continue.');
+    }
   } catch (e) { if (generation === S.generation) fail(e); } finally { S.busy = false; }
 }
 function setInput(id, value) {
@@ -607,8 +634,28 @@ function wire() {
     applyTheme(theme);
     try { localStorage.setItem('trace.theme', theme); } catch {}
   };
-  $('#btnRun').onclick = () => { if (!S.sim || S.sim.ended || S.dirty || S.error || !S.power || S.building || S.importing) return; if (S.running) pause(); else { S.running = true; setStatus('Running'); lastFrame = performance.now(); } };
-  $('#btnStep').onclick = () => { pause(); advance(1); };
+  $('#btnRun').onclick = async () => {
+    if (!S.power || S.building || S.importing || S.exporting) return;
+    if (S.running) { pause(); return; }
+    if (ide?.hasUnsaved()) {
+      await ide.saveAndFlash();
+      if (S.error || !S.sim || S.sim.ended) return;
+    } else if (!S.sim || S.sim.ended || S.dirty || S.error) return;
+    if (!S.vcd && remainingSimCycles() <= 0) {
+      await build(S.sim.top);
+      if (S.error || !S.sim || S.sim.ended) return;
+    }
+    S.running = true; setStatus('Running'); lastFrame = performance.now();
+  };
+  $('#btnStep').onclick = async () => {
+    if (!S.power || S.building || S.importing || S.exporting) return;
+    pause();
+    if (ide?.hasUnsaved()) {
+      await ide.saveAndFlash();
+      if (S.error || !S.sim || S.sim.ended) return;
+    }
+    advance(1);
+  };
   $('#btnReset').onclick = () => S.vcd ? loadVcd(S.vcd.text, S.sim.top) : build(S.sim?.top);
   $('#speed').oninput = e => { S.speed = Number(e.target.value); $('#rateLabel').textContent = `${(10 ** ((S.speed - 55) / 25)).toFixed(1).replace('.0', '')}×`; };
   $('#clkHz').onchange = e => { S.clkHz = Number(e.target.value); accumulator = 0; log(`Ideal clock: ${S.clkHz} Hz. Execution speed is limited by native simulation and display throughput.`); };
@@ -664,7 +711,8 @@ function wire() {
     if (mod && !e.altKey && (e.key.toLowerCase() === 'b' || e.key.toLowerCase() === 's')) { e.preventDefault(); ide?.saveAndFlash(); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'e') { e.preventDefault(); ide?.setEditorPaneOpen(!$('#sourceDialog')?.open); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'o') { e.preventDefault(); $('#fileInput').click(); return; }
-    if (e.target.closest('input,select,textarea,dialog') || e.repeat) return;
+    if (e.key === 'Escape' && $('#homeView') && !$('#homeView').classList.contains('hidden')) { ide?.showHome(false); return; }
+    if (e.target.closest('input,select,textarea,dialog:modal') || ($('#homeView') && !$('#homeView').classList.contains('hidden')) || e.repeat) return;
     if (e.altKey && ['1', '2', '3', '4'].includes(e.key)) { e.preventDefault(); toggleDip(Number(e.key) - 1); return; }
     if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); centerSelection(); return; }
     if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'v') { e.preventDefault(); setTool(board?.toolMode === 'select' ? 'interact' : 'select'); return; }
@@ -673,7 +721,7 @@ function wire() {
     if (keys[e.key.toLowerCase()]) { e.preventDefault(); keyInput(keys[e.key.toLowerCase()], true); }
     if (e.code === 'Space' && e.target.tagName !== 'BUTTON') { e.preventDefault(); $('#btnRun').click(); }
     if (e.key === '.') $('#btnStep').click();
-    if (e.key === 'Escape') { if ($('#homeView') && !$('#homeView').classList.contains('hidden')) { ide?.showHome(false); return; } if ($('#center').classList.contains('photo-mode')) togglePhotoMode(false); $('#right').classList.add('hidden'); $('#deck').classList.add('hidden'); $('#app').classList.remove('mobile-library'); board?.selectPart(null); syncNavigation(); }
+    if (e.key === 'Escape') { if ($('#center').classList.contains('photo-mode')) togglePhotoMode(false); $('#right').classList.add('hidden'); $('#deck').classList.add('hidden'); $('#app').classList.remove('mobile-library'); board?.selectPart(null); syncNavigation(); }
   });
   window.addEventListener('keyup', e => { if (keys[e.key.toLowerCase()]) keyInput(keys[e.key.toLowerCase()], false); });
   window.addEventListener('blur', releaseKeys);
@@ -893,7 +941,7 @@ async function boot() {
   fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);
   window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, get ide() { return ide; }, build, advance, loadFiles, toggleDip };
-  try { const saved = localStorage.getItem('trace.project.v1'); if (saved) restoreProject(JSON.parse(saved)); } catch (e) { importError(new Error(`Saved project could not be restored: ${e.message}`)); S.sources = []; renderSources(); setStatus(); return; }
+  try { const saved = localStorage.getItem('trace.project.v1'); if (saved) { const parsed = JSON.parse(saved); if (Array.isArray(parsed?.sources) && parsed.sources.length) restoreProject(parsed); } } catch (e) { importError(new Error(`Saved project could not be restored: ${e.message}`)); S.sources = []; renderSources(); setStatus(); return; }
   ide.openFirst();
   ide.showHome(true);
   await build();

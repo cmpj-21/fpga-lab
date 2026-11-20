@@ -32,21 +32,57 @@ entity ${entity} is
 end entity ${entity};
 
 architecture rtl of ${entity} is
+  signal count  : unsigned(15 downto 0) := (others => '0');
+  signal scan   : unsigned(1 downto 0)  := "00";
+  signal nibble : unsigned(3 downto 0);
+  signal segs   : std_logic_vector(6 downto 0);
 begin
-  -- Active-low LEDs mirror active-low tactile keys / DIP switches S1..S4
-  led1 <= s1;
-  led2 <= s2;
-  led3 <= s3;
-  led4 <= s4;
+  process (clk)
+  begin
+    if rising_edge(clk) then
+      if reset_btn = '0' then
+        count <= (others => '0');
+        scan  <= "00";
+      else
+        scan <= scan + 1;
+        if s2 = '0' then
+          count <= (others => '0');
+        elsif s3 = '0' then
+          count <= count - 1;
+        elsif s1 = '0' then
+          count <= count + 16;
+        else
+          count <= count + 1;
+        end if;
+      end if;
+    end if;
+  end process;
 
-  -- Enable Digit 1 showing '0' (active-low segments: dp g f e d c b a)
-  dtube1 <= '0';
-  dtube2 <= '1';
-  dtube3 <= '1';
-  dtube4 <= '1';
-  seven_seg <= "11000000";
+  with scan select nibble <=
+    count(3 downto 0)   when "00",
+    count(7 downto 4)   when "01",
+    count(11 downto 8)  when "10",
+    count(15 downto 12) when others;
 
-  beep <= '0';
+  with nibble select segs <=
+    "1000000" when x"0", "1111001" when x"1", "0100100" when x"2", "0110000" when x"3",
+    "0011001" when x"4", "0010010" when x"5", "0000010" when x"6", "1111000" when x"7",
+    "0000000" when x"8", "0010000" when x"9", "0001000" when x"A", "0000011" when x"B",
+    "1000110" when x"C", "0100001" when x"D", "0000110" when x"E", "0001110" when others;
+
+  seven_seg <= (others => '0') when s4 = '0' else '1' & segs;
+  dtube1 <= '0' when s4 = '0' or scan = "00" else '1';
+  dtube2 <= '0' when s4 = '0' or scan = "01" else '1';
+  dtube3 <= '0' when s4 = '0' or scan = "10" else '1';
+  dtube4 <= '0' when s4 = '0' or scan = "11" else '1';
+
+  -- Active-low LEDs respond to S1..S4 / DIP switches and live counter bits
+  led1 <= '0' when s4 = '0' or s1 = '0' else not std_logic(count(0));
+  led2 <= '0' when s4 = '0' or s2 = '0' else not std_logic(count(1));
+  led3 <= '0' when s4 = '0' or s3 = '0' else not std_logic(count(2));
+  led4 <= '0' when s4 = '0' else not std_logic(count(3));
+
+  beep <= std_logic(count(0)) and (not s3);
 end architecture rtl;
 `;
   }
@@ -243,9 +279,9 @@ export function createIde(api) {
     const isOpen = !!dialog?.open;
     $('#ideMain')?.classList.toggle('editor-closed', !isOpen);
     if ($('#btnFocusBoard')) {
-      $('#btnFocusBoard').setAttribute('aria-pressed', String(!isOpen));
-      $('#btnFocusBoard').classList.toggle('active', !isOpen);
-      $('#btnFocusBoard').title = isOpen ? 'Maximize 3D board (hide code editor)' : 'Show VHDL code editor';
+      $('#btnFocusBoard').setAttribute('aria-pressed', String(isOpen));
+      $('#btnFocusBoard').classList.toggle('active', isOpen);
+      $('#btnFocusBoard').title = isOpen ? 'Hide VHDL code editor (Ctrl+E)' : 'Show VHDL code editor (Ctrl+E)';
     }
   }
   function setEditorPaneOpen(open) {
@@ -421,6 +457,20 @@ export function createIde(api) {
       }
     } else renderTabs();
   }
+  function hasUnsaved() {
+    if (active && docs.has(active) && $('#sourceLibrary')) {
+      docs.get(active).library = $('#sourceLibrary').value.trim();
+    }
+    return [...docs.keys()].some(isDirty);
+  }
+  function validateLibraries() {
+    if (active && docs.has(active) && $('#sourceLibrary')) {
+      docs.get(active).library = $('#sourceLibrary').value.trim();
+    }
+    const bad = [...docs.values()].find(doc => !/^[a-z][a-z0-9_]*$/i.test(doc.library));
+    if (bad) { api.toast('Enter a valid VHDL library name.', 'err'); return false; }
+    return true;
+  }
   function commitAll() {
     let changed = false;
     if (active && docs.has(active) && $('#sourceLibrary')) {
@@ -439,11 +489,7 @@ export function createIde(api) {
   }
   function saveAndFlash() {
     if (S.building || S.importing || S.exporting) return false;
-    if (active && docs.has(active) && $('#sourceLibrary')) {
-      docs.get(active).library = $('#sourceLibrary').value.trim();
-    }
-    const bad = [...docs.values()].find(doc => !/^[a-z][a-z0-9_]*$/i.test(doc.library));
-    if (bad) { api.toast('Enter a valid VHDL library name.', 'err'); return false; }
+    if (!validateLibraries()) return false;
     commitAll(); api.renderSources(); api.markDirty();
     return api.build();
   }
@@ -469,8 +515,9 @@ export function createIde(api) {
 
   // ---------- explorer ----------
   function showNewFile() {
+    showHome(false);
     $('#newFileRow')?.classList.remove('hidden');
-    if ($('#app').classList.contains('no-library')) $('#btnLibrary').click();
+    if ($('#app').classList.contains('no-library') || !$('#ltab-library')?.classList.contains('active')) $('#btnLibrary').click();
     $('#newFileName').value = ''; $('#newFileName').focus();
   }
   function createFile(raw) {
@@ -735,7 +782,10 @@ export function createIde(api) {
     });
     if ($('#sbProblems')) $('#sbProblems').onclick = () => api.openTools('problems');
     $('#standardSelect')?.addEventListener('change', updateStatus);
-    matchMedia('(max-width: 1000px)').addEventListener('change', e => { if (e.matches && $('#sourceDialog')?.open) setEditorPaneOpen(false); });
+    matchMedia('(max-width: 1000px)').addEventListener('change', e => {
+      if (e.matches && $('#sourceDialog')?.open) setEditorPaneOpen(false);
+      else if (!e.matches && tabs.length && !$('#sourceDialog')?.open) setEditorPaneOpen(true);
+    });
     // Home Interface wiring
     $('#topbar .brand')?.addEventListener('click', e => { e.preventDefault(); showHome(true); });
     $('#btnHome')?.addEventListener('click', () => showHome(!$('#homeView') || $('#homeView').classList.contains('hidden')));
@@ -782,7 +832,7 @@ export function createIde(api) {
   wire();
 
   return {
-    openFile, closeTab, activate, commitAll, saveAndFlash, syncFromSources, openFirst, updateStatus,
+    openFile, closeTab, activate, commitAll, hasUnsaved, validateLibraries, saveAndFlash, syncFromSources, openFirst, updateStatus,
     setProblems, reportBuildFailure, resetLayout, setEditorPaneOpen,
     showHome, renderHome, recordRecentProject, populateHomeHdl,
     get active() { return active; },

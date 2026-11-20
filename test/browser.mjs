@@ -69,7 +69,9 @@ try {
   check(await evaluate('!!__lab.board && __lab.state.sim.backend.startsWith("GHDL")'), 'browser compiled design with native backend and WebGL board');
   check(await evaluate('__lab.board.model.children.length===41 && ["p1","p2","p3"].every(n=>__lab.board.model.getObjectByName(n)) && !__lab.board.model.getObjectByName("p4")'), 'Blender asset contains the corrected three-header layout');
   check(await evaluate(`(async()=>{const T=await import('three');const size=new T.Box3().setFromObject(__lab.board.model.getObjectByName('pcb')).getSize(new T.Vector3());return Math.abs(size.x-136)<.01&&Math.abs(size.z-106)<.01&&Math.abs(size.y-1.6)<.01;})()`), 'imported PCB preserves 136 by 106 by 1.6 mm model dimensions');
-  check(await evaluate('document.documentElement.scrollWidth === innerWidth'), 'desktop has no horizontal overflow');
+  check(await evaluate('!document.querySelector("#homeView").classList.contains("hidden") && document.querySelectorAll("#homeStarterGrid .home-starter-item").length===4'), 'app starts at the IDE Home interface with project wizard and starter templates');
+  await click('#homeContinueBtn');
+  check(await evaluate('document.querySelector("#homeView").classList.contains("hidden") && document.documentElement.scrollWidth === innerWidth'), 'desktop has no horizontal overflow');
   await screenshot('overhaul-desktop.png');
   const checkNavigation = async (activeIds, message) => {
     const state = await evaluate(`(() => {
