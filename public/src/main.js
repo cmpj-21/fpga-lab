@@ -8,12 +8,13 @@ import { parseVcd } from './sim/vcd.js';
 import { fmtTime } from './sim/types.js';
 import { WaveViewer } from './ui/waves.js';
 import { DEMO_SRC, DEMO_NAME, DEMO_TOP } from './ui/demo.js';
+import { createIde, parseDiagnostics } from './ui/ide.js';
 import * as audio from './ui/audio.js';
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const S = { sources: [], sim: null, running: false, power: true, building: false, busy: false, clkHz: 1000, speed: 55, time: 0, inputs: {}, assignments: new Map(), bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0 };
-let board, waves, toastTimer, sourceIndex, consoleCount = 0, logFile = '', reportCount = 0;
+let board, waves, ide, toastTimer, sourceIndex, consoleCount = 0, logFile = '', reportCount = 0;
 let lastFrame = performance.now(), accumulator = 0, lastDraw = 0;
 const uart = new UartReceiver();
 const reported = new Map();
@@ -80,6 +81,7 @@ function setStatus() {
   for (const input of $$('#pinBody input, #sdfControls input, #sdfControls select, .src-name, .src-x')) input.disabled = locked;
   $('#btnRun').disabled = $('#btnStep').disabled = locked || !S.power || !S.sim || S.sim.ended || S.dirty || S.error;
   $('#btnElab').disabled = $('#btnReset').disabled = locked;
+  if ($('#btnFlash')) $('#btnFlash').disabled = locked;
   $('#btnVcd').disabled = locked || !S.sim;
   for (const id of ['btnDemo', 'btnImport', 'dropZone', 'btnQsf', 'topSelect', 'standardSelect', 'topLibrary', 'genericInput', 'pwrToggle', 'btnPinReset', 'clearSdf', 'saveSource', 'progDrop', 'btnSaveProject', 'replayScope']) $('#' + id).disabled = locked;
   $('#btnTruth').disabled = locked || S.truthBusy || !S.sim || !!S.vcd || S.dirty || S.error;
@@ -90,7 +92,7 @@ function setStatus() {
   syncKeys();
 }
 function pause() { S.running = false; accumulator = 0; audio.stopBuzzer(); setStatus(); }
-function fail(e) { S.error = true; S.pending = []; pause(); log(e.message, 'error'); toast(e.message, 'err'); openTools('console'); }
+function fail(e) { S.error = true; S.pending = []; pause(); log(e.message, 'error'); toast(e.message, 'err'); ide?.reportBuildFailure(e.message); openTools('console'); }
 function markDirty() { S.dirty = true; S.error = false; S.pending = []; ++S.generation; pause(); saveProject(); }
 function projectData() { return { format: 'trace-project', version: 1, sources: S.sources, assignments: [...S.assignments], top: $('#topSelect').value, topLibrary: $('#topLibrary').value, standard: $('#standardSelect').value, generics: $('#genericInput').value, sdf: S.sdf ? { ...S.sdf, instance: $('#sdfInstance').value, corner: $('#sdfCorner').value } : null }; }
 function saveProject() { try { localStorage.setItem('trace.project.v1', JSON.stringify(projectData())); } catch { toast('Browser storage is full or unavailable. Use Save project to keep your files.', 'err'); } }
@@ -105,27 +107,13 @@ function renderSdf() { $('#sdfControls').classList.toggle('hidden', !S.sdf); $('
 function allEntities() {
   return [...new Set(S.sources.flatMap(s => [...s.text.replace(/--[^\n]*/g, '').matchAll(/\bentity\s+([a-z]\w*)\s+is\b/gi)].map(m => m[1].toLowerCase())))];
 }
-function openEditorTab(name) {
-  const dialog = $('#sourceDialog');
-  if (!dialog.open) dialog.show();
-  $('#tabFileName').textContent = name;
-  syncDocTabs();
-  requestAnimationFrame(() => $('#sourceEditor').focus());
-}
-function syncDocTabs() {
-  const editing = $('#sourceDialog').open;
-  $('#tabFile').classList.toggle('hidden', !editing);
-  $('#tabFile').classList.toggle('active', editing);
-  $('#tabFile').setAttribute('aria-selected', String(editing));
-  $('#tabBoard').classList.toggle('active', !editing);
-  $('#tabBoard').setAttribute('aria-selected', String(!editing));
-}
 function renderSources() {
   $('#srcList').replaceChildren(); $('#srcCount').textContent = S.sources.length;
   S.sources.forEach((s, i) => {
-    const li = document.createElement('li'); const kind = document.createElement('span'); kind.className = 'src-kind'; kind.textContent = s.name.split('.').pop().toUpperCase();
+    const li = document.createElement('li'); li.dataset.file = s.name;
+    const kind = document.createElement('span'); kind.className = 'src-kind'; kind.textContent = s.name.split('.').pop().toUpperCase();
     const name = document.createElement('button'); name.className = 'src-name'; name.textContent = s.name; name.title = `Edit ${s.name}`;
-    name.onclick = () => { sourceIndex = i; $('#sourceName').textContent = s.name; $('#sourceEditor').value = s.text; $('#sourceLibrary').value = s.library || 'work'; openEditorTab(s.name); };
+    name.onclick = () => { sourceIndex = i; ide?.openFile(s.name); };
     const remove = document.createElement('button'); remove.className = 'src-x'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${s.name}`);
     remove.onclick = () => { if (S.building || S.importing) return; S.sources.splice(i, 1); renderSources(); markDirty(); toast('Source removed. Build to apply changes.'); };
     li.append(kind, name, remove); $('#srcList').append(li);
@@ -133,6 +121,7 @@ function renderSources() {
   const selected = $('#topSelect').value; $('#topSelect').replaceChildren(new Option('Auto-detect top', ''));
   for (const entity of allEntities()) $('#topSelect').add(new Option(entity, entity));
   if (allEntities().includes(selected)) $('#topSelect').value = selected;
+  ide?.syncFromSources();
 }
 async function closeSession(sim) { if (sim?.id) await api(`/api/sim/${sim.id}`, undefined, 'DELETE').catch(() => {}); }
 async function build(top = $('#topSelect').value) {
@@ -171,7 +160,9 @@ async function build(top = $('#topSelect').value) {
     $('#inputHint').textContent = result.top === DEMO_TOP ? 'Hold S1 to count' : 'Active-low inputs';
     $('.mode-label').textContent = 'GHDL · compiled VHDL';
     log(`${result.backend}\nCompiled ${result.top}. ${result.signals.length} observable signals.`);
-    result.diagnostics.forEach(d => log(d, 'warning')); toast(`Compiled ${result.top}`, 'ok');
+    result.diagnostics.forEach(d => log(d, 'warning'));
+    ide?.setProblems(parseDiagnostics((result.diagnostics || []).join('\n')));
+    toast(`Compiled ${result.top}`, 'ok');
     waves.fit();
   } catch (e) {
     await closeSession(S.sim); S.sim = null; S.bindings = {}; S.inputs = {}; S.values.clear(); S.time = 0;
@@ -666,6 +657,10 @@ function wire() {
     $('#pinBody tr.selected-pin')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   };
   window.addEventListener('keydown', e => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.altKey && (e.key.toLowerCase() === 'b' || e.key.toLowerCase() === 's')) { e.preventDefault(); ide?.saveAndFlash(); return; }
+    if (mod && !e.altKey && e.key.toLowerCase() === 'e') { e.preventDefault(); ide?.setEditorPaneOpen(!$('#sourceDialog')?.open); return; }
+    if (mod && !e.altKey && e.key.toLowerCase() === 'o') { e.preventDefault(); $('#fileInput').click(); return; }
     if (e.target.closest('input,select,textarea,dialog') || e.repeat) return;
     if (e.altKey && ['1', '2', '3', '4'].includes(e.key)) { e.preventDefault(); toggleDip(Number(e.key) - 1); return; }
     if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); centerSelection(); return; }
@@ -873,11 +868,6 @@ function wire() {
   $$('[data-ltab]').forEach(b => b.onclick = () => leftTab(b.dataset.ltab)); $$('[data-rtab]').forEach(b => b.onclick = () => openTools(b.dataset.rtab));
   for (const id of ['btnAbout', 'btnLimits']) $('#' + id).onclick = () => $('#aboutDialog').showModal();
   $$('[data-close]').forEach(b => b.onclick = () => $('#' + b.dataset.close).close());
-  $('#sourceDialog').addEventListener('close', syncDocTabs);
-  $('#sourceDialog').addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); $('#sourceDialog').close(); } });
-  $('#tabBoard').onclick = () => $('#sourceDialog').close();
-  $('#tabFileClose').onclick = () => $('#sourceDialog').close();
-  $('#saveSource').onclick = () => { const library = $('#sourceLibrary').value.trim(); if (!/^[a-z][a-z0-9_]*$/i.test(library)) return toast('Enter a valid VHDL library name.', 'err'); if (S.building || !S.sources[sourceIndex]) return; S.sources[sourceIndex].library = library; S.sources[sourceIndex].text = $('#sourceEditor').value; $('#sourceDialog').close(); renderSources(); markDirty(); build(); };
   $('#consoleClear').onclick = () => { $('#consoleOut').replaceChildren(); $('#consoleCount').textContent = consoleCount = 0; };
   $('#consoleCopy').onclick = copyConsole;
   $('#uartClear').onclick = () => $('#uartOut').replaceChildren(); $('#btnTruth').onclick = runTruth;
@@ -895,10 +885,13 @@ async function boot() {
   audio.setMuted(true);
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; }).catch(() => {});
   try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed), onDip: index => toggleDip(index), onSelect: part => renderInspector(part), onPower: on => { $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.4); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
-  waves = new WaveViewer($('#waveCanvas'), $('#waveNames')); applyTheme(document.documentElement.dataset.theme); wire(); fetchTree();
+  waves = new WaveViewer($('#waveCanvas'), $('#waveNames')); applyTheme(document.documentElement.dataset.theme); wire();
+  ide = createIde({ S, toast, markDirty, build, renderSources, openTools, syncNavigation });
+  fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);
-  window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, build, advance, loadFiles, toggleDip };
+  window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, get ide() { return ide; }, build, advance, loadFiles, toggleDip };
   try { const saved = localStorage.getItem('trace.project.v1'); if (saved) restoreProject(JSON.parse(saved)); } catch (e) { importError(new Error(`Saved project could not be restored: ${e.message}`)); S.sources = []; renderSources(); setStatus(); return; }
+  ide.openFirst();
   await build();
 }
 boot();
