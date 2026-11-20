@@ -21,7 +21,7 @@
   <header id="topbar">
     <a class="brand" href="/" aria-label="Trace home"><span class="brand-mark">t</span><span>trace<span class="brand-period">.</span></span></a>
     <nav class="menubar" aria-label="IDE menu bar">
-      <div class="menu"><button class="menu-btn" data-menu="file" aria-expanded="false">File</button><div class="menu-pop hidden" data-pop="file"><button data-cmd="newFile"><span>New VHDL File…</span><kbd>Ctrl+Alt+N</kbd></button><button data-cmd="openFiles"><span>Open Files / Project…</span><kbd>Ctrl+O</kbd></button><hr><button data-cmd="save"><span>Save &amp; Flash to Board</span><kbd>Ctrl+S</kbd></button><button data-cmd="saveProject"><span>Export Project JSON…</span></button><hr><button data-cmd="loadDemo"><span>Load Counter Demo</span></button><button data-cmd="closeTab"><span>Close Editor Tab</span></button></div></div>
+      <div class="menu"><button class="menu-btn" data-menu="file" aria-expanded="false">File</button><div class="menu-pop hidden" data-pop="file"><button data-cmd="home"><span>Home / Welcome Screen</span></button><button data-cmd="newProject"><span>New Project Wizard…</span></button><button data-cmd="newFile"><span>New VHDL File…</span><kbd>Ctrl+Alt+N</kbd></button><button data-cmd="openFiles"><span>Open Files / Project…</span><kbd>Ctrl+O</kbd></button><hr><button data-cmd="save"><span>Save &amp; Flash to Board</span><kbd>Ctrl+S</kbd></button><button data-cmd="saveProject"><span>Export Project JSON…</span></button><hr><button data-cmd="loadDemo"><span>Load Counter Demo</span></button><button data-cmd="closeTab"><span>Close Editor Tab</span></button></div></div>
       <div class="menu"><button class="menu-btn" data-menu="edit" aria-expanded="false">Edit</button><div class="menu-pop hidden" data-pop="edit"><button data-cmd="undo"><span>Undo</span><kbd>Ctrl+Z</kbd></button><button data-cmd="redo"><span>Redo</span><kbd>Ctrl+Y</kbd></button><hr><button data-cmd="comment"><span>Toggle Line Comment</span><kbd>Ctrl+/</kbd></button></div></div>
       <div class="menu"><button class="menu-btn" data-menu="view" aria-expanded="false">View</button><div class="menu-pop hidden" data-pop="view"><button data-cmd="viewExplorer"><span>Project Explorer</span></button><button data-cmd="viewPins"><span>Pin Planner</span></button><button data-cmd="toggleEditor"><span>Toggle Code Editor Pane</span><kbd>Ctrl+E</kbd></button><hr><button data-cmd="panelWaves"><span>Logic Analyzer (Waveforms)</span></button><button data-cmd="panelProblems"><span>Problems</span></button><button data-cmd="panelConsole"><span>Output Console</span></button><button data-cmd="panelTruth"><span>Truth Table Generator</span></button><button data-cmd="panelUart"><span>UART Serial Monitor</span></button><button data-cmd="panelBitstream"><span>Bitstream Inspector</span></button><hr><button data-cmd="photo"><span>Photo Studio</span><kbd>P</kbd></button><button data-cmd="theme"><span>Toggle Light / Dark Theme</span></button><button data-cmd="resetLayout"><span>Reset IDE Layout</span></button></div></div>
       <div class="menu"><button class="menu-btn" data-menu="run" aria-expanded="false">Build &amp; Sim</button><div class="menu-pop hidden" data-pop="run"><button data-cmd="flash"><span>Compile &amp; Flash to Board</span><kbd>Ctrl+B</kbd></button><button data-cmd="restart"><span>Restart Simulation</span></button><button data-cmd="step"><span>Step Clock Cycle</span><kbd>.</kbd></button><button data-cmd="run"><span>Run / Pause Simulation</span><kbd>Space</kbd></button></div></div>
@@ -37,6 +37,7 @@
     <div class="header-end"><button id="btnFocusBoard" class="btn" aria-pressed="false" title="Toggle code editor split pane (Ctrl+E)">Editor</button><span class="local-indicator"><i></i>Local workspace</span><button id="btnImport" class="btn dark">Open files <span>↗</span></button></div>
   </header>
   <nav id="rail" aria-label="Workspace panels">
+    <button id="btnHome" class="rail-btn" title="Home / Welcome screen" aria-label="Home screen"><svg viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg><span>Home</span></button>
     <button id="btnLibrary" class="rail-btn active" title="Project files" aria-label="Project files" aria-expanded="true"><svg viewBox="0 0 24 24"><path d="M3 7V5h7l2 2h9v13H3z"/></svg><span>Files</span></button>
     <button id="btnPins" class="rail-btn" title="Pin assignments" aria-label="Pin assignments"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4"/></svg><span>Pins</span></button>
     <button id="btnSignals" class="rail-btn active" title="Logic analyzer" aria-label="Toggle logic analyzer" aria-expanded="true"><svg viewBox="0 0 24 24"><path d="M2 16h5V6h7v10h8M2 21h20"/></svg><span>Signals</span></button>
@@ -338,6 +339,78 @@
     </div>
   </main>
   <footer class="bench-footer" id="statusBar"><span class="bench-state"><span id="statusPill" class="status-pill paused">Paused</span><span class="mode-label">Behavioral simulation</span><button id="sbProblems" class="sb-item mono" title="View compiler problems"><span id="sbErr">✖ 0</span> <span id="sbWarn">▲ 0</span></button></span><span class="simulation-note">Digital logic only <button id="btnLimits" class="text-btn">Model limits ↗</button></span><div class="sb-right"><span id="sbCursor" class="sb-item mono">Ln 1, Col 1</span><span id="sbLang" class="sb-item mono">VHDL-1993</span><label for="clkHz">Clock</label><select id="clkHz"><option value="1">1 Hz</option><option value="10">10 Hz</option><option value="100">100 Hz</option><option value="1000" selected>1 kHz</option><option value="10000">10 kHz</option><option value="50000000">50 MHz</option></select><label for="speed">Rate</label><input id="speed" type="range" min="0" max="100" value="55" aria-label="Simulation playback rate"><span id="rateLabel">1×</span><span id="roTime" class="mono">0 ns</span><button id="btnMute" class="text-btn muted" aria-pressed="true"><span id="muteLabel">Sound off</span></button></div></footer>
+  <section id="homeView" class="home-view" aria-label="Trace IDE Welcome Screen">
+    <header class="home-topbar">
+      <div class="home-brand-wrap">
+        <span class="brand"><span class="brand-mark">t</span><span>trace<span class="brand-period">.</span></span></span>
+        <span class="header-divider"></span>
+        <span class="home-subtitle">VHDL IDE &amp; 3D FPGA Hardware Simulator</span>
+        <span class="home-device-chip mono">RZ-EasyFPGA A2.2 · Cyclone IV EP4CE6E22C8N</span>
+      </div>
+      <div class="home-top-actions">
+        <button id="homeThemeBtn" class="btn" title="Switch between light and dark theme">Theme</button>
+        <button id="homeAboutBtn" class="btn" title="Simulation capabilities and limits">About</button>
+        <button id="homeContinueBtn" class="btn dark" title="Return to active IDE workbench (Esc)">Continue to Workbench <span>→</span></button>
+      </div>
+    </header>
+    <div class="home-body">
+      <div class="home-col home-left">
+        <div class="home-hero-card">
+          <span class="eyebrow">START</span>
+          <h1>Build &amp; flash VHDL onto a virtual Cyclone IV board<span>.</span></h1>
+          <p>Compile VHDL-1993/2002/2008 locally with GHDL, inspect real-time waveforms, and interact with the 3D RZ-EasyFPGA A2.2 development board.</p>
+          <div class="home-quick-btns">
+            <button id="homeNewProjectBtn" class="btn dark"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>New Project</span></button>
+            <button id="homeOpenBtn" class="btn"><svg viewBox="0 0 24 24"><path d="M3 7V5h7l2 2h9v13H3z"/></svg><span>Open Files / Project…</span></button>
+            <button id="homeDemoBtn" class="btn"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Counter Demo</span></button>
+          </div>
+        </div>
+        <form id="homeWizardForm" class="home-card home-wizard">
+          <div class="home-card-head">
+            <div><span class="eyebrow">PROJECT WIZARD</span><h2>Create new FPGA project</h2></div>
+            <span class="mono hint">EP4CE6E22C8N</span>
+          </div>
+          <div class="home-form-grid">
+            <label class="field"><span>Project name</span><input id="npName" class="search mono" value="fpga_lab" placeholder="fpga_lab" required></label>
+            <label class="field"><span>Top-level entity</span><input id="npEntity" class="search mono" value="fpga_lab" placeholder="fpga_lab" required></label>
+            <label class="field"><span>VHDL standard</span><select id="npStandard"><option value="08" selected>VHDL-2008</option><option value="93">VHDL-1993</option><option value="02">VHDL-2002</option></select></label>
+            <label class="field"><span>Hardware template</span><select id="npTemplate"><option value="board_io" selected>Full Board I/O Starter (Keys, LEDs, 7-Seg, Buzzer)</option><option value="counter">24-Bit Hex Counter &amp; Multiplexed 7-Seg</option><option value="keys_leds">Combinational Keys, DIP &amp; Active-Low LEDs</option><option value="uart_tx">UART 115200 8-N-1 Serial Transmitter</option><option value="buzzer">Piezo Buzzer Square-Wave Tone Synth</option><option value="blank">Minimal Blank VHDL Entity &amp; Architecture</option></select></label>
+          </div>
+          <div class="home-wizard-foot">
+            <span class="hint">Creates <code><span id="npFilePreview">fpga_lab.vhd</span></code> with default RZ-EasyFPGA A2.2 pin mappings.</span>
+            <button id="npSubmitBtn" type="submit" class="btn dark">Create &amp; Flash Project <span>→</span></button>
+          </div>
+        </form>
+      </div>
+      <div class="home-col home-right">
+        <div class="home-card">
+          <div class="home-card-head">
+            <div><span class="eyebrow">WORKSPACE HISTORY</span><h2>Recent projects</h2></div>
+            <button id="homeClearRecents" class="text-btn" type="button">Clear recent</button>
+          </div>
+          <div id="homeRecentList" class="home-recent-list"></div>
+        </div>
+        <div class="home-card">
+          <div class="home-card-head">
+            <div><span class="eyebrow">STARTER TEMPLATES</span><h2>Quick-start hardware labs</h2></div>
+          </div>
+          <div id="homeStarterGrid" class="home-starter-grid">
+            <button type="button" class="home-starter-item" data-starter="counter"><strong>Counter &amp; 4-Digit 7-Seg</strong><span>24-bit synchronous counter with multiplexed hex display &amp; lamp test</span></button>
+            <button type="button" class="home-starter-item" data-starter="board_io"><strong>Full Board I/O Template</strong><span>All physical pins pre-wired: Clock, Reset, S1–S4, LED1–LED4, 7-Seg, Buzzer</span></button>
+            <button type="button" class="home-starter-item" data-starter="keys_leds"><strong>Keys, DIP &amp; LED Logic</strong><span>Combinational active-low switch and indicator lab</span></button>
+            <button type="button" class="home-starter-item" data-starter="uart_tx"><strong>UART Serial Transmitter</strong><span>8-N-1 ASCII frame generator wired to Pin 114 (uart_txd)</span></button>
+          </div>
+        </div>
+        <div class="home-card home-lib-card">
+          <div class="home-card-head">
+            <div><span class="eyebrow">LOCAL DISK</span><h2>Local HDL library</h2></div>
+            <input id="homeHdlSearch" class="search" type="search" placeholder="Filter local HDL files…" aria-label="Filter local HDL files">
+          </div>
+          <div id="homeHdlList" class="home-hdl-list"><p class="empty">Reading local files…</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
 </div>
 <dialog id="keysDialog"><div class="dialog-head"><h2>Keyboard shortcuts</h2><button class="icon-btn" data-close="keysDialog" aria-label="Close shortcuts">×</button></div><div class="about-content"><dl><dt>Editor &amp; Build</dt><dd><code>Ctrl+S</code> / <code>Ctrl+B</code> Save &amp; Flash to board · <code>Ctrl+/</code> Toggle comment · <code>Tab</code> / <code>Shift+Tab</code> Indent / outdent · <code>Alt+↑/↓</code> Move line · <code>Ctrl+E</code> Toggle editor pane</dd><dt>Simulation &amp; Board</dt><dd><code>Space</code> Run / Pause · <code>.</code> Step cycle · Hold <code>1–4</code> Tactile keys S1–S4 · <code>Alt+1–4</code> Toggle DIP 1–4 · Hold <code>R</code> Reset · <code>V</code> Interact / Select mode · <code>F</code> Center selected part · <code>P</code> Photo Studio</dd></dl></div></dialog>
 <dialog id="aboutDialog"><div class="dialog-head"><h2>What this lab models</h2><button class="icon-btn" data-close="aboutDialog" aria-label="Close capabilities">×</button></div><div class="about-content"><p class="intro">A digital workbench.<br>Not a physical circuit solver.</p><dl><dt>Logic & timing</dt><dd>VHDL compiled and executed by the installed GHDL engine, connected through a native VPI bridge. Nine-state logic, native assertions, event timing, ideal clock stimulus and native VCD capture. The website itself is not a certified verification tool.</dd><dt>Board visualization</dt><dd>Photo-referenced component layout, active-low keys and LEDs, and multiplexed display persistence. The model is illustrative, not a dimensionally certified CAD model.</dd><dt>Not simulated</dt><dd>Voltage, current, power consumption, analog transients, signal integrity, metastability, thermal behavior, or FPGA place-and-route timing. Peripheral chips are visual references, not complete electronic models.</dd><dt>Files & projects</dt><dd>VHD/VHDL and VHO netlists compile locally; vendor netlists require their matching VHDL primitive libraries. CF files are GHDL indexes: include their source files and set the correct libraries. QSF imports pin assignments, not a Quartus build. SDF requires matching VITAL timing models and an instance path. HEX/MIF/MEM/TXT/DAT files are provided to the testbench as data; they do not configure the FPGA. VCD replays digital and real traces with selectable board scope. Verilog/SystemVerilog and proprietary bitstreams cannot execute in this GHDL installation.</dd><dt>Resource limits</dt><dd>Four simultaneous simulations, 100 source/data files, 512 observed native signals, 4096 bits per signal, 16 hierarchy levels. Native waveform capture stops at 64 MB; replay accepts 32 MB and 250,000 timestamps. Waveforms reject times outside the exact integer range rather than silently rounding. The analyzer retains recent changes; native VCD retains the captured history.</dd><dt>Local execution</dt><dd>Run only trusted HDL. GHDL testbenches execute locally and may access files; this workbench is not a security sandbox. Projects autosave in this browser and can be exported as JSON; simulation processes and waveform history are not restored after closing the page.</dd><dt>Physical hardware</dt><dd>No JTAG connection. SOF/POF files are inspected, never “programmed.” Verify pin assignments and I/O standards against your exact board schematic before using real hardware.</dd></dl></div></dialog>

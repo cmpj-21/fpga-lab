@@ -1,12 +1,158 @@
 // IDE shell controller: resizable panes, multi-tab VHDL code editor, problems diagnostics, menus and status bar.
 import { CodeEditor } from './editor.js';
+import { DEMO_SRC, DEMO_TOP } from './demo.js';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const LAYOUT_KEY = 'trace.layout.v1';
+const RECENTS_KEY = 'trace.recents.v1';
 const DEFAULT_LAYOUT = { leftW: 256, editorFrac: 42, panelH: 245 };
 const NAME_PATTERN = /^[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i;
 const STANDARDS = { '93': 'VHDL-1993', '02': 'VHDL-2002', '08': 'VHDL-2008' };
+
+function buildStarterSource(kind, entity) {
+  if (kind === 'counter') {
+    return DEMO_SRC.replaceAll(DEMO_TOP, entity);
+  }
+  if (kind === 'board_io') {
+    return `library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity ${entity} is
+  port (
+    clk       : in  std_logic;
+    reset_btn : in  std_logic;
+    s1, s2, s3, s4 : in  std_logic;
+    led1, led2, led3, led4 : out std_logic;
+    seven_seg : out std_logic_vector(7 downto 0);
+    dtube1, dtube2, dtube3, dtube4 : out std_logic;
+    beep      : out std_logic
+  );
+end entity ${entity};
+
+architecture rtl of ${entity} is
+begin
+  -- Active-low LEDs mirror active-low tactile keys / DIP switches S1..S4
+  led1 <= s1;
+  led2 <= s2;
+  led3 <= s3;
+  led4 <= s4;
+
+  -- Enable Digit 1 showing '0' (active-low segments: dp g f e d c b a)
+  dtube1 <= '0';
+  dtube2 <= '1';
+  dtube3 <= '1';
+  dtube4 <= '1';
+  seven_seg <= "11000000";
+
+  beep <= '0';
+end architecture rtl;
+`;
+  }
+  if (kind === 'keys_leds') {
+    return `library ieee;
+use ieee.std_logic_1164.all;
+
+entity ${entity} is
+  port (
+    s1, s2, s3, s4 : in  std_logic;
+    led1, led2, led3, led4 : out std_logic
+  );
+end entity ${entity};
+
+architecture rtl of ${entity} is
+begin
+  -- Active-low inputs (0 = pressed) and active-low LEDs (0 = lit)
+  led1 <= s1;
+  led2 <= s2;
+  led3 <= s1 or s2;   -- Lit when both S1 and S2 are pressed
+  led4 <= s3 and s4;  -- Lit when either S3 or S4 is pressed
+end architecture rtl;
+`;
+  }
+  if (kind === 'uart_tx') {
+    return `library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity ${entity} is
+  port (
+    clk       : in  std_logic;
+    reset_btn : in  std_logic;
+    s1        : in  std_logic;
+    uart_txd  : out std_logic := '1';
+    led1      : out std_logic := '1'
+  );
+end entity ${entity};
+
+architecture rtl of ${entity} is
+  -- 8-N-1 frame for ASCII 'A' (0x41): Stop(1) & "01000001" & Start(0)
+  constant FRAME : std_logic_vector(9 downto 0) := "1010000010";
+  signal bit_idx : integer range 0 to 9 := 0;
+  signal busy    : std_logic := '0';
+begin
+  led1 <= not busy;
+  process (clk)
+  begin
+    if rising_edge(clk) then
+      if reset_btn = '0' then
+        uart_txd <= '1';
+        busy <= '0';
+        bit_idx <= 0;
+      elsif busy = '0' then
+        uart_txd <= '1';
+        if s1 = '0' then
+          busy <= '1';
+          bit_idx <= 0;
+        end if;
+      else
+        uart_txd <= FRAME(bit_idx);
+        if bit_idx = 9 then
+          busy <= '0';
+        else
+          bit_idx <= bit_idx + 1;
+        end if;
+      end if;
+    end if;
+  end process;
+end architecture rtl;
+`;
+  }
+  if (kind === 'buzzer') {
+    return `library ieee;
+use ieee.std_logic_1164.all;
+
+entity ${entity} is
+  port (
+    clk       : in  std_logic;
+    reset_btn : in  std_logic;
+    s1        : in  std_logic;
+    beep      : out std_logic;
+    led1      : out std_logic
+  );
+end entity ${entity};
+
+architecture rtl of ${entity} is
+  signal tone : std_logic := '0';
+begin
+  process (clk)
+  begin
+    if rising_edge(clk) then
+      if reset_btn = '0' then
+        tone <= '0';
+      elsif s1 = '0' then
+        tone <= not tone;
+      end if;
+    end if;
+  end process;
+  beep <= tone and (not s1);
+  led1 <= s1;
+end architecture rtl;
+`;
+  }
+  return template(`${entity}.vhd`);
+}
 
 export function parseDiagnostics(text) {
   const found = [];
@@ -341,8 +487,177 @@ export function createIde(api) {
     api.toast(`Created ${name}. Press Ctrl+S or click Flash to compile.`);
   }
 
+  // ---------- home interface & recent projects ----------
+  function loadRecents() {
+    try {
+      const list = JSON.parse(localStorage.getItem(RECENTS_KEY) || '[]');
+      return Array.isArray(list) ? list : [];
+    } catch { return []; }
+  }
+  function saveRecents(list) {
+    try { localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0, 12))); } catch {}
+  }
+  function recordRecentProject(customTitle = '') {
+    if (!S.sources.length || !api.projectData) return;
+    const project = api.projectData();
+    const topName = project.top || S.sim?.top || project.sources[0]?.name.replace(/\.[^.]+$/, '') || 'fpga_project';
+    const title = customTitle || (topName === DEMO_TOP ? 'Counter demo' : topName);
+    const key = `${title.toLowerCase()}::${project.sources.map(s => s.name).join(',')}`;
+    const list = loadRecents().filter(item => item.key !== key);
+    list.unshift({
+      key,
+      title,
+      top: topName,
+      standard: project.standard || S.standard || '93',
+      files: project.sources.map(s => s.name),
+      updatedAt: Date.now(),
+      project,
+    });
+    saveRecents(list);
+  }
+  function fmtAgo(ts) {
+    const sec = Math.max(0, Math.floor((Date.now() - (ts || Date.now())) / 1000));
+    if (sec < 45) return 'Just now';
+    if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+    if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+    return new Date(ts).toLocaleDateString();
+  }
+  function renderHome() {
+    const box = $('#homeRecentList');
+    if (!box) return;
+    let recents = loadRecents();
+    if (!recents.length && S.sources.length) {
+      recordRecentProject();
+      recents = loadRecents();
+    }
+    box.replaceChildren();
+    if (!recents.length) {
+      const empty = document.createElement('p');
+      empty.className = 'empty';
+      empty.textContent = 'No recent projects yet. Create a new project or open a starter template.';
+      box.append(empty);
+      return;
+    }
+    for (const item of recents) {
+      const row = document.createElement('div');
+      row.className = 'home-recent-item';
+      const openBtn = document.createElement('button');
+      openBtn.type = 'button';
+      openBtn.className = 'home-recent-main';
+      const titleRow = document.createElement('div');
+      titleRow.className = 'hr-top';
+      const strong = document.createElement('strong');
+      strong.textContent = item.title;
+      const badge = document.createElement('span');
+      badge.className = 'hr-std mono';
+      badge.textContent = STANDARDS[item.standard] || 'VHDL';
+      const time = document.createElement('span');
+      time.className = 'hr-time';
+      time.textContent = fmtAgo(item.updatedAt);
+      titleRow.append(strong, badge, time);
+      const filesRow = document.createElement('div');
+      filesRow.className = 'hr-files mono';
+      filesRow.textContent = `${item.files?.join(', ') || 'No files'} · Top: ${item.top || 'auto'}`;
+      openBtn.append(titleRow, filesRow);
+      openBtn.onclick = async () => {
+        try {
+          for (const name of [...docs.keys()]) closeTab(name, true);
+          api.restoreProject(item.project);
+          openFirst();
+          showHome(false);
+          api.markDirty();
+          await api.build(item.project.top || '');
+        } catch (err) {
+          api.toast(err.message, 'err');
+        }
+      };
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'home-recent-del';
+      delBtn.textContent = '×';
+      delBtn.title = `Remove ${item.title} from recent projects`;
+      delBtn.setAttribute('aria-label', delBtn.title);
+      delBtn.onclick = e => {
+        e.stopPropagation();
+        saveRecents(loadRecents().filter(r => r.key !== item.key));
+        renderHome();
+      };
+      row.append(openBtn, delBtn);
+      box.append(row);
+    }
+  }
+  function showHome(visible = true) {
+    const view = $('#homeView');
+    if (!view) return;
+    if (visible) renderHome();
+    view.classList.toggle('hidden', !visible);
+    $('#btnHome')?.classList.toggle('active', visible);
+  }
+  async function launchTemplateProject({ name, entity, standard = '08', templateKind = 'board_io' }) {
+    const cleanEntity = entity.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
+    if (!/^[a-z][a-z0-9_]*$/i.test(cleanEntity)) {
+      api.toast('Top-level entity must start with a letter and use letters, digits or underscores.', 'err');
+      return;
+    }
+    const fileName = `${cleanEntity}.vhd`;
+    const code = buildStarterSource(templateKind, cleanEntity);
+    for (const tabName of [...docs.keys()]) closeTab(tabName, true);
+    const project = {
+      format: 'trace-project',
+      version: 1,
+      sources: [{ name: fileName, text: code, library: 'work' }],
+      assignments: [],
+      top: cleanEntity,
+      topLibrary: 'work',
+      standard,
+      generics: '',
+      sdf: null,
+    };
+    api.restoreProject(project);
+    recordRecentProject(name || cleanEntity);
+    openFirst();
+    showHome(false);
+    api.markDirty();
+    await api.build(cleanEntity);
+  }
+  function populateHomeHdl(groups = []) {
+    const container = $('#homeHdlList');
+    if (!container) return;
+    container.replaceChildren();
+    if (!groups.length) {
+      container.innerHTML = '<p class="empty">No local HDL files discovered.</p>';
+      return;
+    }
+    for (const group of groups) {
+      for (const file of group.files) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'home-hdl-item';
+        btn.dataset.search = `${group.dir}/${file.name}`.toLowerCase();
+        const kind = document.createElement('span');
+        kind.className = 'fk';
+        kind.textContent = file.kind.toUpperCase();
+        const pathSpan = document.createElement('span');
+        pathSpan.className = 'mono';
+        pathSpan.textContent = `${group.dir}/${file.name}`;
+        btn.append(kind, pathSpan);
+        btn.onclick = async () => {
+          try {
+            const response = await fetch('/api/hdl/file?path=' + encodeURIComponent(file.rel));
+            if (!response.ok) throw new Error('File could not be read.');
+            showHome(false);
+            await api.loadFiles([new File([await response.blob()], file.name)]);
+          } catch (e) { api.toast(e.message, 'err'); }
+        };
+        container.append(btn);
+      }
+    }
+  }
+
   // ---------- menus ----------
   const commands = {
+    home: () => showHome(true),
+    newProject: () => { showHome(true); $('#npName')?.focus(); },
     newFile: showNewFile,
     openFiles: () => $('#fileInput').click(),
     save: saveAndFlash,
@@ -421,6 +736,47 @@ export function createIde(api) {
     if ($('#sbProblems')) $('#sbProblems').onclick = () => api.openTools('problems');
     $('#standardSelect')?.addEventListener('change', updateStatus);
     matchMedia('(max-width: 1000px)').addEventListener('change', e => { if (e.matches && $('#sourceDialog')?.open) setEditorPaneOpen(false); });
+    // Home Interface wiring
+    $('#topbar .brand')?.addEventListener('click', e => { e.preventDefault(); showHome(true); });
+    $('#btnHome')?.addEventListener('click', () => showHome(!$('#homeView') || $('#homeView').classList.contains('hidden')));
+    $('#homeContinueBtn')?.addEventListener('click', () => showHome(false));
+    $('#homeThemeBtn')?.addEventListener('click', () => $('#btnTheme')?.click());
+    $('#homeAboutBtn')?.addEventListener('click', () => $('#btnAbout')?.click());
+    $('#homeOpenBtn')?.addEventListener('click', () => $('#fileInput')?.click());
+    $('#homeDemoBtn')?.addEventListener('click', () => { showHome(false); $('#btnDemo')?.click(); });
+    $('#homeNewProjectBtn')?.addEventListener('click', () => { $('#npName')?.focus(); $('#npName')?.select(); });
+    $('#homeClearRecents')?.addEventListener('click', () => { saveRecents([]); renderHome(); });
+    let entityTouched = false;
+    $('#npEntity')?.addEventListener('input', () => {
+      entityTouched = true;
+      const ent = $('#npEntity').value.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_') || 'fpga_lab';
+      if ($('#npFilePreview')) $('#npFilePreview').textContent = `${ent}.vhd`;
+    });
+    $('#npName')?.addEventListener('input', () => {
+      const slug = $('#npName').value.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'fpga_lab';
+      const ent = /^[a-z]/i.test(slug) ? slug : 'p_' + slug;
+      if (!entityTouched && $('#npEntity')) $('#npEntity').value = ent;
+      if ($('#npFilePreview')) $('#npFilePreview').textContent = `${($('#npEntity')?.value || ent)}.vhd`;
+    });
+    $('#homeWizardForm')?.addEventListener('submit', e => {
+      e.preventDefault();
+      launchTemplateProject({
+        name: $('#npName').value.trim() || 'fpga_lab',
+        entity: $('#npEntity').value.trim() || 'fpga_lab',
+        standard: $('#npStandard').value || '08',
+        templateKind: $('#npTemplate').value || 'board_io',
+      });
+    });
+    $$('[data-starter]').forEach(btn => btn.addEventListener('click', () => {
+      const kind = btn.dataset.starter;
+      const names = { counter: ['Counter & 7-Seg Demo', DEMO_TOP, '93'], board_io: ['Board I/O Starter', 'board_top', '08'], keys_leds: ['Keys & LEDs Logic', 'keys_leds', '08'], uart_tx: ['UART Transmitter', 'uart_hello', '08'] };
+      const [title, ent, std] = names[kind] || ['FPGA Starter', 'fpga_lab', '08'];
+      launchTemplateProject({ name: title, entity: ent, standard: std, templateKind: kind });
+    }));
+    $('#homeHdlSearch')?.addEventListener('input', e => {
+      const q = e.target.value.toLowerCase();
+      $$('#homeHdlList .home-hdl-item').forEach(item => { item.hidden = !item.dataset.search.includes(q); });
+    });
     renderProblems(); updateStatus(); syncEditorVisibility();
   }
   wire();
@@ -428,6 +784,7 @@ export function createIde(api) {
   return {
     openFile, closeTab, activate, commitAll, saveAndFlash, syncFromSources, openFirst, updateStatus,
     setProblems, reportBuildFailure, resetLayout, setEditorPaneOpen,
+    showHome, renderHome, recordRecentProject, populateHomeHdl,
     get active() { return active; },
     get tabs() { return [...tabs]; },
     get problems() { return problems; },

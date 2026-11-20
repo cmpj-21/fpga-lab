@@ -162,6 +162,7 @@ async function build(top = $('#topSelect').value) {
     log(`${result.backend}\nCompiled ${result.top}. ${result.signals.length} observable signals.`);
     result.diagnostics.forEach(d => log(d, 'warning'));
     ide?.setProblems(parseDiagnostics((result.diagnostics || []).join('\n')));
+    ide?.recordRecentProject();
     toast(`Compiled ${result.top}`, 'ok');
     waves.fit();
   } catch (e) {
@@ -457,6 +458,7 @@ async function loadFiles(files) {
     if (!['vhd','vhdl','vho','cf','hex','mif','mem','txt','dat','qsf','sdf','vcd','json','sof','pof'].includes(ext)) throw new Error(`Unsupported artifact: .${ext}. See About for supported formats.`);
   }
   pause(); S.importing = true; setStatus();
+  ide?.showHome(false);
   try {
     if (['sof','pof'].includes(extensions[0])) return await loadBitstream(await files[0].arrayBuffer(), files[0].name);
     const loaded = await Promise.all(files.map(async (file, i) => ({ name: file.name, text: await file.text(), ext: extensions[i] })));
@@ -513,6 +515,7 @@ async function fetchTree() {
       }
       wrap.append(heading, list); $('#hdlTree').append(wrap);
     }
+    ide?.populateHomeHdl(result.groups);
     if (!result.groups.length) $('#hdlTree').textContent = 'No HDL files found. Open files to begin.';
   } catch { $('#hdlTree').textContent = 'Local library unavailable. Open files to begin.'; }
 }
@@ -670,7 +673,7 @@ function wire() {
     if (keys[e.key.toLowerCase()]) { e.preventDefault(); keyInput(keys[e.key.toLowerCase()], true); }
     if (e.code === 'Space' && e.target.tagName !== 'BUTTON') { e.preventDefault(); $('#btnRun').click(); }
     if (e.key === '.') $('#btnStep').click();
-    if (e.key === 'Escape') { if ($('#center').classList.contains('photo-mode')) togglePhotoMode(false); $('#right').classList.add('hidden'); $('#deck').classList.add('hidden'); $('#app').classList.remove('mobile-library'); board?.selectPart(null); syncNavigation(); }
+    if (e.key === 'Escape') { if ($('#homeView') && !$('#homeView').classList.contains('hidden')) { ide?.showHome(false); return; } if ($('#center').classList.contains('photo-mode')) togglePhotoMode(false); $('#right').classList.add('hidden'); $('#deck').classList.add('hidden'); $('#app').classList.remove('mobile-library'); board?.selectPart(null); syncNavigation(); }
   });
   window.addEventListener('keyup', e => { if (keys[e.key.toLowerCase()]) keyInput(keys[e.key.toLowerCase()], false); });
   window.addEventListener('blur', releaseKeys);
@@ -886,12 +889,14 @@ async function boot() {
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; }).catch(() => {});
   try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed), onDip: index => toggleDip(index), onSelect: part => renderInspector(part), onPower: on => { $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.4); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames')); applyTheme(document.documentElement.dataset.theme); wire();
-  ide = createIde({ S, toast, markDirty, build, renderSources, openTools, syncNavigation });
+  ide = createIde({ S, toast, markDirty, build, renderSources, openTools, syncNavigation, projectData, restoreProject, loadFiles });
   fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);
   window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, get ide() { return ide; }, build, advance, loadFiles, toggleDip };
   try { const saved = localStorage.getItem('trace.project.v1'); if (saved) restoreProject(JSON.parse(saved)); } catch (e) { importError(new Error(`Saved project could not be restored: ${e.message}`)); S.sources = []; renderSources(); setStatus(); return; }
   ide.openFirst();
+  ide.showHome(true);
   await build();
+  ide.renderHome();
 }
 boot();
