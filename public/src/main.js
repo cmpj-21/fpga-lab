@@ -105,12 +105,27 @@ function renderSdf() { $('#sdfControls').classList.toggle('hidden', !S.sdf); $('
 function allEntities() {
   return [...new Set(S.sources.flatMap(s => [...s.text.replace(/--[^\n]*/g, '').matchAll(/\bentity\s+([a-z]\w*)\s+is\b/gi)].map(m => m[1].toLowerCase())))];
 }
+function openEditorTab(name) {
+  const dialog = $('#sourceDialog');
+  if (!dialog.open) dialog.show();
+  $('#tabFileName').textContent = name;
+  syncDocTabs();
+  requestAnimationFrame(() => $('#sourceEditor').focus());
+}
+function syncDocTabs() {
+  const editing = $('#sourceDialog').open;
+  $('#tabFile').classList.toggle('hidden', !editing);
+  $('#tabFile').classList.toggle('active', editing);
+  $('#tabFile').setAttribute('aria-selected', String(editing));
+  $('#tabBoard').classList.toggle('active', !editing);
+  $('#tabBoard').setAttribute('aria-selected', String(!editing));
+}
 function renderSources() {
   $('#srcList').replaceChildren(); $('#srcCount').textContent = S.sources.length;
   S.sources.forEach((s, i) => {
     const li = document.createElement('li'); const kind = document.createElement('span'); kind.className = 'src-kind'; kind.textContent = s.name.split('.').pop().toUpperCase();
     const name = document.createElement('button'); name.className = 'src-name'; name.textContent = s.name; name.title = `Edit ${s.name}`;
-    name.onclick = () => { sourceIndex = i; $('#sourceName').textContent = s.name; $('#sourceEditor').value = s.text; $('#sourceLibrary').value = s.library || 'work'; $('#sourceDialog').showModal(); };
+    name.onclick = () => { sourceIndex = i; $('#sourceName').textContent = s.name; $('#sourceEditor').value = s.text; $('#sourceLibrary').value = s.library || 'work'; openEditorTab(s.name); };
     const remove = document.createElement('button'); remove.className = 'src-x'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${s.name}`);
     remove.onclick = () => { if (S.building || S.importing) return; S.sources.splice(i, 1); renderSources(); markDirty(); toast('Source removed. Build to apply changes.'); };
     li.append(kind, name, remove); $('#srcList').append(li);
@@ -858,6 +873,10 @@ function wire() {
   $$('[data-ltab]').forEach(b => b.onclick = () => leftTab(b.dataset.ltab)); $$('[data-rtab]').forEach(b => b.onclick = () => openTools(b.dataset.rtab));
   for (const id of ['btnAbout', 'btnLimits']) $('#' + id).onclick = () => $('#aboutDialog').showModal();
   $$('[data-close]').forEach(b => b.onclick = () => $('#' + b.dataset.close).close());
+  $('#sourceDialog').addEventListener('close', syncDocTabs);
+  $('#sourceDialog').addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); $('#sourceDialog').close(); } });
+  $('#tabBoard').onclick = () => $('#sourceDialog').close();
+  $('#tabFileClose').onclick = () => $('#sourceDialog').close();
   $('#saveSource').onclick = () => { const library = $('#sourceLibrary').value.trim(); if (!/^[a-z][a-z0-9_]*$/i.test(library)) return toast('Enter a valid VHDL library name.', 'err'); if (S.building || !S.sources[sourceIndex]) return; S.sources[sourceIndex].library = library; S.sources[sourceIndex].text = $('#sourceEditor').value; $('#sourceDialog').close(); renderSources(); markDirty(); build(); };
   $('#consoleClear').onclick = () => { $('#consoleOut').replaceChildren(); $('#consoleCount').textContent = consoleCount = 0; };
   $('#consoleCopy').onclick = copyConsole;

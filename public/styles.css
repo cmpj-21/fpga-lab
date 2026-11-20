@@ -49,3 +49,30 @@ dialog{border:1px solid var(--line);border-radius:13px;padding:0;color:var(--tex
 .pm-bottom-bar{position:relative;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 18px;background:linear-gradient(0deg,rgba(18,22,17,.78) 0%,transparent 100%);pointer-events:auto;flex-wrap:wrap}.pm-shutter-group{display:flex;align-items:center;gap:8px}.pm-shutter-btn{background:#d2e991!important;color:#1c2216!important;border-color:#b8d46b!important;font-weight:650;padding:8px 15px}.pm-shutter-btn:hover{background:#e1f2b0!important}.pm-filmstrip{display:flex;align-items:center;gap:8px;overflow-x:auto;max-width:calc(100% - 310px);padding:2px 0}.pm-thumb{position:relative;height:40px;border-radius:5px;overflow:hidden;border:1px solid rgba(255,255,255,.35);cursor:pointer;flex-shrink:0;background:#141813;padding:0}.pm-thumb img{height:100%;width:auto;display:block}.pm-thumb span{position:absolute;right:3px;bottom:2px;background:#000b;color:#fff;font:7px var(--mono);padding:1px 3px;border-radius:2px}.photo-studio.hud-hidden :is(#pmDock,#pmBottomBar,.pm-brand,.pm-aspect-btns,#pmGridSelect,#pmFocusPickBtn,#pmTheaterBtn){opacity:0;pointer-events:none}
 [data-theme=dark] .gfx-acc{background:var(--inset);border-color:var(--line)}[data-theme=dark] .gfx-acc[open] summary{background:var(--elevated);border-color:var(--line)}[data-theme=dark] #center.bg-transparent{background-image:linear-gradient(45deg,#283024 25%,transparent 25%),linear-gradient(-45deg,#283024 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#283024 75%),linear-gradient(-45deg,transparent 75%,#283024 75%)}[data-theme=dark] .pm-dock{background:#1c211af2;border-color:var(--line);box-shadow:0 16px 44px #0009}[data-theme=dark] .pm-tabs{background:var(--inset)}[data-theme=dark] .pm-tab.active{background:var(--surface);border-color:var(--accent)}[data-theme=dark] .pm-select{background:#171c16cc;border-color:var(--line);color:var(--text)}[data-theme=dark] #pmBottomBar .text-btn{color:#d5decb}
 @media(max-width:700px){.deck{width:225px}.pm-dock{top:auto;bottom:62px;left:10px;right:10px;width:auto;max-width:none;max-height:46%}.pm-filmstrip{max-width:100%}}
+/* IDE shell: document tabs, docked editor pane, full-width status bar */
+@media(min-width:701px){#app{grid-template-rows:46px minmax(0,1fr) 28px}}
+#stage{position:relative;display:flex;flex-direction:column;flex:1 1 auto;min-height:310px;min-width:0}
+#stage>#center{flex:1 1 auto}
+.bench-heading{padding:0;align-items:stretch;gap:0}
+.doc-tabs{display:flex;align-items:stretch;min-width:0;overflow-x:auto}
+.doc-tab{display:flex;align-items:center;gap:7px;padding:0 14px;border:0;border-right:1px solid var(--line);border-radius:0;background:transparent;color:var(--muted);font-size:11px;font-weight:550;white-space:nowrap}
+.doc-tab svg{width:14px;height:14px}
+.doc-tab:hover{color:var(--text)}
+.doc-tab.active{background:var(--surface);color:var(--text);box-shadow:inset 0 2px 0 var(--green);border-bottom:1px solid var(--surface);margin-bottom:-1px}
+.doc-tab-x{border:0;background:transparent;color:var(--muted);font-size:15px;line-height:1;padding:1px 5px;margin-right:-6px;border-radius:4px}
+.doc-tab-x:hover{background:var(--line);color:var(--text)}
+#sourceDialog.editor-pane{position:absolute;inset:0;margin:0;width:auto;height:auto;max-width:none;max-height:none;border:0;border-radius:0;box-shadow:none;z-index:8;flex-direction:column;background:var(--surface)}
+#sourceDialog.editor-pane[open]{display:flex}
+.editor-pane .dialog-head{padding:0 14px;height:34px;min-height:34px;background:#fafbf7}
+.editor-pane .dialog-head>div{display:flex;align-items:center;gap:10px}
+.editor-pane .dialog-head .eyebrow{display:inline;margin:0;font-size:9px}
+.editor-pane .dialog-head h2{font:12px var(--mono);letter-spacing:0}
+.editor-pane #sourceEditor{flex:1;height:auto;min-height:0;resize:none;padding:14px 18px;font-size:12px;line-height:1.7}
+.editor-pane .dialog-foot{padding:6px 14px;border-top:1px solid var(--line);background:#fafbf7}
+.bench-footer{grid-column:1/-1;grid-row:3;background:#fafbf7}
+.bench-footer .bench-state{display:flex;flex-direction:row;align-items:center;gap:10px}
+.bench-footer .status-pill{font-size:10px}
+.bench-footer .mode-label{font-size:9px}
+@media(max-width:700px){#stage{flex:initial}.doc-tab{padding:0 10px}}
+[data-theme=dark] .editor-pane :is(.dialog-head,.dialog-foot){background:var(--inset)}
+[data-theme=dark] .bench-footer{background:var(--inset)}
