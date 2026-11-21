@@ -840,7 +840,7 @@ function reloadQsfText(text, fileName = 'project.qsf') {
   } catch {}
 }
 const MAX_SIM_FS = 1.8e19;
-let adaptiveMaxCycles = 8192;
+let adaptiveMaxCycles = 65536;
 function remainingSimCycles() {
   if (!S.sim || S.vcd) return Infinity;
   const stepFs = 2 * Number(halfPeriod()) * 10 ** (15 + (S.sim.precision ?? -15));

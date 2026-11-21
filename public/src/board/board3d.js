@@ -63,7 +63,7 @@ export async function createBoard3D(canvas, opts = {}) {
   }
   syncCameraButtons();
   canvas.addEventListener('contextmenu', event => event.preventDefault());
-  const segments = Array.from({ length: 4 }, (_, digit) => ({ segs: 0, latched: 0, enabled: false, lastActive: -Infinity, energy: new Float32Array(8),
+  const segments = Array.from({ length: 4 }, (_, digit) => ({ segs: 0, latched: 0, enabled: false, lastActive: -Infinity, energy: new Float32Array(8), segLastLit: new Float64Array(8).fill(-Infinity),
     meshes: Array.from({ length: 8 }, (_, bit) => {
       const mesh = model.getObjectByName(`segment_${digit}_${bit}`);
       mesh.material = mesh.material.clone();
@@ -406,16 +406,24 @@ export async function createBoard3D(canvas, opts = {}) {
       led.mesh.material.emissiveIntensity = on ? .7 + state.glow * 2.4 : 0;
       led.mesh.material.color.setHex(led.id === 'pwrled' ? (on ? 0x4fd577 : 0x183520) : (on ? 0xf55f48 : 0x491c20));
     }
-    const decay = state.persistence > 0 ? Math.exp(-dt / (0.045 + state.persistence * 0.38)) : 0;
+    const holdMs = state.persistence > 0 ? 70 + state.persistence * 190 : 0;
+    const fadeMs = state.persistence > 0 ? 35 + state.persistence * 55 : 1;
     const segOffColor = new THREE.Color(0x361c22), segOnColor = new THREE.Color(0xe84e3c);
     for (const digit of segments) {
       for (let bit = 0; bit < 8; bit++) {
         const activeNow = state.power && digit.enabled && !!(digit.segs & (1 << bit));
-        if (activeNow) digit.energy[bit] = 1;
-        else if (!state.power) digit.energy[bit] = 0;
-        else {
-          digit.energy[bit] *= decay;
-          if (digit.energy[bit] < 0.01) digit.energy[bit] = 0;
+        if (activeNow) {
+          digit.segLastLit[bit] = now;
+          digit.energy[bit] = 1;
+        } else if (!state.power || state.persistence <= 0) {
+          digit.energy[bit] = 0;
+        } else {
+          const age = now - digit.segLastLit[bit];
+          if (age <= holdMs) digit.energy[bit] = 1;
+          else {
+            const e = Math.max(0, 1 - (age - holdMs) / fadeMs);
+            digit.energy[bit] = e * e;
+          }
         }
         const e = digit.energy[bit];
         const material = digit.meshes[bit].material;
@@ -450,15 +458,18 @@ export async function createBoard3D(canvas, opts = {}) {
     setSegDigit(index, segs, enabled) {
       const digit = segments[index]; digit.segs = segs; digit.enabled = enabled;
       if (enabled) {
+        const t = performance.now();
         digit.latched = segs;
-        digit.lastActive = performance.now();
+        digit.lastActive = t;
         if (state.power) {
-          for (let b = 0; b < 8; b++) if (segs & (1 << b)) digit.energy[b] = 1;
+          for (let b = 0; b < 8; b++) {
+            if (segs & (1 << b)) { digit.segLastLit[b] = t; digit.energy[b] = 1; }
+          }
         }
       }
     },
     clearOutputs() {
-      for (const digit of segments) { Object.assign(digit, { segs: 0, latched: 0, enabled: false, lastActive: -Infinity }); digit.energy.fill(0); }
+      for (const digit of segments) { Object.assign(digit, { segs: 0, latched: 0, enabled: false, lastActive: -Infinity }); digit.energy.fill(0); digit.segLastLit.fill(-Infinity); }
       for (const led of leds) led.on = false;
     },
     get displayState() {
