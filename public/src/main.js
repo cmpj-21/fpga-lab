@@ -105,6 +105,7 @@ function uiSnapshot() {
     about: $('#aboutDialog')?.open ? 'open' : 'closed',
     keysDlg: $('#keysDialog')?.open ? 'open' : 'closed',
     homeDlg: $('#homeConfirmDialog')?.open ? 'open' : 'closed',
+    newProjDlg: $('#newProjectDialog')?.open ? 'open' : 'closed',
     menu: $$('.menu-btn[aria-expanded="true"]')[0]?.dataset.menu || 'closed',
     theme: document.documentElement.dataset.theme || 'light',
     power: S.power ? 'on' : 'off',
@@ -128,7 +129,7 @@ function uiSnapshot() {
   };
 }
 function diffSnapshot(before, after) {
-  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tab', 'editor', 'left', 'waves', 'right', 'deck', 'about', 'keysDlg', 'homeDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
+  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tab', 'editor', 'left', 'waves', 'right', 'deck', 'about', 'keysDlg', 'homeDlg', 'newProjDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
   const out = [];
   for (const k of keys) if (before[k] !== after[k]) out.push(`${k}:${before[k]}->${after[k]}`);
   return out;
@@ -143,7 +144,7 @@ function trackUiAction(kind, el, detail = '') {
     recordActionLine(`#${id} ${kind.padEnd(8)} ${target} -> BLOCKED (0ms) [reason:control disabled | status:${before.status} | view:${before.view}]`);
     return;
   }
-  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnSaveProject|#btnVcd|#btnImport|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeNewProjectBtn|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
+  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnSaveProject|#btnVcd|#btnImport|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
   setTimeout(async () => {
     await new Promise(r => requestAnimationFrame(r));
     const waitStart = performance.now();

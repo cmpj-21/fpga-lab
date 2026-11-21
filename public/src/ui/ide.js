@@ -687,10 +687,16 @@ export function createIde(api) {
     captureBaseline(projectTitle);
     showHome(false);
   }
+  function openNewProjectWizard() {
+    const dlg = $('#newProjectDialog');
+    if (!dlg) return;
+    if (!dlg.open) dlg.showModal();
+    requestAnimationFrame(() => { $('#npName')?.focus(); $('#npName')?.select(); });
+  }
   function requestReturnHome({ focusWizard = false } = {}) {
     const view = $('#homeView');
     if (!view || !view.classList.contains('hidden')) {
-      if (focusWizard) { $('#npName')?.focus(); $('#npName')?.select(); }
+      if (focusWizard) openNewProjectWizard();
       return;
     }
     pendingFocusWizard = focusWizard;
@@ -698,6 +704,7 @@ export function createIde(api) {
     if (!dlg) {
       api.stopAllSimulations?.();
       showHome(true);
+      if (focusWizard) openNewProjectWizard();
       return;
     }
     if ($('#homeConfirmProject')) $('#homeConfirmProject').textContent = currentProjectTitle();
@@ -716,8 +723,7 @@ export function createIde(api) {
     showHome(true);
     if (pendingFocusWizard) {
       pendingFocusWizard = false;
-      $('#npName')?.focus();
-      $('#npName')?.select();
+      openNewProjectWizard();
     }
     api.toast('Saved project changes. All simulations stopped.');
   }
@@ -738,12 +744,11 @@ export function createIde(api) {
     showHome(true);
     if (pendingFocusWizard) {
       pendingFocusWizard = false;
-      $('#npName')?.focus();
-      $('#npName')?.select();
+      openNewProjectWizard();
     }
     api.toast('Discarded recent changes. All simulations stopped.');
   }
-  async function launchTemplateProject({ name, entity, standard = '08', templateKind = 'board_io' }) {
+  async function launchTemplateProject({ name, entity, standard = '08', templateKind = 'board_io', extraFiles = '' }) {
     const cleanEntity = entity.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
     if (!/^[a-z][a-z0-9_]*$/i.test(cleanEntity)) {
       api.toast('Top-level entity must start with a letter and use letters, digits or underscores.', 'err');
@@ -754,11 +759,23 @@ export function createIde(api) {
     try { prevStorage = localStorage.getItem('trace.project.v1'); } catch {}
     const fileName = `${cleanEntity}.vhd`;
     const code = buildStarterSource(templateKind, cleanEntity);
+    const sources = [{ name: fileName, text: code, library: 'work' }];
+    const extras = String(extraFiles || '').split(',').map(s => s.trim()).filter(Boolean);
+    for (let raw of extras) {
+      if (!/\.[a-z0-9]+$/i.test(raw)) raw += '.vhd';
+      if (!NAME_PATTERN.test(raw)) {
+        api.toast(`Invalid additional filename: ${raw}`, 'err');
+        return;
+      }
+      if (!sources.some(s => s.name.toLowerCase() === raw.toLowerCase())) {
+        sources.push({ name: raw, text: template(raw), library: 'work' });
+      }
+    }
     for (const tabName of [...docs.keys()]) closeTab(tabName, true);
     const project = {
       format: 'trace-project',
       version: 1,
-      sources: [{ name: fileName, text: code, library: 'work' }],
+      sources,
       assignments: [],
       top: cleanEntity,
       topLibrary: 'work',
@@ -766,12 +783,14 @@ export function createIde(api) {
       generics: '',
       sdf: null,
     };
+    $('#newProjectDialog')?.close();
     api.restoreProject(project);
-    openFirst();
+    for (const src of sources) openFile(src.name, { focus: false });
+    openFile(fileName);
     captureBaseline(name || cleanEntity, { prevRecents, prevStorage });
     showHome(false);
     api.markDirty();
-    api.toast(`Loaded ${name || cleanEntity}. Click Build design or Flash to compile.`);
+    api.toast(`Created ${name || cleanEntity} (${sources.length} file${sources.length === 1 ? '' : 's'}). Click Build & Compile when ready.`);
   }
   function populateHomeHdl(groups = []) {
     const container = $('#homeHdlList');
@@ -917,27 +936,33 @@ export function createIde(api) {
       $('#btnDemo')?.click();
       captureBaseline('Counter demo', { prevRecents, prevStorage });
     });
-    $('#homeNewProjectBtn')?.addEventListener('click', () => { $('#npName')?.focus(); $('#npName')?.select(); });
+    $('#homeNewProjectBtn')?.addEventListener('click', () => openNewProjectWizard());
     $('#homeClearRecents')?.addEventListener('click', () => { saveRecents([]); renderHome(); });
     let entityTouched = false;
+    const syncWizardPreview = () => {
+      const ent = ($('#npEntity')?.value || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '_') || 'fpga_lab';
+      const extras = ($('#npExtraFiles')?.value || '').split(',').map(s => s.trim()).filter(Boolean).map(s => /\.[a-z0-9]+$/i.test(s) ? s : `${s}.vhd`);
+      if ($('#npFilePreview')) $('#npFilePreview').textContent = [`${ent}.vhd`, ...extras].join(', ');
+    };
     $('#npEntity')?.addEventListener('input', () => {
       entityTouched = true;
-      const ent = $('#npEntity').value.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_') || 'fpga_lab';
-      if ($('#npFilePreview')) $('#npFilePreview').textContent = `${ent}.vhd`;
+      syncWizardPreview();
     });
     $('#npName')?.addEventListener('input', () => {
       const slug = $('#npName').value.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'fpga_lab';
       const ent = /^[a-z]/i.test(slug) ? slug : 'p_' + slug;
       if (!entityTouched && $('#npEntity')) $('#npEntity').value = ent;
-      if ($('#npFilePreview')) $('#npFilePreview').textContent = `${($('#npEntity')?.value || ent)}.vhd`;
+      syncWizardPreview();
     });
+    $('#npExtraFiles')?.addEventListener('input', syncWizardPreview);
     $('#homeWizardForm')?.addEventListener('submit', e => {
       e.preventDefault();
       launchTemplateProject({
         name: $('#npName').value.trim() || 'fpga_lab',
         entity: $('#npEntity').value.trim() || 'fpga_lab',
         standard: $('#npStandard').value || '08',
-        templateKind: $('#npTemplate').value || 'board_io',
+        templateKind: $('#npTemplate').value || 'blank',
+        extraFiles: $('#npExtraFiles')?.value || '',
       });
     });
     $$('[data-starter]').forEach(btn => btn.addEventListener('click', () => {
