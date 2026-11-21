@@ -425,6 +425,7 @@ export async function createBoard3D(canvas, opts = {}) {
   let lastRender = 0;
   function frame(now) {
     requestAnimationFrame(frame);
+    if (!canvas.clientWidth || !canvas.clientHeight) { previous = now; return; }
     if (studio?.gfx.fpsCap > 0 && now - lastRender < (1000 / studio.gfx.fpsCap) * 0.92) return;
     lastRender = now;
     const dt = Math.min(.05, (now - previous) / 1000); previous = now;

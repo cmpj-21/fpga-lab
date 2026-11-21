@@ -236,7 +236,9 @@ export function createIde(api) {
   }
 
   // ---------- layout (resizable panes) ----------
+  let boardPaneOpen = true;
   function computeMinTopHeight() {
+    if (!boardPaneOpen || $('#ideMain')?.classList.contains('board-closed')) return 140;
     const headH = $('.board-pane-head')?.offsetHeight || 34;
     const tbH = $('#boardPane > .view-toolbar')?.offsetHeight || 40;
     const ioH = $('#inputBar')?.offsetHeight || 44;
@@ -245,8 +247,10 @@ export function createIde(api) {
     return headH + tbH + ioH + vInH + 110;
   }
   function clampLayoutBounds() {
-    const mainRect = $('#ideMain')?.getBoundingClientRect();
-    if (mainRect && mainRect.width > 560 && !$('#ideMain')?.classList.contains('editor-closed')) {
+    const ideMain = $('#ideMain');
+    const bothClosed = ideMain?.classList.contains('editor-closed') && ideMain?.classList.contains('board-closed');
+    const mainRect = ideMain?.getBoundingClientRect();
+    if (mainRect && mainRect.width > 560 && !ideMain?.classList.contains('editor-closed') && !ideMain?.classList.contains('board-closed')) {
       const minBoardPx = 320;
       const minEditorPx = 240;
       const maxEditorPct = Math.max(20, Math.min(75, Math.floor(((mainRect.width - minBoardPx) / mainRect.width) * 1000) / 10));
@@ -254,7 +258,7 @@ export function createIde(api) {
       layout.editorFrac = clamp(layout.editorFrac, minEditorPct, maxEditorPct);
     }
     const wbRect = $('#workbench')?.getBoundingClientRect();
-    if (wbRect && wbRect.height > 260) {
+    if (!bothClosed && wbRect && wbRect.height > 260) {
       const maxPanelH = Math.max(130, Math.floor(wbRect.height - computeMinTopHeight()));
       layout.panelH = clamp(layout.panelH, 130, maxPanelH);
     }
@@ -333,10 +337,27 @@ export function createIde(api) {
     }
     syncEditorVisibility();
   }
+  function syncBoardVisibility() {
+    $('#ideMain')?.classList.toggle('board-closed', !boardPaneOpen);
+    const btn = $('#btnToggleBoard');
+    if (btn) {
+      btn.setAttribute('aria-pressed', String(boardPaneOpen));
+      btn.classList.toggle('active', boardPaneOpen);
+      btn.title = boardPaneOpen ? 'Hide 3D Devboard Simulator (Alt+B)' : 'Show 3D Devboard Simulator (Alt+B)';
+    }
+  }
+  function setBoardPaneOpen(open) {
+    boardPaneOpen = !!open;
+    syncBoardVisibility();
+    applyLayout();
+    if (boardPaneOpen) requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+  }
   function resetLayout() {
-    layout = { ...DEFAULT_LAYOUT }; applyLayout(); saveLayout();
+    layout = { ...DEFAULT_LAYOUT };
     $('#app').classList.remove('no-library', 'no-waves', 'panel-max');
+    setBoardPaneOpen(true);
     setEditorPaneOpen(true);
+    applyLayout(); saveLayout();
     api.syncNavigation();
   }
 
@@ -916,6 +937,7 @@ export function createIde(api) {
     panelUart: () => api.openTools('uart'),
     panelBitstream: () => api.openTools('programmer'),
     toggleEditor: () => setEditorPaneOpen(!$('#sourceDialog')?.open),
+    toggleBoard: () => setBoardPaneOpen(!boardPaneOpen),
     focusBoard: () => setEditorPaneOpen(!$('#sourceDialog')?.open),
     photo: () => $('#btnPhotoMode').click(),
     theme: () => $('#btnTheme').click(),
@@ -958,6 +980,8 @@ export function createIde(api) {
     syncFallbackId();
     wireSplitters(); wireMenus();
     $('#btnFocusBoard')?.addEventListener('click', () => setEditorPaneOpen(!$('#sourceDialog')?.open));
+    $('#btnToggleBoard')?.addEventListener('click', () => setBoardPaneOpen(!boardPaneOpen));
+    $('#closeBoardPane')?.addEventListener('click', () => setBoardPaneOpen(false));
     $('#btnOpenFirst')?.addEventListener('click', () => { if (S.sources.length) openFile(S.sources[0].name); else showNewFile(); });
     $('#btnNewFile')?.addEventListener('click', showNewFile);
     $('#btnNewFileExplorer')?.addEventListener('click', showNewFile);
@@ -1040,18 +1064,19 @@ export function createIde(api) {
       const q = e.target.value.toLowerCase();
       $$('#homeHdlList .home-hdl-item').forEach(item => { item.hidden = !item.dataset.search.includes(q); });
     });
-    renderProblems(); updateStatus(); syncEditorVisibility();
+    renderProblems(); updateStatus(); syncEditorVisibility(); syncBoardVisibility();
   }
   wire();
 
   return {
     openFile, closeTab, activate, commitAll, hasUnsaved, validateLibraries, saveAndCompile, saveAndFlash, syncFromSources, openFirst, updateStatus,
-    setProblems, reportBuildFailure, resetLayout, setEditorPaneOpen,
+    setProblems, reportBuildFailure, resetLayout, setEditorPaneOpen, setBoardPaneOpen,
     showHome, requestReturnHome, resumeWorkbench, captureBaseline, currentProjectTitle, renderHome, recordRecentProject, populateHomeHdl,
     get active() { return active; },
     get tabs() { return [...tabs]; },
     get problems() { return problems; },
     get editor() { return docs.get(active)?.editor || null; },
+    get boardOpen() { return boardPaneOpen; },
     isDirty,
   };
 }

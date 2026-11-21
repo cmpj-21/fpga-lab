@@ -110,6 +110,7 @@ function uiSnapshot() {
     tabs: ide?.tabs?.join(',') || 'none',
     tab: ide?.active || 'none',
     editor: $('#sourceDialog')?.open ? 'open' : 'closed',
+    board: $('#ideMain')?.classList.contains('board-closed') ? 'closed' : 'open',
     left: !leftOpen ? 'closed' : ($('#ltab-pins')?.classList.contains('active') ? 'pins' : 'library'),
     hdlOpen: $$('#hdlTree .hdl-group.open').length,
     hdlRoot: currentHdlRoot || 'none',
@@ -143,7 +144,7 @@ function uiSnapshot() {
   };
 }
 function diffSnapshot(before, after) {
-  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tabs', 'tab', 'editor', 'left', 'hdlOpen', 'hdlRoot', 'waves', 'right', 'deck', 'about', 'keysDlg', 'homeDlg', 'newProjDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
+  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tabs', 'tab', 'editor', 'board', 'left', 'hdlOpen', 'hdlRoot', 'waves', 'right', 'deck', 'about', 'keysDlg', 'homeDlg', 'newProjDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
   const out = [];
   for (const k of keys) if (before[k] !== after[k]) out.push(`${k}:${before[k]}->${after[k]}`);
   return out;
@@ -489,6 +490,7 @@ async function flashToBoard() {
     return toast('Build & Compile your code and pin assignments first before flashing to the board.', 'err');
   }
   pause();
+  if (ide && !ide.boardOpen) ide.setBoardPaneOpen(true);
   if (S.flashed || S.time > 0 || S.cycles > 0 || S.sim.ended) {
     await build(S.sim.top);
     if (S.error || !S.sim) return;
@@ -779,7 +781,7 @@ function renderPinoutRef() {
     for (const entry of matched) {
       const tr = document.createElement('tr');
       tr.dataset.pin = entry.pin;
-      tr.onclick = () => board?.highlightPin(entry.pin);
+      tr.onclick = () => { if (ide && !ide.boardOpen) ide.setBoardPaneOpen(true); board?.highlightPin(entry.pin); };
       const pinTd = document.createElement('td');
       pinTd.className = 'po-pin';
       pinTd.textContent = `PIN_${entry.pin}`;
@@ -1330,6 +1332,7 @@ function wire() {
     if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); ide?.saveAndCompile(); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'b') { e.preventDefault(); flashToBoard(); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'e') { e.preventDefault(); ide?.setEditorPaneOpen(!$('#sourceDialog')?.open); return; }
+    if (!mod && e.altKey && e.key.toLowerCase() === 'b') { e.preventDefault(); ide?.setBoardPaneOpen(!ide.boardOpen); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'o') { e.preventDefault(); $('#fileInput').click(); return; }
     if (e.key === 'Escape' && !document.querySelector('dialog:modal') && $('#homeView') && !$('#homeView').classList.contains('hidden')) { ide?.resumeWorkbench(); return; }
     if (e.target.closest('input,select,textarea,dialog:modal') || document.querySelector('dialog:modal') || ($('#homeView') && !$('#homeView').classList.contains('hidden')) || e.repeat) return;
@@ -1409,6 +1412,7 @@ function wire() {
   if ($('#pmFrameWrap')) new ResizeObserver(updatePhotoFrameBox).observe($('#pmFrameWrap'));
   function togglePhotoMode(force) {
     const active = force !== undefined ? !!force : !$('#center').classList.contains('photo-mode');
+    if (active && ide && !ide.boardOpen) ide.setBoardPaneOpen(true);
     $('#center').classList.toggle('photo-mode', active);
     $('#photoStudio').classList.toggle('hidden', !active);
     $('#btnPhotoMode').classList.toggle('active', active);
