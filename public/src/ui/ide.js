@@ -7,8 +7,31 @@ const $$ = selector => [...document.querySelectorAll(selector)];
 const LAYOUT_KEY = 'trace.layout.v1';
 const RECENTS_KEY = 'trace.recents.v1';
 const DEFAULT_LAYOUT = { leftW: 256, editorFrac: 42, panelH: 245 };
-const NAME_PATTERN = /^[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i;
+const NAME_PATTERN = /^(?:[a-z0-9_][a-z0-9_. -]*\/)*[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i;
 const STANDARDS = { '93': 'VHDL-1993', '02': 'VHDL-2002', '08': 'VHDL-2008' };
+const FORBIDDEN_SEG = /[<>:"\\|?*\x00-\x1f]/;
+function cleanRelPath(raw) {
+  return String(raw || '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
+}
+function isValidRelPath(rel) {
+  if (!rel || rel.length > 200) return false;
+  const parts = rel.split('/');
+  return parts.every(seg => seg && seg !== '.' && seg !== '..' && !FORBIDDEN_SEG.test(seg) && !/[. ]$/.test(seg));
+}
+function fileKindLabel(name) {
+  const base = String(name || '').split('/').pop() || '';
+  const ext = base.includes('.') ? base.split('.').pop().toLowerCase() : '';
+  if (ext === 'vhd' || ext === 'vhdl' || ext === 'vho') return 'VHDL';
+  if (!ext) return 'FILE';
+  return ext.slice(0, 6).toUpperCase();
+}
+function parentDirOf(rel) {
+  const idx = String(rel || '').lastIndexOf('/');
+  return idx > 0 ? rel.slice(0, idx) : '';
+}
+function baseNameOf(rel) {
+  return String(rel || '').split('/').pop() || '';
+}
 
 function buildStarterSource(kind, entity) {
   if (kind === 'counter') {
@@ -203,7 +226,7 @@ export function parseDiagnostics(text) {
 
 function template(name) {
   if (!/\.(vhd|vhdl)$/i.test(name)) return '';
-  let entity = name.replace(/\.[^.]+$/, '').replace(/[^a-z0-9_]/gi, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  let entity = baseNameOf(name).replace(/\.[^.]+$/, '').replace(/[^a-z0-9_]/gi, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
   if (!/^[a-z]/i.test(entity)) entity = 'e_' + entity;
   return `library ieee;\nuse ieee.std_logic_1164.all;\n\nentity ${entity} is\n  port (\n    clk : in std_logic\n  );\nend entity ${entity};\n\narchitecture rtl of ${entity} is\nbegin\n\nend architecture rtl;\n`;
 }
@@ -215,7 +238,8 @@ export function createIde(api) {
   let active = null, problems = [], cursor = null, layout = { ...DEFAULT_LAYOUT };
   try { layout = { ...DEFAULT_LAYOUT, ...JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}') }; } catch {}
   const saveLayout = () => { try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch {} };
-  const find = name => S.sources.find(source => source.name === name);
+  const find = name => S.sources.find(source => source.name === name) || S.sources.find(source => source.name.toLowerCase() === String(name || '').toLowerCase());
+  const findByDiagFile = file => find(file) || S.sources.find(source => baseNameOf(source.name).toLowerCase() === baseNameOf(file).toLowerCase());
   const libraryOf = source => source?.library || 'work';
   const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
 
@@ -366,7 +390,7 @@ export function createIde(api) {
   }
 
   // ---------- problems ----------
-  const markersFor = name => problems.filter(p => p.file && p.file.toLowerCase() === name.toLowerCase() && p.line > 0);
+  const markersFor = name => problems.filter(p => p.file && (p.file.toLowerCase() === name.toLowerCase() || baseNameOf(p.file).toLowerCase() === baseNameOf(name).toLowerCase()) && p.line > 0);
   function renderProblems() {
     const errors = problems.filter(p => p.severity === 'error').length, warnings = problems.length - errors;
     const badge = $('#problemCount');
@@ -387,7 +411,8 @@ export function createIde(api) {
         const message = document.createElement('span'); message.className = 'p-msg'; message.textContent = problem.message;
         const where = document.createElement('span'); where.className = 'p-loc'; where.textContent = problem.file ? `${problem.file}:${problem.line}:${problem.col}` : '';
         row.append(icon, message, where);
-        if (problem.file && find(problem.file)) row.onclick = () => openFile(find(problem.file).name, { line: problem.line, col: problem.col });
+        const matchSrc = problem.file ? findByDiagFile(problem.file) : null;
+        if (matchSrc) row.onclick = () => openFile(matchSrc.name, { line: problem.line, col: problem.col });
         else row.disabled = !problem.file;
         list.append(row);
       }
@@ -407,15 +432,18 @@ export function createIde(api) {
       list = [{ file: active || S.sources[0]?.name || '', line: 1, col: 1, severity: 'error', message: first.trim() }];
     }
     setProblems(list);
-    const first = list.find(p => p.file && p.line && find(p.file));
-    if (first && $('#sourceDialog')?.open) openFile(find(first.file).name, { line: first.line, col: first.col, focus: false });
+    const first = list.find(p => p.file && p.line && findByDiagFile(p.file));
+    if (first && $('#sourceDialog')?.open) openFile(findByDiagFile(first.file).name, { line: first.line, col: first.col, focus: false });
     return list.length;
   }
 
   // ---------- editor tabs ----------
   const isDirty = name => {
-    const doc = docs.get(name), source = find(name);
-    return !!doc && !!source && (doc.editor.value !== doc.saved || doc.library !== libraryOf(source));
+    const doc = docs.get(name);
+    if (!doc) return false;
+    if (doc.diskOnly) return doc.editor.value !== doc.saved;
+    const source = find(name);
+    return !!source && (doc.editor.value !== doc.saved || doc.library !== libraryOf(source));
   };
   function renderTabs() {
     const host = $('#docTabs');
@@ -428,7 +456,7 @@ export function createIde(api) {
       tab.setAttribute('role', 'tab'); tab.setAttribute('aria-selected', String(name === active)); tab.dataset.file = name;
       const main = document.createElement('button'); main.className = 'doc-tab-main'; main.title = name;
       main.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v4h4"/></svg>';
-      const label = document.createElement('span'); label.textContent = name; main.append(label);
+      const label = document.createElement('span'); label.textContent = baseNameOf(name); main.append(label);
       main.onclick = () => activate(name);
       const close = document.createElement('button'); close.className = 'doc-tab-x'; close.textContent = '×'; close.title = `Close ${name}`; close.setAttribute('aria-label', `Close ${name}`);
       close.onclick = event => { event.stopPropagation(); closeTab(name); };
@@ -441,9 +469,10 @@ export function createIde(api) {
     renderExplorerState();
   }
   function renderExplorerState() {
-    $$('#srcList li').forEach(item => {
-      item.classList.toggle('active', item.dataset.file === active);
-      item.classList.toggle('dirty', isDirty(item.dataset.file));
+    $$('#srcList .tree-row[data-type="file"]').forEach(item => {
+      const rel = item.dataset.rel;
+      item.classList.toggle('active', rel === active);
+      item.classList.toggle('dirty', isDirty(rel));
     });
   }
   function updateStatus() {
@@ -462,7 +491,10 @@ export function createIde(api) {
     }
     syncFallbackId();
     const doc = docs.get(name);
-    if ($('#sourceLibrary')) $('#sourceLibrary').value = doc.library;
+    const isVhdl = !doc.diskOnly && /\.(vhd|vhdl|vho)$/i.test(name);
+    if ($('#editorKind')) $('#editorKind').textContent = fileKindLabel(name);
+    if ($('#sourceLibraryWrap')) $('#sourceLibraryWrap').classList.toggle('hidden', !isVhdl);
+    if ($('#sourceLibrary')) $('#sourceLibrary').value = doc.library || 'work';
     if ($('#sourceName')) $('#sourceName').textContent = name;
     if ($('#editorCrumb')) $('#editorCrumb').textContent = name;
     $('#editorBar')?.classList.remove('hidden');
@@ -470,9 +502,7 @@ export function createIde(api) {
     cursor = doc.editor.cursor();
     renderTabs(); updateStatus();
   }
-  function openFile(name, { line = 0, col = 1, focus = true } = {}) {
-    const source = find(name);
-    if (!source) return false;
+  function mountDocTab(name, text, { library = 'work', diskOnly = false, line = 0, col = 1, focus = true } = {}) {
     const dialog = $('#sourceDialog');
     if (dialog && !dialog.open) dialog.show();
     syncEditorVisibility();
@@ -483,15 +513,15 @@ export function createIde(api) {
           const current = docs.get(name);
           if (!current) return;
           const dirty = isDirty(name);
-          if (dirty && !S.dirty) api.markDirty();
+          if (dirty && !current.diskOnly && !S.dirty) api.markDirty();
           if (dirty !== current.dirty) renderTabs();
         },
-        onSave: () => saveAndCompile(),
+        onSave: () => saveActiveFile(),
         onCursor: info => { if (active === name) { cursor = info; updateStatus(); } },
       });
-      editor.setValue(source.text);
-      editor.setMarkers(markersFor(name));
-      doc = { editor, saved: source.text, library: libraryOf(source), dirty: false };
+      editor.setValue(text);
+      editor.setMarkers(diskOnly ? [] : markersFor(name));
+      doc = { editor, saved: text, library, dirty: false, diskOnly };
       docs.set(name, doc);
     }
     if (!tabs.includes(name)) tabs.push(name);
@@ -499,6 +529,38 @@ export function createIde(api) {
     if (line) doc.editor.goto(line, col);
     else if (focus) requestAnimationFrame(() => doc.editor.focus());
     return true;
+  }
+  function openFile(name, { line = 0, col = 1, focus = true } = {}) {
+    const source = find(name);
+    if (!source) {
+      if (docs.has(name)) {
+        activate(name);
+        if (line) docs.get(name).editor.goto(line, col);
+        else if (focus) requestAnimationFrame(() => docs.get(name).editor.focus());
+        return true;
+      }
+      return false;
+    }
+    return mountDocTab(source.name, source.text, { library: libraryOf(source), diskOnly: false, line, col, focus });
+  }
+  async function openDiskFile(rel, opts = {}) {
+    const source = find(rel);
+    if (source) return openFile(source.name, opts);
+    if (docs.has(rel)) return openFile(rel, opts);
+    if (!S.projectDir) return false;
+    try {
+      const res = await fetch('/api/project/read-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir: S.projectDir, rel }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not open file.');
+      return mountDocTab(data.rel || rel, data.text ?? '', { library: 'work', diskOnly: true, ...opts });
+    } catch (e) {
+      api.toast(e.message, 'err');
+      return false;
+    }
   }
   function closeTab(name, force = false) {
     const doc = docs.get(name);
@@ -521,25 +583,26 @@ export function createIde(api) {
     } else renderTabs();
   }
   function hasUnsaved() {
-    if (active && docs.has(active) && $('#sourceLibrary')) {
+    if (active && docs.has(active) && $('#sourceLibrary') && !docs.get(active).diskOnly) {
       docs.get(active).library = $('#sourceLibrary').value.trim();
     }
-    return [...docs.keys()].some(isDirty);
+    return [...docs.keys()].some(name => !docs.get(name)?.diskOnly && isDirty(name));
   }
   function validateLibraries() {
-    if (active && docs.has(active) && $('#sourceLibrary')) {
+    if (active && docs.has(active) && $('#sourceLibrary') && !docs.get(active).diskOnly) {
       docs.get(active).library = $('#sourceLibrary').value.trim();
     }
-    const bad = [...docs.values()].find(doc => !/^[a-z][a-z0-9_]*$/i.test(doc.library));
+    const bad = [...docs.entries()].find(([name, doc]) => !doc.diskOnly && /\.(vhd|vhdl|vho)$/i.test(name) && !/^[a-z][a-z0-9_]*$/i.test(doc.library));
     if (bad) { api.toast('Enter a valid VHDL library name.', 'err'); return false; }
     return true;
   }
   function commitAll() {
     let changed = false;
-    if (active && docs.has(active) && $('#sourceLibrary')) {
+    if (active && docs.has(active) && $('#sourceLibrary') && !docs.get(active).diskOnly) {
       docs.get(active).library = $('#sourceLibrary').value.trim();
     }
     for (const [name, doc] of docs) {
+      if (doc.diskOnly) continue;
       const source = find(name);
       if (!source) continue;
       doc.editor.renderNow();
@@ -549,6 +612,100 @@ export function createIde(api) {
     }
     renderTabs();
     return changed;
+  }
+  async function saveActiveFile(targetName = active) {
+    const name = targetName || active;
+    if (!name || !docs.has(name)) {
+      api.toast('Open a file in the editor to save it.');
+      return false;
+    }
+    const doc = docs.get(name);
+    if (!doc.diskOnly && /\.(vhd|vhdl|vho)$/i.test(name)) {
+      if (name === active && $('#sourceLibrary')) doc.library = $('#sourceLibrary').value.trim();
+      if (!/^[a-z][a-z0-9_]*$/i.test(doc.library || 'work')) {
+        api.toast('Enter a valid VHDL library name.', 'err');
+        return false;
+      }
+    }
+    doc.editor.renderNow();
+    const text = doc.editor.value;
+    let sourceChanged = false;
+    if (!doc.diskOnly) {
+      const source = find(name);
+      if (source) {
+        sourceChanged = source.text !== text || libraryOf(source) !== doc.library;
+        source.text = text;
+        source.library = doc.library;
+      }
+    }
+    if (!S.projectDir) {
+      const savedAs = await saveActiveFileAs(name);
+      if (savedAs && sourceChanged) { api.saveProject?.(); api.markDirty?.(); }
+      return savedAs;
+    }
+    try {
+      const res = await fetch('/api/project/write-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir: S.projectDir, rel: name, text }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not save file.');
+      doc.saved = text;
+      if (sourceChanged) { api.saveProject?.(); api.markDirty?.(); }
+      renderTabs();
+      refreshProjectTree();
+      api.toast(`Saved ${name}.`);
+      api.logEvent?.('info', `Saved file: ${name}`);
+      return true;
+    } catch (e) {
+      api.toast(e.message, 'err');
+      return false;
+    }
+  }
+  async function saveActiveFileAs(targetName = active) {
+    const name = targetName || active;
+    let text = '';
+    const doc = name ? docs.get(name) : null;
+    if (doc) {
+      doc.editor.renderNow();
+      text = doc.editor.value;
+    } else if (name && find(name)) {
+      text = find(name).text;
+    } else {
+      api.toast('Open a file in the editor first.', 'err');
+      return false;
+    }
+    try {
+      const pickRes = await fetch('/api/project/pick-save-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initialDir: S.projectDir || '', defaultName: baseNameOf(name) }),
+      });
+      const picked = await pickRes.json();
+      if (!pickRes.ok) throw new Error(picked.error || 'Save dialog failed.');
+      if (picked.cancelled || !picked.filePath) return false;
+      const writeRes = await fetch('/api/project/write-path', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath: picked.filePath, text }),
+      });
+      const written = await writeRes.json();
+      if (!writeRes.ok) throw new Error(written.error || 'Could not write file.');
+      if (doc) {
+        doc.saved = text;
+        if (!doc.diskOnly && find(name)) { find(name).text = text; find(name).library = doc.library; }
+      }
+      renderTabs();
+      refreshProjectTree();
+      const shortName = written.filePath.split(/[\\/]/).filter(Boolean).pop() || baseNameOf(name);
+      api.toast(`Saved ${shortName} to ${written.filePath}.`, 'ok');
+      api.logEvent?.('info', `Saved file as: ${written.filePath}`);
+      return true;
+    } catch (e) {
+      api.toast(e.message, 'err');
+      return false;
+    }
   }
   function saveAndCompile() {
     if (S.building || S.importing || S.exporting) return false;
@@ -563,9 +720,10 @@ export function createIde(api) {
   function syncFromSources() {
     let vanished = false;
     for (const name of [...docs.keys()]) {
+      const doc = docs.get(name);
+      if (doc?.diskOnly) continue;
       const source = find(name);
       if (!source) { closeTab(name, true); vanished = true; continue; }
-      const doc = docs.get(name);
       if (source.text !== doc.saved) { doc.saved = source.text; doc.editor.setValue(source.text); }
       if (libraryOf(source) !== doc.library && !isDirty(name)) doc.library = libraryOf(source);
       if (name === active && $('#sourceLibrary')) $('#sourceLibrary').value = doc.library;
@@ -580,26 +738,457 @@ export function createIde(api) {
     }
   }
 
-  // ---------- explorer ----------
-  function showNewFile() {
-    showHome(false);
-    const sec = $('.exp-project'); if (sec) sec.open = true;
-    $('#newFileRow')?.classList.remove('hidden');
-    if ($('#app').classList.contains('no-library') || !$('#ltab-library')?.classList.contains('active')) $('#btnLibrary').click();
-    $('#newFileName').value = ''; $('#newFileName').focus();
+  // ---------- explorer (real project folder tree + context menu) ----------
+  let diskTree = null, treeSeq = 0, newEntryMode = 'file', newEntryDir = '', selectedNode = null;
+  const expandedDirs = new Set();
+  const virtualDirs = new Set();
+
+  function countTreeFiles(nodes = []) {
+    let total = 0;
+    for (const node of nodes) {
+      if (node.type === 'dir') total += countTreeFiles(node.children || []);
+      else total += 1;
+    }
+    return total;
   }
-  function createFile(raw) {
-    let name = raw.trim();
-    if (!name) return;
-    if (!/\.[a-z0-9]+$/i.test(name)) name += '.vhd';
-    if (!NAME_PATTERN.test(name)) return api.toast('Use a simple filename ending in .vhd, .vhdl, .vho, .txt, .dat, .hex, .mif, .mem or .cf.', 'err');
-    if (S.sources.some(source => source.name.toLowerCase() === name.toLowerCase())) return api.toast(`${name} already exists.`, 'err');
-    if (S.sources.length >= 100) return api.toast('A project can hold at most 100 files.', 'err');
-    S.sources.push({ name, text: template(name) });
-    api.renderSources(); api.markDirty();
-    $('#newFileRow').classList.add('hidden');
-    openFile(name);
-    api.toast(`Created ${name}. Press Ctrl+S or click Flash to compile.`);
+  function buildVirtualTree() {
+    const rootChildren = [];
+    const dirMap = new Map([['', rootChildren]]);
+    const ensureDir = relDir => {
+      if (dirMap.has(relDir)) return dirMap.get(relDir);
+      const parent = parentDirOf(relDir);
+      const parentList = ensureDir(parent);
+      const children = [];
+      parentList.push({ type: 'dir', name: baseNameOf(relDir), rel: relDir, children });
+      dirMap.set(relDir, children);
+      return children;
+    };
+    for (const dir of virtualDirs) ensureDir(dir);
+    for (const src of S.sources) {
+      const rel = cleanRelPath(src.name);
+      const parent = parentDirOf(rel);
+      const list = ensureDir(parent);
+      const name = baseNameOf(rel);
+      const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+      list.push({ type: 'file', name, rel, ext });
+    }
+    const sortNodes = list => {
+      list.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) : a.type === 'dir' ? -1 : 1));
+      for (const item of list) if (item.type === 'dir') sortNodes(item.children);
+    };
+    sortNodes(rootChildren);
+    return rootChildren;
+  }
+  function renderProjectTree() {
+    const host = $('#srcList');
+    if (!host) return;
+    const nodes = S.projectDir && Array.isArray(diskTree) ? diskTree : buildVirtualTree();
+    const fileCount = countTreeFiles(nodes);
+    if ($('#srcCount')) $('#srcCount').textContent = String(fileCount);
+    const rootSummary = $('#projectRootSummary');
+    if (rootSummary) {
+      rootSummary.title = S.projectDir ? `Project folder: ${S.projectDir}\nRight-click for folder actions` : 'Unsaved workspace (File → Save Project As… to save on disk)';
+    }
+    host.replaceChildren();
+    if (!nodes.length) {
+      const empty = document.createElement('div');
+      empty.className = 'tree-empty';
+      empty.textContent = 'No files in project yet. Right-click or use + to create a file or folder.';
+      host.append(empty);
+      return;
+    }
+    const renderLevel = (list, depth) => {
+      for (const node of list) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = `tree-row ${node.type === 'dir' ? 'tree-dir' : 'tree-file'}`;
+        row.dataset.type = node.type;
+        row.dataset.rel = node.rel;
+        row.style.paddingLeft = `${10 + depth * 14}px`;
+        row.title = S.projectDir ? `${S.projectDir}\\${node.rel.replace(/\//g, '\\')}` : node.rel;
+        const isSelected = selectedNode && selectedNode.rel === node.rel && selectedNode.type === node.type;
+        if (isSelected) row.classList.add('selected');
+        if (node.type === 'dir') {
+          const isOpen = expandedDirs.has(node.rel);
+          row.classList.toggle('expanded', isOpen);
+          row.setAttribute('role', 'treeitem');
+          row.setAttribute('aria-expanded', String(isOpen));
+          row.innerHTML = `<span class="tree-chev" aria-hidden="true">›</span><svg class="tree-ico" viewBox="0 0 24 24" aria-hidden="true">${isOpen ? '<path d="M3 7V5h7l2 2h9v4H3z"/><path d="M3 11h18l-2 9H5z"/>' : '<path d="M3 7V5h7l2 2h9v13H3z"/>'}</svg>`;
+          const label = document.createElement('span');
+          label.className = 'tree-name';
+          label.textContent = node.name;
+          row.append(label);
+          row.onclick = () => {
+            selectedNode = { type: 'dir', rel: node.rel, name: node.name };
+            if (expandedDirs.has(node.rel)) expandedDirs.delete(node.rel);
+            else expandedDirs.add(node.rel);
+            renderProjectTree();
+          };
+          row.oncontextmenu = e => openExplorerMenu(e, { type: 'dir', rel: node.rel, name: node.name });
+          host.append(row);
+          if (isOpen && node.children?.length) renderLevel(node.children, depth + 1);
+        } else {
+          row.setAttribute('role', 'treeitem');
+          row.classList.toggle('active', node.rel === active);
+          row.classList.toggle('dirty', isDirty(node.rel));
+          const badge = document.createElement('span');
+          badge.className = 'tree-badge';
+          badge.textContent = fileKindLabel(node.name);
+          const label = document.createElement('span');
+          label.className = 'tree-name src-name';
+          label.textContent = node.name;
+          row.append(badge, label);
+          row.onclick = () => {
+            selectedNode = { type: 'file', rel: node.rel, name: node.name };
+            openDiskFile(node.rel);
+            renderProjectTree();
+          };
+          row.oncontextmenu = e => openExplorerMenu(e, { type: 'file', rel: node.rel, name: node.name });
+          host.append(row);
+        }
+      }
+    };
+    renderLevel(nodes, 0);
+  }
+  async function refreshProjectTree() {
+    if (!S.projectDir) {
+      diskTree = null;
+      renderProjectTree();
+      return;
+    }
+    const seq = ++treeSeq;
+    try {
+      const res = await fetch('/api/project/tree', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir: S.projectDir }),
+      });
+      const data = await res.json();
+      if (seq !== treeSeq) return;
+      if (res.ok && data.ok) {
+        diskTree = data.children || [];
+      } else {
+        diskTree = null;
+      }
+    } catch {
+      if (seq !== treeSeq) return;
+      diskTree = null;
+    }
+    renderProjectTree();
+  }
+  function defaultTargetDir() {
+    if (!selectedNode) return '';
+    return selectedNode.type === 'dir' ? selectedNode.rel : parentDirOf(selectedNode.rel);
+  }
+  function openNewEntry(mode, targetDir = null) {
+    showHome(false);
+    closeExplorerMenu();
+    newEntryMode = mode;
+    newEntryDir = targetDir !== null ? cleanRelPath(targetDir) : defaultTargetDir();
+    if (newEntryDir) expandedDirs.add(newEntryDir);
+    const sec = $('.exp-project'); if (sec) sec.open = true;
+    if ($('#app').classList.contains('no-library') || !$('#ltab-library')?.classList.contains('active')) $('#btnLibrary').click();
+    const prefix = $('#newEntryPrefix');
+    if (prefix) {
+      prefix.textContent = newEntryDir ? `${newEntryDir}/` : '';
+      prefix.classList.toggle('hidden', !newEntryDir);
+    }
+    const input = $('#newFileName');
+    if (input) {
+      input.placeholder = mode === 'folder' ? 'folder_name' : 'filename.vhd';
+      input.setAttribute('aria-label', mode === 'folder' ? 'New folder name' : 'New file name');
+      input.value = '';
+    }
+    if ($('#newEntrySubmit')) $('#newEntrySubmit').textContent = mode === 'folder' ? 'Create' : 'Add';
+    $('#newFileRow')?.classList.remove('hidden');
+    input?.focus();
+  }
+  function showNewFile(targetDir = null) { openNewEntry('file', targetDir); }
+  function showNewFolder(targetDir = null) { openNewEntry('folder', targetDir); }
+  async function submitNewEntry(raw) {
+    const cleaned = cleanRelPath(raw);
+    if (!cleaned) return;
+    const rel = newEntryDir ? `${newEntryDir}/${cleaned}` : cleaned;
+    if (!isValidRelPath(rel)) {
+      return api.toast('Invalid name. Avoid .. and special characters <>:"|?*', 'err');
+    }
+    if (newEntryMode === 'folder') {
+      if (S.projectDir) {
+        try {
+          const res = await fetch('/api/project/mkdir', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dir: S.projectDir, rel }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Could not create folder.');
+        } catch (e) {
+          return api.toast(e.message, 'err');
+        }
+      } else {
+        virtualDirs.add(rel);
+      }
+      for (let p = rel; p; p = parentDirOf(p)) expandedDirs.add(p);
+      selectedNode = { type: 'dir', rel, name: baseNameOf(rel) };
+      $('#newFileRow')?.classList.add('hidden');
+      await refreshProjectTree();
+      api.toast(`Created folder ${rel}.`);
+      return;
+    }
+    // File creation
+    const initialText = template(rel);
+    const isSourceCandidate = NAME_PATTERN.test(rel);
+    if (isSourceCandidate && S.sources.some(source => source.name.toLowerCase() === rel.toLowerCase())) {
+      return api.toast(`${rel} already exists.`, 'err');
+    }
+    if (isSourceCandidate && S.sources.length >= 100) {
+      return api.toast('A project can hold at most 100 compilable source files.', 'err');
+    }
+    if (S.projectDir) {
+      try {
+        const res = await fetch('/api/project/write-file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dir: S.projectDir, rel, text: initialText }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Could not create file.');
+      } catch (e) {
+        return api.toast(e.message, 'err');
+      }
+    }
+    for (let p = parentDirOf(rel); p; p = parentDirOf(p)) expandedDirs.add(p);
+    selectedNode = { type: 'file', rel, name: baseNameOf(rel) };
+    $('#newFileRow')?.classList.add('hidden');
+    if (isSourceCandidate) {
+      S.sources.push({ name: rel, text: initialText, library: 'work' });
+      api.renderSources();
+      api.markDirty();
+      openFile(rel);
+    } else {
+      mountDocTab(rel, initialText, { library: 'work', diskOnly: true });
+    }
+    await refreshProjectTree();
+    api.toast(`Created ${rel}.`);
+  }
+
+  // ---------- explorer modal (rename / delete confirmation) ----------
+  let eaResolve = null;
+  function openExplorerDialog({ eyebrow = 'FILE EXPLORER', title = 'Confirm', text = '', hint = '', inputValue = null, confirmText = 'Confirm', danger = false } = {}) {
+    const dlg = $('#explorerActionDialog');
+    if (!dlg) return Promise.resolve(null);
+    $('#eaEyebrow').textContent = eyebrow;
+    $('#eaTitle').textContent = title;
+    $('#eaText').textContent = text;
+    const hintEl = $('#eaHint');
+    hintEl.textContent = hint;
+    hintEl.classList.toggle('hidden', !hint);
+    const inputEl = $('#eaInput');
+    const hasInput = inputValue !== null;
+    inputEl.classList.toggle('hidden', !hasInput);
+    inputEl.required = hasInput;
+    inputEl.value = hasInput ? inputValue : '';
+    const btn = $('#eaConfirm');
+    btn.textContent = confirmText;
+    btn.className = danger ? 'btn confirm-discard' : 'btn dark';
+    return new Promise(resolve => {
+      eaResolve = resolve;
+      if (!dlg.open) dlg.showModal();
+      if (hasInput) {
+        requestAnimationFrame(() => {
+          inputEl.focus();
+          const dot = inputEl.value.lastIndexOf('.');
+          if (dot > 0) inputEl.setSelectionRange(0, dot);
+          else inputEl.select();
+        });
+      } else {
+        requestAnimationFrame(() => btn.focus());
+      }
+    });
+  }
+  async function renameNode(node) {
+    if (!node || !node.rel) return;
+    const oldRel = node.rel;
+    const parent = parentDirOf(oldRel);
+    const answer = await openExplorerDialog({
+      eyebrow: node.type === 'dir' ? 'RENAME FOLDER' : 'RENAME FILE',
+      title: `Rename ${node.name}`,
+      text: `Enter a new name for ${oldRel}:`,
+      inputValue: node.name,
+      confirmText: 'Rename',
+    });
+    if (answer === null) return;
+    const newName = cleanRelPath(answer);
+    if (!newName || newName.includes('/')) {
+      return api.toast('Enter a single file or folder name without slashes.', 'err');
+    }
+    const newRel = parent ? `${parent}/${newName}` : newName;
+    if (newRel === oldRel) return;
+    if (!isValidRelPath(newRel)) return api.toast('Invalid name. Avoid .. and special characters <>:"|?*', 'err');
+    if (S.projectDir) {
+      try {
+        const res = await fetch('/api/project/rename', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dir: S.projectDir, oldRel, newRel }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Rename failed.');
+      } catch (e) {
+        return api.toast(e.message, 'err');
+      }
+    }
+    const replacePrefix = p => {
+      if (p === oldRel) return newRel;
+      if (node.type === 'dir' && p.startsWith(oldRel + '/')) return newRel + p.slice(oldRel.length);
+      return p;
+    };
+    let sourcesChanged = false;
+    for (const src of S.sources) {
+      const updated = replacePrefix(src.name);
+      if (updated !== src.name) { src.name = updated; sourcesChanged = true; }
+    }
+    for (const dir of [...virtualDirs]) {
+      const updated = replacePrefix(dir);
+      if (updated !== dir) { virtualDirs.delete(dir); virtualDirs.add(updated); }
+    }
+    for (const dir of [...expandedDirs]) {
+      const updated = replacePrefix(dir);
+      if (updated !== dir) { expandedDirs.delete(dir); expandedDirs.add(updated); }
+    }
+    for (const key of [...docs.keys()]) {
+      const updated = replacePrefix(key);
+      if (updated !== key) {
+        const doc = docs.get(key);
+        docs.delete(key);
+        docs.set(updated, doc);
+        const idx = tabs.indexOf(key);
+        if (idx >= 0) tabs[idx] = updated;
+        if (active === key) active = updated;
+      }
+    }
+    selectedNode = { type: node.type, rel: newRel, name: baseNameOf(newRel) };
+    if (active && docs.has(active)) activate(active);
+    if (sourcesChanged) { api.renderSources(); api.markDirty(); }
+    else renderTabs();
+    await refreshProjectTree();
+    api.toast(`Renamed ${oldRel} → ${newRel}.`);
+  }
+  async function deleteNode(node) {
+    if (!node || !node.rel) return;
+    if (S.building || S.importing || S.exporting) return;
+    const confirmed = await openExplorerDialog({
+      eyebrow: node.type === 'dir' ? 'DELETE FOLDER' : 'DELETE FILE',
+      title: `Delete ${node.name}?`,
+      text: S.projectDir
+        ? `Permanently delete "${node.rel}" ${node.type === 'dir' ? 'and all files inside it ' : ''}from ${S.projectDir}?`
+        : `Remove "${node.rel}" from this workspace?`,
+      hint: S.projectDir ? 'This deletes the item from disk and cannot be undone.' : 'Unsaved workspace edits to this item will be lost.',
+      confirmText: node.type === 'dir' ? 'Delete Folder' : 'Delete File',
+      danger: true,
+    });
+    if (confirmed === null) return;
+    if (S.projectDir) {
+      try {
+        const res = await fetch('/api/project/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dir: S.projectDir, rel: node.rel }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Delete failed.');
+      } catch (e) {
+        return api.toast(e.message, 'err');
+      }
+    }
+    const matches = p => p === node.rel || (node.type === 'dir' && p.startsWith(node.rel + '/'));
+    const beforeLen = S.sources.length;
+    S.sources = S.sources.filter(src => !matches(src.name));
+    for (const dir of [...virtualDirs]) if (matches(dir)) virtualDirs.delete(dir);
+    for (const dir of [...expandedDirs]) if (matches(dir)) expandedDirs.delete(dir);
+    for (const key of [...docs.keys()]) if (matches(key)) closeTab(key, true);
+    if (selectedNode && matches(selectedNode.rel)) selectedNode = null;
+    if (S.sources.length !== beforeLen) { api.renderSources(); api.markDirty(); }
+    else renderTabs();
+    await refreshProjectTree();
+    api.toast(`Deleted ${node.rel}.`);
+  }
+  async function revealNode(rel = '') {
+    if (!S.projectDir) return api.toast('Save the project to disk first to reveal it in File Explorer.');
+    try {
+      const res = await fetch('/api/project/reveal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir: S.projectDir, rel }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not open File Explorer.');
+    } catch (e) {
+      api.toast(e.message, 'err');
+    }
+  }
+  function closeExplorerMenu() {
+    $('#explorerMenu')?.classList.add('hidden');
+  }
+  function openExplorerMenu(event, node) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeMenus();
+    if (node && node.type !== 'root') {
+      selectedNode = node;
+      renderProjectTree();
+    }
+    const menu = $('#explorerMenu');
+    if (!menu) return;
+    menu.replaceChildren();
+    const addItem = (label, onClick, { kbd = '', danger = false, disabled = false } = {}) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      if (danger) btn.classList.add('danger');
+      btn.disabled = disabled;
+      const span = document.createElement('span');
+      span.textContent = label;
+      btn.append(span);
+      if (kbd) { const k = document.createElement('kbd'); k.textContent = kbd; btn.append(k); }
+      btn.onclick = e => { e.stopPropagation(); closeExplorerMenu(); onClick(); };
+      menu.append(btn);
+    };
+    const addSep = () => menu.append(document.createElement('hr'));
+    if (!node || node.type === 'root') {
+      addItem('New File…', () => showNewFile(''), { kbd: 'Ctrl+Alt+N' });
+      addItem('New Folder…', () => showNewFolder(''));
+      addItem('Import Files…', () => $('#fileInput').click(), { kbd: 'Ctrl+O' });
+      addItem('Refresh Explorer', () => refreshProjectTree());
+      addSep();
+      addItem(S.projectDir ? 'Save Project' : 'Save Project As…', () => api.saveProjectToDisk?.({ saveAs: false }), { kbd: 'Ctrl+Shift+S' });
+      addItem('Reveal Project Folder', () => revealNode(''), { disabled: !S.projectDir });
+    } else if (node.type === 'dir') {
+      addItem('New File…', () => showNewFile(node.rel));
+      addItem('New Folder…', () => showNewFolder(node.rel));
+      addItem('Import Files…', () => $('#fileInput').click());
+      addSep();
+      addItem('Rename Folder…', () => renameNode(node), { kbd: 'F2' });
+      addItem('Copy Relative Path', () => { navigator.clipboard?.writeText(node.rel).catch(() => {}); api.toast(`Copied ${node.rel}`); });
+      addItem('Reveal in File Explorer', () => revealNode(node.rel), { disabled: !S.projectDir });
+      addSep();
+      addItem('Delete Folder…', () => deleteNode(node), { danger: true });
+    } else {
+      addItem('Open', () => openDiskFile(node.rel));
+      addItem('Rename…', () => renameNode(node), { kbd: 'F2' });
+      addSep();
+      addItem('Save File', async () => { await openDiskFile(node.rel, { focus: false }); saveActiveFile(node.rel); }, { kbd: 'Ctrl+S' });
+      addItem('Save File As…', async () => { await openDiskFile(node.rel, { focus: false }); saveActiveFileAs(node.rel); }, { kbd: 'Ctrl+Alt+S' });
+      addItem('Copy Relative Path', () => { navigator.clipboard?.writeText(node.rel).catch(() => {}); api.toast(`Copied ${node.rel}`); });
+      addItem('Reveal in File Explorer', () => revealNode(node.rel), { disabled: !S.projectDir });
+      addSep();
+      addItem('Delete…', () => deleteNode(node), { danger: true });
+    }
+    menu.classList.remove('hidden');
+    const rect = menu.getBoundingClientRect();
+    const x = Math.min(event.clientX, Math.max(8, window.innerWidth - rect.width - 8));
+    const y = Math.min(event.clientY, Math.max(8, window.innerHeight - rect.height - 8));
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
   }
 
   // ---------- home interface & recent projects ----------
@@ -882,6 +1471,7 @@ export function createIde(api) {
       }
     }
     for (const tabName of [...docs.keys()]) closeTab(tabName, true);
+    virtualDirs.clear(); expandedDirs.clear(); diskTree = null; selectedNode = null;
     const project = {
       format: 'trace-project',
       version: 1,
@@ -952,9 +1542,12 @@ export function createIde(api) {
   const commands = {
     home: () => requestReturnHome(),
     newProject: () => requestProjectSwitch({ label: 'a new project', newWindowUrl: '/?newProject=1', onSwitchHere: () => openNewProjectWizard() }),
-    newFile: showNewFile,
+    newFile: () => showNewFile(),
+    newFolder: () => showNewFolder(),
     openProject: () => api.openProjectFromDiskPath?.('', { promptIfInWorkbench: true }),
     openFiles: () => $('#fileInput').click(),
+    saveFile: () => saveActiveFile(),
+    saveFileAs: () => saveActiveFileAs(),
     save: saveAndCompile,
     saveProject: () => api.saveProjectToDisk?.({ saveAs: false }),
     saveProjectAs: () => api.saveProjectToDisk?.({ saveAs: true }),
@@ -995,6 +1588,7 @@ export function createIde(api) {
     const open = button => {
       const wasOpen = button.getAttribute('aria-expanded') === 'true';
       closeMenus();
+      closeExplorerMenu();
       if (wasOpen) return;
       button.setAttribute('aria-expanded', 'true');
       $(`.menu-pop[data-pop="${button.dataset.menu}"]`)?.classList.remove('hidden');
@@ -1007,9 +1601,18 @@ export function createIde(api) {
       event.stopPropagation(); closeMenus();
       commands[item.dataset.cmd]?.();
     });
-    document.addEventListener('click', event => { if (!event.target.closest('.menu')) closeMenus(); });
-    document.addEventListener('keydown', event => { if (event.key === 'Escape') closeMenus(); });
-    window.addEventListener('blur', closeMenus);
+    document.addEventListener('click', event => {
+      if (!event.target.closest('.menu')) closeMenus();
+      if (!event.target.closest('#explorerMenu')) closeExplorerMenu();
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { closeMenus(); closeExplorerMenu(); }
+      if (event.key === 'F2' && selectedNode && document.activeElement?.closest('#ltab-library') && !document.activeElement?.closest('input,textarea')) {
+        event.preventDefault();
+        renameNode(selectedNode);
+      }
+    });
+    window.addEventListener('blur', () => { closeMenus(); closeExplorerMenu(); });
   }
 
   // ---------- wiring ----------
@@ -1031,13 +1634,42 @@ export function createIde(api) {
     $('#btnProjectSettings')?.addEventListener('click', () => $('#projectSettingsDialog')?.showModal());
     $('#sbLang')?.addEventListener('click', () => $('#projectSettingsDialog')?.showModal());
     $('#btnOpenFirst')?.addEventListener('click', () => { if (S.sources.length) openFile(S.sources[0].name); else showNewFile(); });
-    $('#btnNewFile')?.addEventListener('click', showNewFile);
-    $('#btnNewFileExplorer')?.addEventListener('click', showNewFile);
+    $('#btnNewFile')?.addEventListener('click', () => showNewFile());
+    $('#btnNewFileExplorer')?.addEventListener('click', () => showNewFile());
+    $('#btnNewFolderExplorer')?.addEventListener('click', () => showNewFolder());
+    $('#btnRefreshExplorer')?.addEventListener('click', () => refreshProjectTree());
+    $('#projectRootSummary')?.addEventListener('contextmenu', e => openExplorerMenu(e, { type: 'root', rel: '', name: '' }));
+    $('#projectTreeBody')?.addEventListener('contextmenu', e => {
+      if (!e.target.closest('.tree-row')) openExplorerMenu(e, { type: 'root', rel: '', name: '' });
+    });
+    $('#projectTreeBody')?.addEventListener('click', e => {
+      if (!e.target.closest('.tree-row') && !e.target.closest('#newFileRow')) {
+        selectedNode = null;
+        renderProjectTree();
+      }
+    });
+    if ($('#eaForm')) {
+      $('#eaForm').onsubmit = e => {
+        e.preventDefault();
+        const resolve = eaResolve;
+        eaResolve = null;
+        const inputEl = $('#eaInput');
+        const val = inputEl && !inputEl.classList.contains('hidden') ? inputEl.value : true;
+        $('#explorerActionDialog')?.close();
+        resolve?.(val);
+      };
+    }
+    $('#explorerActionDialog')?.addEventListener('close', () => {
+      const resolve = eaResolve;
+      eaResolve = null;
+      resolve?.(null);
+    });
     if ($('#newFileRow')) {
-      $('#newFileRow').onsubmit = event => { event.preventDefault(); createFile($('#newFileName').value); };
+      $('#newFileRow').onsubmit = event => { event.preventDefault(); submitNewEntry($('#newFileName').value); };
       $('#newFileName').onkeydown = event => { if (event.key === 'Escape') { event.stopPropagation(); $('#newFileRow').classList.add('hidden'); } };
       $('#newFileName').onblur = () => { if (!$('#newFileName').value.trim()) $('#newFileRow').classList.add('hidden'); };
     }
+    if ($('#saveFileBtn')) $('#saveFileBtn').onclick = () => saveActiveFile();
     $('#saveSource').onclick = saveAndCompile;
     if ($('#btnFlash')) $('#btnFlash').onclick = () => api.flashToBoard?.();
     $('#sourceLibrary').oninput = event => { const doc = docs.get(active); if (doc) { doc.library = event.target.value.trim(); renderTabs(); } };
@@ -1152,7 +1784,8 @@ export function createIde(api) {
   wire();
 
   return {
-    openFile, closeTab, activate, commitAll, hasUnsaved, validateLibraries, saveAndCompile, saveAndFlash, syncFromSources, openFirst, updateStatus,
+    openFile, openDiskFile, closeTab, activate, commitAll, hasUnsaved, validateLibraries, saveActiveFile, saveActiveFileAs, saveAndCompile, saveAndFlash, syncFromSources, openFirst, updateStatus,
+    refreshProjectTree, renderProjectTree, showNewFile, showNewFolder, closeExplorerMenu,
     setProblems, reportBuildFailure, resetLayout, setEditorPaneOpen, setBoardPaneOpen,
     showHome, requestReturnHome, requestProjectSwitch, openNewProjectWizard, resumeWorkbench, captureBaseline, currentProjectTitle, renderHome, recordRecentProject, populateHomeHdl,
     get active() { return active; },

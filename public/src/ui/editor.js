@@ -141,7 +141,7 @@ export class CodeEditor {
   replaceBlock(from, to, text) { this.insert(text, from, to); this.input.setSelectionRange(from, from + text.length); this.reportCursor(); }
   onKeyDown(event) {
     const mod = event.ctrlKey || event.metaKey, key = event.key;
-    if (mod && key.toLowerCase() === 's') { event.preventDefault(); this.callbacks.onSave?.(); return; }
+    if (mod && !event.shiftKey && !event.altKey && key.toLowerCase() === 's') { event.preventDefault(); this.callbacks.onSave?.(); return; }
     if (mod && key === '/') { event.preventDefault(); this.toggleComment(); return; }
     if (key === 'Tab' && !mod && !event.altKey) { event.preventDefault(); if (event.shiftKey) this.outdent(); else this.indent(); return; }
     if (key === 'Enter' && !mod && !event.shiftKey && !event.altKey) { event.preventDefault(); this.newline(); return; }

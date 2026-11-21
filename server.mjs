@@ -217,7 +217,134 @@ async function pickProjectFile(initialDir = '') {
   const chosen = await runPowershell(ps);
   return chosen ? { cancelled: false, file: path.resolve(chosen) } : { cancelled: true };
 }
-const SAFE_SRC_NAME = /^[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i;
+async function pickSaveFile(initialDir = '', defaultName = 'untitled.vhd') {
+  if (process.platform !== 'win32') throw new Error('Native file dialog is supported on Windows.');
+  let start = hdlRoot;
+  if (initialDir && path.isAbsolute(initialDir)) {
+    const exists = await fs.stat(initialDir).then(s => s.isDirectory(), () => false);
+    if (exists) start = initialDir;
+  } else {
+    const exists = await fs.stat(start).then(s => s.isDirectory(), () => false);
+    if (!exists) start = ROOT;
+  }
+  const safeStart = start.replace(/'/g, "''");
+  const safeName = String(defaultName || 'untitled.vhd').replace(/'/g, "''");
+  const ps = [
+    'Add-Type -AssemblyName System.Windows.Forms',
+    '$owner = New-Object System.Windows.Forms.Form',
+    '$owner.TopMost = $true',
+    '$dlg = New-Object System.Windows.Forms.SaveFileDialog',
+    '$dlg.Title = "Save File As"',
+    `$dlg.InitialDirectory = '${safeStart}'`,
+    `$dlg.FileName = '${safeName}'`,
+    '$dlg.Filter = "VHDL Files (*.vhd;*.vhdl)|*.vhd;*.vhdl|Quartus Settings (*.qsf;*.qpf)|*.qsf;*.qpf|Data & Text (*.txt;*.md;*.hex;*.mif;*.mem;*.dat)|*.txt;*.md;*.hex;*.mif;*.mem;*.dat|All Files (*.*)|*.*"',
+    '$res = $dlg.ShowDialog($owner)',
+    '$owner.Dispose()',
+    'if ($res -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dlg.FileName }',
+  ].join('; ');
+  const chosen = await runPowershell(ps);
+  return chosen ? { cancelled: false, file: path.resolve(chosen) } : { cancelled: true };
+}
+function resolveProjectRel(dir, rel = '', { allowRoot = false } = {}) {
+  if (typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error('Project folder must be an absolute path.');
+  const root = path.resolve(dir);
+  const clean = String(rel || '').replaceAll('\\', '/').replace(/^\/+|\/+$/g, '');
+  if (!clean) {
+    if (allowRoot) return { root, full: root, rel: '' };
+    throw new Error('Specify a file or folder path.');
+  }
+  if (clean.split('/').some(seg => !seg || seg === '.' || seg === '..' || /[<>:"|?*\0]/.test(seg))) {
+    throw new Error(`Invalid relative path: ${rel}`);
+  }
+  const full = path.resolve(root, clean);
+  if (!within(root, full)) throw new Error('Path escapes project directory.');
+  return { root, full, rel: clean };
+}
+async function readProjectTree(dir) {
+  const { root } = resolveProjectRel(dir, '', { allowRoot: true });
+  const st = await fs.stat(root).catch(() => null);
+  if (!st || !st.isDirectory()) throw new Error(`Project folder not found: ${root}`);
+  const SKIP = new Set(['.git', 'node_modules', 'work', 'greybox_tmp', 'db', 'incremental_db', 'output_files']);
+  async function walk(cur, relPrefix, depth) {
+    const entries = await fs.readdir(cur, { withFileTypes: true }).catch(() => []);
+    const dirs = [], files = [];
+    for (const e of entries) {
+      if (e.name.startsWith('.') && e.name !== '.env' && e.name !== '.gitignore') continue;
+      if (e.isDirectory() && SKIP.has(e.name)) continue;
+      const full = path.join(cur, e.name);
+      const rel = relPrefix ? `${relPrefix}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        dirs.push({ type: 'dir', name: e.name, rel, children: depth < 6 ? await walk(full, rel, depth + 1) : [] });
+      } else if (e.isFile()) {
+        const info = await fs.stat(full).catch(() => null);
+        files.push({ type: 'file', name: e.name, rel, ext: path.extname(e.name).slice(1).toLowerCase(), size: info?.size || 0 });
+      }
+    }
+    dirs.sort((a, b) => a.name.localeCompare(b.name));
+    files.sort((a, b) => a.name.localeCompare(b.name));
+    return [...dirs, ...files];
+  }
+  return { ok: true, dir: root, name: path.basename(root), children: await walk(root, '', 0) };
+}
+async function readProjectFile({ dir, rel }) {
+  const { full, rel: clean } = resolveProjectRel(dir, rel);
+  const st = await fs.stat(full).catch(() => null);
+  if (!st || !st.isFile()) throw new Error(`File not found: ${clean}`);
+  if (st.size > 4 * 1024 * 1024) throw new Error('File exceeds 4 MB editor limit.');
+  const text = await fs.readFile(full, 'utf8');
+  return { ok: true, rel: clean, name: path.basename(full), text, size: st.size };
+}
+async function writeProjectFile({ dir, rel, text }) {
+  if (typeof text !== 'string') throw new Error('File content must be a string.');
+  const { full, rel: clean } = resolveProjectRel(dir, rel);
+  await fs.mkdir(path.dirname(full), { recursive: true });
+  await fs.writeFile(full, text, 'utf8');
+  appendLogLine('info', 'app', `Saved file ${clean} in ${dir}`);
+  return { ok: true, rel: clean, full };
+}
+async function writeAbsoluteFile({ filePath, text }) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('File path must be absolute.');
+  if (typeof text !== 'string') throw new Error('File content must be a string.');
+  const full = path.resolve(filePath);
+  await fs.mkdir(path.dirname(full), { recursive: true });
+  await fs.writeFile(full, text, 'utf8');
+  appendLogLine('info', 'app', `Saved file as ${full}`);
+  return { ok: true, file: full, name: path.basename(full), dir: path.dirname(full) };
+}
+async function mkdirInProject({ dir, rel }) {
+  const { full, rel: clean } = resolveProjectRel(dir, rel);
+  await fs.mkdir(full, { recursive: true });
+  appendLogLine('info', 'app', `Created folder ${clean} in ${dir}`);
+  return { ok: true, rel: clean };
+}
+async function renameInProject({ dir, oldRel, newRel }) {
+  const src = resolveProjectRel(dir, oldRel);
+  const dst = resolveProjectRel(dir, newRel);
+  if (src.full === dst.full) return { ok: true, oldRel: src.rel, newRel: dst.rel };
+  const exists = await fs.stat(dst.full).then(() => true, () => false);
+  if (exists) throw new Error(`A file or folder named "${dst.rel}" already exists.`);
+  await fs.mkdir(path.dirname(dst.full), { recursive: true });
+  await fs.rename(src.full, dst.full);
+  appendLogLine('info', 'app', `Renamed ${src.rel} -> ${dst.rel} in ${dir}`);
+  return { ok: true, oldRel: src.rel, newRel: dst.rel };
+}
+async function deleteInProject({ dir, rel }) {
+  const { root, full, rel: clean } = resolveProjectRel(dir, rel);
+  if (full === root) throw new Error('Cannot delete the project root folder.');
+  await fs.rm(full, { recursive: true, force: false });
+  appendLogLine('info', 'app', `Deleted ${clean} in ${dir}`);
+  return { ok: true, rel: clean };
+}
+async function revealInExplorer({ dir, rel = '' }) {
+  if (process.platform !== 'win32') throw new Error('Reveal in File Explorer is supported on Windows.');
+  const { full } = resolveProjectRel(dir, rel, { allowRoot: true });
+  const st = await fs.stat(full).catch(() => null);
+  if (!st) throw new Error('Path not found on disk.');
+  const args = st.isDirectory() ? [full] : [`/select,${full}`];
+  execFile('explorer.exe', args, { windowsHide: false }, () => {});
+  return { ok: true };
+}
+const SAFE_SRC_NAME = /^(?:[a-z0-9_][a-z0-9_. -]*\/)*[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i;
 function sanitizeProjectSlug(name, fallback = 'fpga_project') {
   const clean = String(name || '').trim().replace(/[^a-z0-9_-]/gi, '_').replace(/_+/g, '_').replace(/^[_-]+|[_-]+$/g, '');
   return clean || fallback;
@@ -236,9 +363,13 @@ async function saveProjectToFolder({ dir, projectName, project }) {
   const std = ['93', '02', '08'].includes(project.standard) ? project.standard : '08';
   const writtenFiles = [];
   for (const src of project.sources) {
-    if (!src || typeof src.name !== 'string' || typeof src.text !== 'string' || !SAFE_SRC_NAME.test(src.name)) throw new Error(`Invalid source filename: ${src?.name}`);
-    await fs.writeFile(path.join(targetDir, src.name), src.text, 'utf8');
-    writtenFiles.push(src.name);
+    const normName = typeof src?.name === 'string' ? src.name.replaceAll('\\', '/') : '';
+    if (!src || typeof src.text !== 'string' || !SAFE_SRC_NAME.test(normName) || normName.split('/').some(seg => seg === '.' || seg === '..')) throw new Error(`Invalid source filename: ${src?.name}`);
+    const dest = path.resolve(targetDir, normName);
+    if (!within(targetDir, dest)) throw new Error(`Source escapes project folder: ${src.name}`);
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await fs.writeFile(dest, src.text, 'utf8');
+    writtenFiles.push(normName);
   }
   let sdfFile = null;
   if (project.sdf && typeof project.sdf.text === 'string') {
@@ -362,9 +493,11 @@ async function openProjectFromDisk(inputPath) {
   for (const ref of parsed.files) {
     const candidate = await fs.stat(path.resolve(dir, ref.rel)).then(() => path.resolve(dir, ref.rel), () => path.join(dir, ref.name));
     const text = await fs.readFile(candidate, 'utf8').catch(() => null);
-    if (text !== null && SAFE_SRC_NAME.test(ref.name) && !seen.has(ref.name.toLowerCase())) {
-      seen.add(ref.name.toLowerCase());
-      sources.push({ name: ref.name, text, library: ref.library || 'work' });
+    const relFromDir = within(dir, candidate) ? path.relative(dir, candidate).replaceAll('\\', '/') : ref.name;
+    const srcName = SAFE_SRC_NAME.test(relFromDir) ? relFromDir : ref.name;
+    if (text !== null && SAFE_SRC_NAME.test(srcName) && !seen.has(srcName.toLowerCase())) {
+      seen.add(srcName.toLowerCase());
+      sources.push({ name: srcName, text, library: ref.library || 'work' });
     }
   }
   for (const extra of parsed.meta?.extraFiles || []) {
@@ -461,6 +594,35 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/project/pick-open' && req.method === 'POST') {
       const body = await json(req, 32 * 1024).catch(() => ({}));
       return send(res, 200, await pickProjectFile(body?.initialDir));
+    }
+    if (url.pathname === '/api/project/pick-save-file' && req.method === 'POST') {
+      const body = await json(req, 32 * 1024).catch(() => ({}));
+      return send(res, 200, await pickSaveFile(body?.initialDir, body?.defaultName));
+    }
+    if (url.pathname === '/api/project/tree' && req.method === 'POST') {
+      const body = await json(req, 32 * 1024);
+      return send(res, 200, await readProjectTree(body?.dir));
+    }
+    if (url.pathname === '/api/project/read-file' && req.method === 'POST') {
+      return send(res, 200, await readProjectFile(await json(req, 32 * 1024)));
+    }
+    if (url.pathname === '/api/project/write-file' && req.method === 'POST') {
+      return send(res, 200, await writeProjectFile(await json(req, 8 * 1024 * 1024)));
+    }
+    if (url.pathname === '/api/project/write-path' && req.method === 'POST') {
+      return send(res, 200, await writeAbsoluteFile(await json(req, 8 * 1024 * 1024)));
+    }
+    if (url.pathname === '/api/project/mkdir' && req.method === 'POST') {
+      return send(res, 200, await mkdirInProject(await json(req, 32 * 1024)));
+    }
+    if (url.pathname === '/api/project/rename' && req.method === 'POST') {
+      return send(res, 200, await renameInProject(await json(req, 32 * 1024)));
+    }
+    if (url.pathname === '/api/project/delete' && req.method === 'POST') {
+      return send(res, 200, await deleteInProject(await json(req, 32 * 1024)));
+    }
+    if (url.pathname === '/api/project/reveal' && req.method === 'POST') {
+      return send(res, 200, await revealInExplorer(await json(req, 32 * 1024)));
     }
     if (url.pathname === '/api/project/save' && req.method === 'POST') {
       return send(res, 200, await saveProjectToFolder(await json(req, 12 * 1024 * 1024)));

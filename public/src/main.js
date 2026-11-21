@@ -161,7 +161,7 @@ function trackUiAction(kind, el, detail = '') {
     recordActionLine(`#${id} ${kind.padEnd(8)} ${target} -> BLOCKED (0ms) [reason:control disabled | status:${before.status} | view:${before.view}]`);
     return;
   }
-  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnTruthCopy|#btnTruthExport|#btnSaveProject|#btnVcd|#btnImport|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#btnChangeHdlRoot|#homeChangeHdlRoot|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#ciPins|#btnOpenPinoutRef|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
+  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnTruthCopy|#btnTruthExport|#btnSaveProject|#saveFileBtn|#btnRefreshExplorer|#btnVcd|#btnImport|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#btnChangeHdlRoot|#homeChangeHdlRoot|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#ciPins|#btnOpenPinoutRef|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
   setTimeout(async () => {
     await new Promise(r => requestAnimationFrame(r));
     const waitStart = performance.now();
@@ -217,8 +217,16 @@ function wireActionLogger() {
   window.addEventListener('keydown', e => {
     if (e.repeat) return;
     const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.altKey && ['s', 'n'].includes(e.key.toLowerCase())) {
+      trackUiAction('SHORTCUT', document.activeElement, `Ctrl+Alt+${e.key.toUpperCase()}`);
+      return;
+    }
     if (mod && !e.altKey && ['b', 's', 'e', 'o'].includes(e.key.toLowerCase())) {
-      trackUiAction('SHORTCUT', document.activeElement, `Ctrl+${e.key.toUpperCase()}`);
+      trackUiAction('SHORTCUT', document.activeElement, `Ctrl+${e.shiftKey ? 'Shift+' : ''}${e.key.toUpperCase()}`);
+      return;
+    }
+    if (!mod && !e.altKey && !e.shiftKey && e.key === 'F7') {
+      trackUiAction('SHORTCUT', document.activeElement, 'F7');
       return;
     }
     if (e.target.closest?.('input,select,textarea,dialog:modal')) return;
@@ -260,7 +268,10 @@ function setStatus() {
   $('#btnReset').disabled = locked || !S.sim || (!S.flashed && !S.vcd) || S.dirty;
   if ($('#btnFlash')) $('#btnFlash').disabled = locked || !S.sim || !!S.vcd || S.dirty || S.error;
   $('#btnVcd').disabled = locked || !S.sim || (!S.flashed && !S.vcd);
-  for (const id of ['btnDemo', 'btnImport', 'dropZone', 'btnQsf', 'topSelect', 'standardSelect', 'topLibrary', 'genericInput', 'pwrToggle', 'btnPinReset', 'clearSdf', 'saveSource', 'progDrop', 'btnSaveProject', 'replayScope']) $('#' + id).disabled = locked;
+  for (const id of ['btnDemo', 'btnImport', 'dropZone', 'btnQsf', 'topSelect', 'standardSelect', 'topLibrary', 'genericInput', 'pwrToggle', 'btnPinReset', 'clearSdf', 'saveFileBtn', 'saveSource', 'progDrop', 'btnSaveProject', 'replayScope']) {
+    const el = $('#' + id);
+    if (el) el.disabled = locked;
+  }
   $('#btnTruth').disabled = locked || S.truthBusy || !S.sim || !!S.vcd || S.dirty || S.error;
   for (const input of $$('#virtualInputs input')) input.disabled = locked || S.dirty || S.error || !S.power || !S.sim || !S.flashed || S.sim.ended || !!S.vcd;
   $('#clkHz').disabled = !!S.vcd;
@@ -280,10 +291,8 @@ function syncProjectSaveUI() {
   }
   if ($('#menuSaveProjectLabel')) $('#menuSaveProjectLabel').textContent = saved ? 'Save Project' : 'Save Project As…';
   if ($('#menuSaveProjectAs')) $('#menuSaveProjectAs').classList.toggle('hidden', !saved);
-  if ($('#saveProjectHint')) {
-    const folderName = saved ? S.projectDir.split(/[\\/]/).filter(Boolean).pop() : '';
-    $('#saveProjectHint').textContent = saved ? `${folderName} · .qpf/.qsf` : 'Not saved to disk — Save As…';
-    $('#saveProjectHint').title = saved ? `Saved in ${S.projectDir} (click to save)` : 'Choose a project folder to save .qpf, .qsf and .vhd files';
+  if ($('#projectRootSummary')) {
+    $('#projectRootSummary').title = saved ? `Project folder: ${S.projectDir}\nRight-click for folder actions` : 'Unsaved workspace (File → Save Project As… to save on disk)';
   }
 }
 async function saveProjectToDisk({ saveAs = false, quiet = false } = {}) {
@@ -311,6 +320,7 @@ async function saveProjectToDisk({ saveAs = false, quiet = false } = {}) {
     ide?.recordRecentProject(S.projectName, S.projectDir, result.qpf);
     ide?.captureBaseline(S.projectName);
     syncProjectSaveUI();
+    await ide?.refreshProjectTree?.();
     fetchTree();
     if (!quiet) toast(`Saved ${result.qpf}, ${result.qsf} & ${S.sources.length} source(s) to ${result.dir}.`, 'ok');
     return true;
@@ -350,6 +360,7 @@ async function openProjectFromDiskPath(targetPath = '', { promptIfInWorkbench = 
     ide?.showHome(false);
     markDirty();
     syncProjectSaveUI();
+    await ide?.refreshProjectTree?.();
     toast(`Opened ${result.projectName} (${result.project.sources.length} file${result.project.sources.length === 1 ? '' : 's'}). Click Build & Compile when ready.`, 'ok');
     return true;
   } catch (e) {
@@ -360,7 +371,7 @@ async function openProjectFromDiskPath(targetPath = '', { promptIfInWorkbench = 
 }
 function saveProject() { try { localStorage.setItem('trace.project.v1', JSON.stringify(projectData())); } catch { toast('Browser storage is full or unavailable. Use Save Project As… to keep your files.', 'err'); } }
 function restoreProject(project) {
-  if (!project || project.format !== 'trace-project' || project.version !== 1 || !Array.isArray(project.sources) || project.sources.length > 100 || !project.sources.every(s => s && typeof s.name === 'string' && typeof s.text === 'string' && /^[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i.test(s.name) && (!s.library || /^[a-z][a-z0-9_]*$/i.test(s.library))) || !['93','02','08'].includes(project.standard) || !/^[a-z][a-z0-9_]*$/i.test(project.topLibrary || 'work') || typeof project.generics !== 'string' || !Array.isArray(project.assignments) || !project.assignments.every(p => Array.isArray(p) && p.length === 2 && Number.isInteger(p[0]) && p[0] >= 1 && p[0] <= 144 && typeof p[1] === 'string') || (project.sdf && (typeof project.sdf.text !== 'string' || typeof project.sdf.instance !== 'string' || !['min','typ','max'].includes(project.sdf.corner)))) throw new Error('Invalid Trace project file.');
+  if (!project || project.format !== 'trace-project' || project.version !== 1 || !Array.isArray(project.sources) || project.sources.length > 100 || !project.sources.every(s => s && typeof s.name === 'string' && typeof s.text === 'string' && /^(?:[a-z0-9_][a-z0-9_. -]*\/)*[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i.test(s.name) && (!s.library || /^[a-z][a-z0-9_]*$/i.test(s.library))) || !['93','02','08'].includes(project.standard) || !/^[a-z][a-z0-9_]*$/i.test(project.topLibrary || 'work') || typeof project.generics !== 'string' || !Array.isArray(project.assignments) || !project.assignments.every(p => Array.isArray(p) && p.length === 2 && Number.isInteger(p[0]) && p[0] >= 1 && p[0] <= 144 && typeof p[1] === 'string') || (project.sdf && (typeof project.sdf.text !== 'string' || typeof project.sdf.instance !== 'string' || !['min','typ','max'].includes(project.sdf.corner)))) throw new Error('Invalid Trace project file.');
   S.sources = project.sources; S.assignments = new Map(project.assignments); S.sdf = project.sdf || null;
   S.projectDir = typeof project.projectDir === 'string' && project.projectDir ? project.projectDir : null;
   S.projectName = typeof project.projectName === 'string' ? project.projectName : '';
@@ -370,6 +381,7 @@ function restoreProject(project) {
   const topName = project.top || allEntities()[0] || S.sources[0]?.name || 'No design';
   $('#designTitle').textContent = S.projectName || (topName === DEMO_TOP ? 'Counter demo' : topName);
   $('#designSubtitle').textContent = `Build needed · VHDL-${project.standard === '08' ? '2008' : project.standard === '93' ? '1993' : '2002'}`;
+  ide?.refreshProjectTree?.();
 }
 function download(text, name, type = 'text/plain') { const url = URL.createObjectURL(new Blob([text], { type })); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function renderSdf() { $('#sdfControls').classList.toggle('hidden', !S.sdf); $('#sdfName').textContent = S.sdf?.name || 'Timing annotation'; $('#sdfInstance').value = S.sdf?.instance || ''; $('#sdfCorner').value = S.sdf?.corner || 'typ'; }
@@ -377,20 +389,13 @@ function allEntities() {
   return [...new Set(S.sources.flatMap(s => [...s.text.replace(/--[^\n]*/g, '').matchAll(/\bentity\s+([a-z]\w*)\s+is\b/gi)].map(m => m[1].toLowerCase())))];
 }
 function renderSources() {
-  $('#srcList').replaceChildren(); $('#srcCount').textContent = S.sources.length;
-  S.sources.forEach((s, i) => {
-    const li = document.createElement('li'); li.dataset.file = s.name;
-    const kind = document.createElement('span'); kind.className = 'src-kind'; kind.textContent = s.name.split('.').pop().toUpperCase();
-    const name = document.createElement('button'); name.className = 'src-name'; name.textContent = s.name; name.title = `Edit ${s.name}`;
-    name.onclick = () => { sourceIndex = i; ide?.openFile(s.name); };
-    const remove = document.createElement('button'); remove.className = 'src-x'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${s.name}`);
-    remove.onclick = () => { if (S.building || S.importing) return; S.sources.splice(i, 1); renderSources(); markDirty(); toast('Source removed. Build to apply changes.'); };
-    li.append(kind, name, remove); $('#srcList').append(li);
-  });
+  if ($('#srcCount')) $('#srcCount').textContent = String(S.sources.length);
   const selected = $('#topSelect').value; $('#topSelect').replaceChildren(new Option('Auto-detect top', ''));
   for (const entity of allEntities()) $('#topSelect').add(new Option(entity, entity));
   if (allEntities().includes(selected)) $('#topSelect').value = selected;
   ide?.syncFromSources();
+  if (S.projectDir) ide?.refreshProjectTree?.();
+  else ide?.renderProjectTree?.();
 }
 async function closeSession(sim) { if (sim?.id) await api(`/api/sim/${sim.id}`, undefined, 'DELETE').catch(() => {}); }
 async function stopAllSimulations() {
@@ -477,7 +482,7 @@ async function build(top = $('#topSelect').value) {
     $('#roTime').textContent = fmtTime(0);
     syncKeys();
     const assignedCount = [...S.compiledAssignments.values()].filter(v => v && v.trim()).length;
-    $('#designTitle').textContent = result.top === DEMO_TOP ? 'Counter demo' : result.top;
+    $('#designTitle').textContent = S.projectName || (result.top === DEMO_TOP ? 'Counter demo' : result.top);
     $('#designSubtitle').textContent = `Compiled (${assignedCount} pin${assignedCount === 1 ? '' : 's'} assigned) · Ready to flash`;
     $('#inputHint').textContent = 'Flash compiled design to activate board I/O';
     $('.mode-label').textContent = 'GHDL · compiled (unflashed)';
@@ -1350,9 +1355,8 @@ function wire() {
   $('#clkHz').onchange = e => { S.clkHz = Number(e.target.value); accumulator = 0; log(`Ideal clock: ${S.clkHz} Hz. Execution speed is limited by native simulation and display throughput.`); };
   $('#btnMute').onclick = () => { const muted = !audio.isMuted(); audio.setMuted(muted); if (!muted) audio.resume(); $('#btnMute').setAttribute('aria-pressed', String(muted)); $('#muteLabel').textContent = muted ? 'Sound off' : 'Sound on'; };
   $('#btnElab').onclick = () => ide ? ide.saveAndCompile() : build(); $('#topSelect').onchange = markDirty;
-  $('#btnDemo').onclick = () => { S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; S.assignments.clear(); S.discoveredPorts = []; S.projectDir = null; S.projectName = 'Counter demo'; S.sdf = null; $('#genericInput').value = ''; $('#topLibrary').value = 'work'; $('#standardSelect').value = '93'; renderSdf(); renderSources(); $('#topSelect').value = DEMO_TOP; $('#designTitle').textContent = 'Counter demo'; $('#designSubtitle').textContent = 'Build needed · VHDL-1993'; renderPins(); syncProjectSaveUI(); markDirty(); toast('Counter demo loaded. Click Build & Compile when ready.'); };
-  $('#btnSaveProject').onclick = () => saveProjectToDisk({ saveAs: false });
-  if ($('#saveProjectHint')) $('#saveProjectHint').onclick = () => saveProjectToDisk({ saveAs: false });
+  $('#btnDemo').onclick = () => { S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; S.assignments.clear(); S.discoveredPorts = []; S.projectDir = null; S.projectName = 'Counter demo'; S.sdf = null; $('#genericInput').value = ''; $('#topLibrary').value = 'work'; $('#standardSelect').value = '93'; renderSdf(); renderSources(); $('#topSelect').value = DEMO_TOP; $('#designTitle').textContent = 'Counter demo'; $('#designSubtitle').textContent = 'Build needed · VHDL-1993'; renderPins(); syncProjectSaveUI(); ide?.refreshProjectTree?.(); markDirty(); toast('Counter demo loaded. Click Build & Compile when ready.'); };
+  if ($('#btnSaveProject')) $('#btnSaveProject').onclick = () => saveProjectToDisk({ saveAs: false });
   $('#btnOpenPinoutRef')?.addEventListener('click', () => openTools('pinout'));
   $('#pinoutSearch')?.addEventListener('input', () => renderPinoutRef());
   for (const id of ['standardSelect', 'topLibrary', 'genericInput', 'sdfInstance', 'sdfCorner']) $('#' + id).onchange = markDirty;
@@ -1423,8 +1427,11 @@ function wire() {
   };
   window.addEventListener('keydown', e => {
     const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.altKey && !e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); ide?.saveActiveFileAs(); return; }
+    if (mod && e.altKey && !e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); ide?.showNewFile(); return; }
     if (mod && !e.altKey && e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); saveProjectToDisk({ saveAs: false }); return; }
-    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); ide?.saveAndCompile(); return; }
+    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); ide?.saveActiveFile(); return; }
+    if (!mod && !e.altKey && !e.shiftKey && e.key === 'F7') { e.preventDefault(); ide?.saveAndCompile(); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'b') { e.preventDefault(); flashToBoard(); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'e') { e.preventDefault(); ide?.setEditorPaneOpen(!$('#sourceDialog')?.open); return; }
     if (!mod && e.altKey && e.key.toLowerCase() === 'b') { e.preventDefault(); ide?.setBoardPaneOpen(!ide.boardOpen); return; }

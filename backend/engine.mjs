@@ -68,17 +68,23 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
     const entities = new Set(), groups = new Map(), names = new Set(), manifests = [];
     const diagnostics = [];
     for (const source of sources) {
-      if (!source || !/^[a-z0-9_][a-z0-9_. -]*\.(?:vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i.test(source.name) || typeof source.text !== 'string') throw new Error('Invalid source/data filename or content.');
-      if (names.has(source.name.toLowerCase())) throw new Error(`Duplicate filename: ${source.name}`);
-      names.add(source.name.toLowerCase());
-      if (/\.cf$/i.test(source.name)) { manifests.push(source); continue; }
+      if (!source || typeof source.name !== 'string' || typeof source.text !== 'string') throw new Error('Invalid source/data filename or content.');
+      const rel = source.name.replaceAll('\\', '/');
+      if (!/^(?:[a-z0-9_][a-z0-9_. -]*\/)*[a-z0-9_][a-z0-9_. -]*\.(?:vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i.test(rel) || rel.split('/').some(seg => seg === '.' || seg === '..')) throw new Error('Invalid source/data filename or content.');
+      if (names.has(rel.toLowerCase())) throw new Error(`Duplicate filename: ${rel}`);
+      names.add(rel.toLowerCase());
+      if (/\.cf$/i.test(rel)) { manifests.push({ ...source, name: rel }); continue; }
       const library = (source.library || 'work').toLowerCase();
       if (!/^[a-z][a-z0-9_]*$/i.test(library)) throw new Error('Invalid VHDL library name.');
-      await fs.writeFile(path.join(dir, source.name), source.text);
-      if (/\.(vhd|vhdl|vho)$/i.test(source.name)) {
+      const dest = path.resolve(dir, rel);
+      const checkRel = path.relative(dir, dest);
+      if (checkRel.startsWith('..') || path.isAbsolute(checkRel)) throw new Error('Invalid source path.');
+      await fs.mkdir(path.dirname(dest), { recursive: true });
+      await fs.writeFile(dest, source.text);
+      if (/\.(vhd|vhdl|vho)$/i.test(rel)) {
         for (const m of source.text.replace(/--[^\n]*/g, '').matchAll(/\bentity\s+([a-z]\w*)\s+is\b/gi)) entities.add(m[1].toLowerCase());
         if (!groups.has(library)) groups.set(library, []);
-        groups.get(library).push(source.name);
+        groups.get(library).push(rel);
       }
     }
     for (const manifest of manifests) {
