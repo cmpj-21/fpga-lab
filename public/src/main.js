@@ -1134,8 +1134,9 @@ function syncNavigation() {
   }
 }
 function leftTab(name) {
-  $$('#left .tab').forEach(t => { const active = t.dataset.ltab === name; t.classList.toggle('active', active); t.setAttribute('aria-selected', String(active)); });
   $$('.ltab').forEach(t => t.classList.toggle('active', t.id === 'ltab-' + name));
+  const title = $('#leftTitle');
+  if (title) title.textContent = name === 'pins' ? 'Pin Planner' : 'Project';
   syncNavigation();
 }
 function toggleLeft(name) {

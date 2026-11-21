@@ -91,8 +91,6 @@ try {
   await click('#btnLibrary'); await checkNavigation(['btnSignals'], 'clicking Files again clears its highlight');
   await click('#btnPins'); await checkNavigation(['btnPins', 'btnSignals'], 'Pins highlights its open panel');
   await click('#btnLibrary'); await checkNavigation(['btnLibrary', 'btnSignals'], 'switching from Pins to Files moves the highlight');
-  await click('[data-ltab="pins"]'); await checkNavigation(['btnPins', 'btnSignals'], 'inner Pin map tab updates the sidebar');
-  await click('[data-ltab="library"]'); await checkNavigation(['btnLibrary', 'btnSignals'], 'inner Sources tab updates the sidebar');
   await click('#btnPins'); await click('#btnPins'); await checkNavigation(['btnSignals'], 'clicking Pins again closes it and clears its highlight');
   await click('#btnLibrary'); await click('#btnTools'); await checkNavigation(['btnLibrary', 'btnSignals', 'btnTools'], 'Tools can highlight alongside other visible panels');
   await click('#closeRight'); await checkNavigation(['btnLibrary', 'btnSignals'], 'Tools close button clears its highlight');
@@ -227,7 +225,7 @@ try {
   check(await evaluate('__lab.state.bindings.led1.offset===3'), 'editable pin map rebuilds with the chosen vector bit');
   check(await evaluate('[...document.querySelectorAll("#pinBody input")].every(e=>!e.disabled)'), 'pin controls remain editable after rebuilding');
   await screenshot('product-pins.png');
-  await click('[data-ltab="library"]');
+  await click('#btnLibrary');
   await click('#btnSaveProject');
   check(await evaluate('JSON.parse(localStorage.getItem("trace.project.v1")).assignments.some(p=>p[0]===87&&p[1]==="leds[7]")'), 'project save includes source settings and edited pin map');
   const savedProject = JSON.parse(await downloaded('trace-project.json'));
@@ -288,7 +286,7 @@ $enddefinitions $end $dumpvars 0! 1@ 0# 1$ b1 % 0& r1.25 * 1+ $end
   const timing = '(DELAYFILE (SDFVERSION "3.0") (DESIGN "dut") (TIMESCALE 1 ns) (CELL (CELLTYPE "dut") (INSTANCE) (DELAY (ABSOLUTE (PORT a (2:3:4) (2:3:4))))))';
   await evaluate(`__lab.loadFiles([new File([${JSON.stringify(timing)}], 'timing.sdf')])`); await idle();
   check(await evaluate('__lab.state.dirty && __lab.state.sdf.instance==="/" && !document.querySelector("#sdfControls").classList.contains("hidden")'), 'SDF import exposes instance and corner before rebuilding');
-  await click('[data-ltab="library"]');
+  await click('#btnLibrary');
   await evaluate('document.querySelector(".compiler-options").open=true;document.querySelector("#sdfCorner").value="max";document.querySelector("#sdfCorner").dispatchEvent(new Event("change"))');
   await click('#btnElab'); await idle();
   await click('#clkHz'); await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'End', code: 'End', windowsVirtualKeyCode: 35 }); await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
@@ -310,7 +308,7 @@ $enddefinitions $end $dumpvars 0! 1@ 0# 1$ b1 % 0& r1.25 * 1+ $end
   await evaluate(`__lab.loadFiles([new File(['Device: EP4CE22F17C6N'],${JSON.stringify(bitstreamName)})])`); await idle();
   check(await evaluate('document.querySelector("#piMatch").textContent==="Not verified" && __lab.state.sim.top==="dut"'), 'bitstream inspector flags mismatched hardware without replacing the live simulation');
   await click('#closeRight');
-  await click('[data-ltab="library"]'); await click('#btnDemo'); await idle(); await click('[data-camera="hero"]');
+  await click('#btnDemo'); await idle(); await click('[data-camera="hero"]');
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: false });
   await evaluate('new Promise(r=>setTimeout(r,500))');
   await screenshot('overhaul-mobile.png');
