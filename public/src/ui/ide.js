@@ -421,9 +421,10 @@ export function createIde(api) {
           const current = docs.get(name);
           if (!current) return;
           const dirty = isDirty(name);
+          if (dirty && !S.dirty) api.markDirty();
           if (dirty !== current.dirty) renderTabs();
         },
-        onSave: () => saveAndFlash(),
+        onSave: () => saveAndCompile(),
         onCursor: info => { if (active === name) { cursor = info; updateStatus(); } },
       });
       editor.setValue(source.text);
@@ -487,11 +488,15 @@ export function createIde(api) {
     renderTabs();
     return changed;
   }
-  function saveAndFlash() {
+  function saveAndCompile() {
     if (S.building || S.importing || S.exporting) return false;
     if (!validateLibraries()) return false;
     commitAll(); api.renderSources(); api.markDirty();
     return api.build();
+  }
+  function saveAndFlash() {
+    if (S.building || S.importing || S.exporting) return false;
+    return api.flashToBoard ? api.flashToBoard() : saveAndCompile();
   }
   function syncFromSources() {
     let vanished = false;
@@ -812,7 +817,7 @@ export function createIde(api) {
     newProject: () => requestReturnHome({ focusWizard: true }),
     newFile: showNewFile,
     openFiles: () => $('#fileInput').click(),
-    save: saveAndFlash,
+    save: saveAndCompile,
     saveProject: () => $('#btnSaveProject').click(),
     loadDemo: () => $('#btnDemo').click(),
     closeTab: () => active && closeTab(active),
@@ -832,7 +837,7 @@ export function createIde(api) {
     photo: () => $('#btnPhotoMode').click(),
     theme: () => $('#btnTheme').click(),
     resetLayout,
-    flash: saveAndFlash,
+    flash: () => api.flashToBoard?.(),
     restart: () => $('#btnReset').click(),
     step: () => $('#btnStep').click(),
     run: () => $('#btnRun').click(),
@@ -878,8 +883,8 @@ export function createIde(api) {
       $('#newFileName').onkeydown = event => { if (event.key === 'Escape') { event.stopPropagation(); $('#newFileRow').classList.add('hidden'); } };
       $('#newFileName').onblur = () => { if (!$('#newFileName').value.trim()) $('#newFileRow').classList.add('hidden'); };
     }
-    $('#saveSource').onclick = saveAndFlash;
-    if ($('#btnFlash')) $('#btnFlash').onclick = saveAndFlash;
+    $('#saveSource').onclick = saveAndCompile;
+    if ($('#btnFlash')) $('#btnFlash').onclick = () => api.flashToBoard?.();
     $('#sourceLibrary').oninput = event => { const doc = docs.get(active); if (doc) { doc.library = event.target.value.trim(); renderTabs(); } };
     $('#sourceDialog')?.addEventListener('close', () => {
       if ($('#sourceDialog').contains(document.activeElement)) document.activeElement.blur();
@@ -950,7 +955,7 @@ export function createIde(api) {
   wire();
 
   return {
-    openFile, closeTab, activate, commitAll, hasUnsaved, validateLibraries, saveAndFlash, syncFromSources, openFirst, updateStatus,
+    openFile, closeTab, activate, commitAll, hasUnsaved, validateLibraries, saveAndCompile, saveAndFlash, syncFromSources, openFirst, updateStatus,
     setProblems, reportBuildFailure, resetLayout, setEditorPaneOpen,
     showHome, requestReturnHome, resumeWorkbench, captureBaseline, renderHome, recordRecentProject, populateHomeHdl,
     get active() { return active; },

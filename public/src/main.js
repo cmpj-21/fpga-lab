@@ -13,7 +13,7 @@ import * as audio from './ui/audio.js';
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
-const S = { sources: [], sim: null, running: false, power: true, building: false, busy: false, clkHz: 1000, speed: 55, time: 0, inputs: {}, assignments: new Map(), bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0 };
+const S = { sources: [], sim: null, flashed: false, running: false, power: true, building: false, busy: false, clkHz: 1000, speed: 55, time: 0, inputs: {}, assignments: new Map(), compiledAssignments: new Map(), discoveredPorts: [], bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0 };
 let board, waves, ide, toastTimer, sourceIndex, consoleCount = 0, logFile = '', actionLogFile = '', reportCount = 0;
 let lastFrame = performance.now(), accumulator = 0, lastDraw = 0;
 let actionSeq = 0, lastErrorSeq = 0, lastErrorMsg = '', actionFlushTimer = 0;
@@ -231,20 +231,20 @@ async function api(url, body, method = 'POST') {
   const result = await response.json(); if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`); return result;
 }
 function setStatus() {
-  const name = S.building ? 'Compiling' : S.error ? 'Error' : !S.power ? 'Power off' : S.dirty ? 'Build needed' : S.sim?.ended ? 'Complete' : S.running ? 'Running' : S.sim ? 'Paused' : 'No design';
+  const name = S.building ? 'Compiling' : S.error ? 'Error' : !S.power ? 'Power off' : S.dirty ? 'Build needed' : S.sim && !S.flashed && !S.vcd ? 'Ready to flash' : S.sim?.ended ? 'Complete' : S.running ? 'Running' : S.sim && (S.flashed || S.vcd) ? 'Paused' : 'No design';
   $('#statusPill').className = `status-pill ${name.toLowerCase().replaceAll(' ', '-')}`; $('#statusPill').textContent = name;
   $('#btnRun').classList.toggle('running', S.running); $('#runLabel').textContent = S.running ? 'Pause' : 'Run';
   $('#btnRun').setAttribute('aria-label', S.running ? 'Pause simulation' : 'Run simulation');
   const locked = S.building || S.importing || S.exporting;
   for (const input of $$('#pinBody input, #sdfControls input, #sdfControls select, .src-name, .src-x')) input.disabled = locked;
-  $('#btnRun').disabled = $('#btnStep').disabled = locked || !S.power || !S.sim || S.sim.ended || S.dirty || S.error;
+  $('#btnRun').disabled = $('#btnStep').disabled = locked || !S.power || !S.sim || (!S.flashed && !S.vcd) || S.sim.ended || S.dirty || S.error;
   $('#btnElab').disabled = locked;
-  $('#btnReset').disabled = locked || !S.sim || S.dirty;
-  if ($('#btnFlash')) $('#btnFlash').disabled = locked;
-  $('#btnVcd').disabled = locked || !S.sim;
+  $('#btnReset').disabled = locked || !S.sim || (!S.flashed && !S.vcd) || S.dirty;
+  if ($('#btnFlash')) $('#btnFlash').disabled = locked || !S.sim || !!S.vcd || S.dirty || S.error;
+  $('#btnVcd').disabled = locked || !S.sim || (!S.flashed && !S.vcd);
   for (const id of ['btnDemo', 'btnImport', 'dropZone', 'btnQsf', 'topSelect', 'standardSelect', 'topLibrary', 'genericInput', 'pwrToggle', 'btnPinReset', 'clearSdf', 'saveSource', 'progDrop', 'btnSaveProject', 'replayScope']) $('#' + id).disabled = locked;
   $('#btnTruth').disabled = locked || S.truthBusy || !S.sim || !!S.vcd || S.dirty || S.error;
-  for (const input of $$('#virtualInputs input')) input.disabled = locked || S.dirty || S.error || !S.power || !S.sim || S.sim.ended || !!S.vcd;
+  for (const input of $$('#virtualInputs input')) input.disabled = locked || S.dirty || S.error || !S.power || !S.sim || !S.flashed || S.sim.ended || !!S.vcd;
   $('#clkHz').disabled = !!S.vcd;
   $('#btnStep').title = S.vcd ? 'Next recorded timestamp (.)' : 'One clock cycle (.)';
   $('#btnVcd').textContent = S.vcd || S.sim?.ended ? 'Export VCD ↗' : 'Finish & export ↗';
@@ -252,7 +252,7 @@ function setStatus() {
 }
 function pause() { S.running = false; accumulator = 0; audio.stopBuzzer(); setStatus(); }
 function fail(e) { S.error = true; S.pending = []; pause(); log(e.message, 'error'); toast(e.message, 'err'); ide?.reportBuildFailure(e.message); openTools('console'); }
-function markDirty() { S.dirty = true; S.error = false; S.pending = []; ++S.generation; pause(); saveProject(); }
+function markDirty() { S.dirty = true; S.flashed = false; S.error = false; S.pending = []; S.bindings = {}; ++S.generation; board?.clearOutputs(); sampleOutputs(); pause(); saveProject(); }
 function projectData() { ide?.commitAll(); return { format: 'trace-project', version: 1, sources: S.sources, assignments: [...S.assignments], top: $('#topSelect').value, topLibrary: $('#topLibrary').value, standard: $('#standardSelect').value, generics: $('#genericInput').value, sdf: S.sdf ? { ...S.sdf, instance: $('#sdfInstance').value, corner: $('#sdfCorner').value } : null }; }
 function saveProject() { try { localStorage.setItem('trace.project.v1', JSON.stringify(projectData())); } catch { toast('Browser storage is full or unavailable. Use Save project to keep your files.', 'err'); } }
 function restoreProject(project) {
@@ -299,7 +299,10 @@ async function stopAllSimulations() {
   S.error = false;
   const prevSim = S.sim;
   S.sim = null;
+  S.flashed = false;
   S.vcd = null;
+  S.compiledAssignments = new Map();
+  S.discoveredPorts = [];
   S.bindings = {};
   S.inputs = {};
   S.values.clear();
@@ -329,7 +332,7 @@ async function build(top = $('#topSelect').value) {
     renderSources();
     if (!top) top = $('#topSelect').value;
   }
-  S.dirty = true; S.pending = []; pause();
+  S.dirty = true; S.flashed = false; S.pending = []; S.bindings = {}; pause();
   if (!S.sources.length) return toast('Open VHDL sources first.', 'err');
   S.standard = $('#standardSelect').value; S.topLibrary = $('#topLibrary').value.trim(); S.generics = {};
   if (!/^[a-z][a-z0-9_]*$/i.test(S.topLibrary)) return toast('Enter a valid top library name.', 'err');
@@ -337,39 +340,45 @@ async function build(top = $('#topSelect').value) {
   try { S.generics = parseGenerics($('#genericInput').value); } catch (e) { return toast(e.message, 'err'); }
   pause(); S.building = true; S.error = false; const generation = ++S.generation; setStatus(); saveProject();
   S.pending = []; await closeSession(S.sim); S.sim = null; S.vcd = null;
+  board?.clearOutputs(); sampleOutputs();
   try {
     const result = await api('/api/sim/compile', { sources: S.sources, top: top || undefined, standard: S.standard, topLibrary: S.topLibrary, generics: S.generics, sdf: S.sdf });
     if (generation !== S.generation) { await closeSession(result); return; }
-    S.sim = result; S.dirty = false; S.time = 0; S.cycles = 0; S.inputs = {}; S.values.clear();
+    S.sim = result; S.dirty = false; S.flashed = false; S.time = 0; S.cycles = 0; S.inputs = {}; S.values.clear();
+    S.compiledAssignments = new Map(S.assignments);
     $('#replayControls').classList.add('hidden');
-    for (const signal of result.signals) signal.short = signal.name.startsWith(result.top + '.') ? signal.name.slice(result.top.length + 1) : signal.name;
-    buildBindings(); buildWaves(); renderVirtualInputs(); renderPins(); renderTruthInputs();
-    uart.reset(); $('#uartOut').replaceChildren();
-    board?.clearOutputs(); consume(result);
-    for (const signal of result.signals.filter(s => s.driveable && !result.ended)) {
-      const bits = Array(signal.width).fill(signal.direction === 3 ? 'Z' : '0');
-      for (const net of ['reset_btn', ...KEY_NETS, 'uart_rxd']) {
-        const bound = S.bindings[net]; if (bound?.signal.id === signal.id) bits[bound.offset] = (net === 'uart_rxd' || !isNetActive(net)) ? '1' : '0';
+    const discovered = [];
+    for (const signal of result.signals) {
+      signal.short = signal.name.startsWith(result.top + '.') ? signal.name.slice(result.top.length + 1) : signal.name;
+      if (signal.name.startsWith(result.top + '.') && !signal.short.includes('.')) {
+        if (signal.width === 1) discovered.push(signal.short);
+        else if (Number.isInteger(signal.left) && Number.isInteger(signal.right)) {
+          const step = signal.left <= signal.right ? 1 : -1;
+          for (let b = signal.left; b !== signal.right + step; b += step) discovered.push(`${signal.short}[${b}]`);
+        }
       }
-      const value = bits.join(''); S.inputs[signal.id] = value; S.pending.push({ id: signal.id, value });
     }
-    if (!result.ended) {
-      const initial = await api(`/api/sim/${result.id}/step`, { cycles: 0, inputs: S.pending.splice(0), clock: clockId(), halfPeriod: halfPeriod() });
-      consume(initial);
-    }
+    S.discoveredPorts = discovered;
+    S.bindings = {};
+    waves.setSignals([]); renderSignalChips();
+    $('#virtualInputs').replaceChildren(); $('#virtualInputs').classList.add('hidden');
+    renderPins(); renderTruthInputs();
+    uart.reset(); $('#uartOut').replaceChildren();
+    board?.clearOutputs(); sampleOutputs();
+    $('#roTime').textContent = fmtTime(0);
     syncKeys();
+    const assignedCount = [...S.compiledAssignments.values()].filter(v => v && v.trim()).length;
     $('#designTitle').textContent = result.top === DEMO_TOP ? 'Counter demo' : result.top;
-    $('#designSubtitle').textContent = `GHDL · VHDL-${S.standard === '08' ? '2008' : S.standard === '93' ? '1993' : '2002'}`;
-    $('#inputHint').textContent = result.top === DEMO_TOP ? 'Hold S1 to count' : 'Active-low inputs';
-    $('.mode-label').textContent = 'GHDL · compiled VHDL';
-    log(`${result.backend}\nCompiled ${result.top}. ${result.signals.length} observable signals.`);
+    $('#designSubtitle').textContent = `Compiled (${assignedCount} pin${assignedCount === 1 ? '' : 's'} assigned) · Ready to flash`;
+    $('#inputHint').textContent = 'Flash compiled design to activate board I/O';
+    $('.mode-label').textContent = 'GHDL · compiled (unflashed)';
+    log(`${result.backend}\nCompiled ${result.top} (${result.signals.length} signals, ${assignedCount} board pin${assignedCount === 1 ? '' : 's'} assigned). Click Flash to program the devboard.`);
     result.diagnostics.forEach(d => log(d, 'warning'));
     ide?.setProblems(parseDiagnostics((result.diagnostics || []).join('\n')));
-    toast(`Compiled ${result.top}`, 'ok');
-    waves.fit();
+    toast(assignedCount ? `Compiled ${result.top} (${assignedCount} pin${assignedCount === 1 ? '' : 's'} assigned). Click Flash to program board.` : `Compiled ${result.top} (0 pins assigned). Assign pins in Pin Planner or click Flash.`, 'ok');
   } catch (e) {
     if (generation !== S.generation) return;
-    await closeSession(S.sim); S.sim = null; S.bindings = {}; S.inputs = {}; S.values.clear(); S.time = 0;
+    await closeSession(S.sim); S.sim = null; S.flashed = false; S.bindings = {}; S.inputs = {}; S.values.clear(); S.time = 0;
     board?.clearOutputs(); sampleOutputs(); renderPins(); waves.setSignals([]); renderSignalChips();
     $('#virtualInputs').replaceChildren(); $('#virtualInputs').classList.add('hidden');
     for (const id of ['truthInputs', 'truthHead', 'truthBody', 'truthSummary', 'uartOut']) $('#' + id).replaceChildren();
@@ -377,11 +386,66 @@ async function build(top = $('#topSelect').value) {
     fail(e);
   } finally { S.building = false; setStatus(); }
 }
+async function flashToBoard() {
+  if (S.building || S.importing || S.exporting) return;
+  if (ide?.hasUnsaved() || S.dirty || !S.sim || S.error) {
+    return toast('Build & Compile your code and pin assignments first before flashing to the board.', 'err');
+  }
+  pause();
+  if (S.flashed || S.time > 0 || S.cycles > 0 || S.sim.ended) {
+    await build(S.sim.top);
+    if (S.error || !S.sim) return;
+  }
+  S.flashed = true;
+  S.time = 0; S.cycles = 0; S.inputs = {}; S.values.clear(); S.pending = [];
+  buildBindings(); buildWaves(); renderPins(); renderTruthInputs();
+  $('#virtualInputs').replaceChildren(); $('#virtualInputs').classList.add('hidden');
+  uart.reset(); $('#uartOut').replaceChildren();
+  board?.clearOutputs(); consume(S.sim);
+  for (const signal of S.sim.signals.filter(s => s.driveable && !S.sim.ended)) {
+    const bits = Array(signal.width).fill(signal.direction === 3 ? 'Z' : '0');
+    let touched = false;
+    for (const net of ['reset_btn', ...KEY_NETS, 'uart_rxd']) {
+      const bound = S.bindings[net];
+      if (bound?.signal.id === signal.id) {
+        bits[bound.offset] = (net === 'uart_rxd' || !isNetActive(net)) ? '1' : '0';
+        touched = true;
+      }
+    }
+    if (touched) {
+      const value = bits.join(''); S.inputs[signal.id] = value; S.pending.push({ id: signal.id, value });
+    }
+  }
+  if (!S.sim.ended && S.pending.length) {
+    const initial = await api(`/api/sim/${S.sim.id}/step`, { cycles: 0, inputs: S.pending.splice(0), clock: clockId(), halfPeriod: halfPeriod() });
+    consume(initial);
+  } else {
+    sampleOutputs();
+  }
+  syncKeys();
+  setStatus();
+  waves.fit();
+  const boundCount = Object.keys(S.bindings).length;
+  $('#designSubtitle').textContent = boundCount
+    ? `Flashed (${boundCount} pin${boundCount === 1 ? '' : 's'} connected) · VHDL-${S.standard === '08' ? '2008' : S.standard === '93' ? '1993' : '2002'}`
+    : 'Flashed (0 pins connected — board I/O inactive)';
+  $('#inputHint').textContent = boundCount ? 'Active-low inputs (mapped pins only)' : 'No pins assigned in Pin Planner';
+  $('.mode-label').textContent = boundCount ? 'GHDL · flashed to board' : 'GHDL · flashed (unmapped)';
+  if (boundCount === 0) {
+    log(`Flashed ${S.sim.top} to devboard with 0 connected pins. Because no pins were assigned in Pin Planner before compiling, the devboard will behave as if no code was flashed.`, 'warning');
+    toast(`Flashed ${S.sim.top} with 0 pins mapped (devboard I/O is unconnected).`);
+  } else {
+    log(`Flashed ${S.sim.top} onto 3D devboard (${boundCount} pin${boundCount === 1 ? '' : 's'} connected).`);
+    toast(`Flashed ${S.sim.top} to devboard (${boundCount} pin${boundCount === 1 ? '' : 's'} connected).`, 'ok');
+  }
+}
 function buildBindings() {
   S.bindings = {};
-  if (!S.sim) return;
+  if (!S.sim || (!S.flashed && !S.vcd)) return;
+  const map = S.vcd ? S.assignments : S.compiledAssignments;
   for (const [net, pin] of Object.entries(NET_PIN)) {
-    const target = S.assignments.get(pin) ?? (SEG_NETS.includes(net) ? `seven_seg[${SEG_NETS.indexOf(net)}]` : net);
+    const target = (map.get(pin) ?? '').trim();
+    if (!target) continue;
     const match = target.toLowerCase().match(/^(.+?)(?:\[(-?\d+)\]|\((-?\d+)\))?$/);
     if (!match) continue;
     const name = match[1], bit = match[2] ?? match[3];
@@ -392,7 +456,7 @@ function buildBindings() {
     S.bindings[net] = { signal, bit: bit === undefined ? null : Number(bit), offset };
   }
 }
-function clockId() { const bound = S.bindings.clk?.signal; return bound?.driveable && bound.width === 1 ? bound.id : S.sim?.signals.find(s => s.driveable && s.direction === 1 && s.width === 1 && /^(clk|clock|fpga_clk|clock_50)$/i.test(s.short))?.id ?? -1; }
+function clockId() { const bound = S.bindings.clk?.signal; return bound?.driveable && bound.width === 1 ? bound.id : -1; }
 function halfPeriod() { return String(Math.max(1, Math.round(0.5 * 10 ** -(S.sim?.precision ?? -15) / S.clkHz))); }
 function boardValue(net) {
   const bound = S.bindings[net]; if (!bound) return 'U';
@@ -576,17 +640,39 @@ function renderSignalChips() {
 }
 function renderPins() {
   $('#pinBody').replaceChildren();
+  const datalist = $('#pinPortList');
+  if (datalist) datalist.replaceChildren(...(S.discoveredPorts || []).map(p => new Option(p, p)));
+  const hint = $('#pinStepHint');
+  if (hint) {
+    hint.textContent = !S.sim
+      ? 'Step 2 required: Build & Compile your VHDL code first to discover entity ports for pin assignment.'
+      : S.dirty
+        ? 'Step 4 required: Pin assignments changed — click Build & Compile again before flashing to the board.'
+        : !S.flashed
+          ? `Step 5 ready: ${S.discoveredPorts.length} port target${S.discoveredPorts.length === 1 ? '' : 's'} discovered. Assign pins below (then Build & Compile) or click Flash.`
+          : `Flashed to board (${Object.keys(S.bindings).length} pin${Object.keys(S.bindings).length === 1 ? '' : 's'} connected). Editing a pin requires Build & Compile then Flash.`;
+  }
   const activeNets = board?.selectedPart?.nets || [];
   for (const [net, pin] of Object.entries(NET_PIN)) {
     const tr = document.createElement('tr'); tr.dataset.net = net; tr.dataset.pin = pin;
     if (activeNets.includes(net)) tr.classList.add('selected-pin');
     tr.onclick = e => { if (e.target.tagName !== 'INPUT') board?.highlightPin(pin); };
     const netCell = document.createElement('td'); netCell.textContent = net;
-    const port = document.createElement('td'), bound = S.bindings[net], input = document.createElement('input');
-    input.value = S.assignments.get(pin) ?? (SEG_NETS.includes(net) ? `seven_seg[${SEG_NETS.indexOf(net)}]` : net);
-    input.setAttribute('aria-label', `${net} design port`); input.title = bound ? 'Mapped · changing this restarts the design' : 'Unmapped · enter a port or leave blank to disconnect';
-    input.className = bound ? 'mapped' : 'unmapped'; input.disabled = S.building || S.importing;
-    input.onchange = () => { S.assignments.set(pin, input.value.trim().toLowerCase()); saveProject(); if (S.vcd) { buildBindings(); renderPins(); board?.clearOutputs(); sampleOutputs(); } else { markDirty(); renderPins(); toast('Pin mapping updated. Click Build design or Flash to compile.'); } };
+    const port = document.createElement('td'), assigned = (S.assignments.get(pin) ?? '').trim(), bound = S.bindings[net], input = document.createElement('input');
+    input.value = assigned;
+    input.placeholder = 'Unassigned';
+    input.setAttribute('list', 'pinPortList');
+    input.setAttribute('aria-label', `${net} design port`);
+    input.title = bound ? 'Flashed & connected on board' : assigned ? 'Assigned · Build & Compile then Flash to connect' : 'Unassigned · pin is disconnected on the 3D board';
+    input.className = bound ? 'mapped' : assigned ? 'assigned' : 'unmapped';
+    input.disabled = S.building || S.importing;
+    input.onchange = () => {
+      const val = input.value.trim().toLowerCase();
+      if (val) S.assignments.set(pin, val); else S.assignments.delete(pin);
+      saveProject();
+      if (S.vcd) { buildBindings(); renderPins(); board?.clearOutputs(); sampleOutputs(); }
+      else { markDirty(); renderPins(); toast('Pin assignment updated. Click Build & Compile before flashing.'); }
+    };
     port.append(input);
     const td = document.createElement('td'); td.textContent = pin; tr.append(netCell, port, td); $('#pinBody').append(tr);
   }
@@ -847,10 +933,13 @@ function wire() {
     if (ide?.hasUnsaved()) { markDirty(); return toast('Build design or Flash before stepping.', 'err'); }
     advance(1);
   };
-  $('#btnReset').onclick = () => {
+  $('#btnReset').onclick = async () => {
     if (!S.sim) return;
     if (S.vcd) loadVcd(S.vcd.text, S.sim.top);
-    else build(S.sim.top);
+    else {
+      await build(S.sim.top);
+      if (!S.error && S.sim) await flashToBoard();
+    }
   };
   $('#speed').oninput = e => { S.speed = Number(e.target.value); $('#rateLabel').textContent = `${(10 ** ((S.speed - 55) / 25)).toFixed(1).replace('.0', '')}×`; };
   $('#clkHz').onchange = e => { S.clkHz = Number(e.target.value); accumulator = 0; log(`Ideal clock: ${S.clkHz} Hz. Execution speed is limited by native simulation and display throughput.`); };
@@ -903,7 +992,8 @@ function wire() {
   };
   window.addEventListener('keydown', e => {
     const mod = e.ctrlKey || e.metaKey;
-    if (mod && !e.altKey && (e.key.toLowerCase() === 'b' || e.key.toLowerCase() === 's')) { e.preventDefault(); ide?.saveAndFlash(); return; }
+    if (mod && !e.altKey && e.key.toLowerCase() === 's') { e.preventDefault(); ide?.saveAndCompile(); return; }
+    if (mod && !e.altKey && e.key.toLowerCase() === 'b') { e.preventDefault(); flashToBoard(); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'e') { e.preventDefault(); ide?.setEditorPaneOpen(!$('#sourceDialog')?.open); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'o') { e.preventDefault(); $('#fileInput').click(); return; }
     if (e.key === 'Escape' && !document.querySelector('dialog:modal') && $('#homeView') && !$('#homeView').classList.contains('hidden')) { ide?.resumeWorkbench(); return; }
@@ -1132,11 +1222,11 @@ async function boot() {
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
   try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed), onDip: index => toggleDip(index), onSelect: part => renderInspector(part), onPower: on => { $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.4); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames')); applyTheme(document.documentElement.dataset.theme); wire();
-  ide = createIde({ S, toast, markDirty, build, renderSources, openTools, syncNavigation, projectData, saveProject, restoreProject, loadFiles, stopAllSimulations });
+  ide = createIde({ S, toast, markDirty, build, flashToBoard, renderSources, openTools, syncNavigation, projectData, saveProject, restoreProject, loadFiles, stopAllSimulations });
   wireActionLogger();
   fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);
-  window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, get ide() { return ide; }, get actions() { return [...uiActions]; }, flushActions, build, advance, loadFiles, toggleDip, stopAllSimulations };
+  window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, get ide() { return ide; }, get actions() { return [...uiActions]; }, flushActions, build, flashToBoard, advance, loadFiles, toggleDip, stopAllSimulations };
   try { const saved = localStorage.getItem('trace.project.v1'); if (saved) { const parsed = JSON.parse(saved); if (Array.isArray(parsed?.sources) && parsed.sources.length) restoreProject(parsed); } } catch (e) { importError(new Error(`Saved project could not be restored: ${e.message}`)); S.sources = []; renderSources(); setStatus(); return; }
   S.dirty = true;
   renderPins();
