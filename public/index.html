@@ -339,6 +339,19 @@
         <section id="rtab-programmer" class="rtab"><p class="hint">Inspect configuration metadata locally. A bitstream cannot be executed by this simulator, and no physical FPGA is connected.</p><button id="progDrop" class="dropzone"><span class="upload-plus">+</span><span>Inspect bitstream<small>.sof or .pof</small></span></button><input id="progFile" type="file" accept=".sof,.pof" hidden><div id="progInfo" class="prog-info hidden"><dl><dt>File</dt><dd id="piFile"></dd><dt>Device</dt><dd id="piDevice"></dd><dt>Family</dt><dd id="piFamily"></dd><dt>Version</dt><dd id="piVersion"></dd><dt>Date</dt><dd id="piDate"></dd><dt>Size</dt><dd id="piSize"></dd><dt>Device match</dt><dd id="piMatch"></dd></dl><span class="eyebrow">SHA-256</span><code id="piHash"></code><p id="piNote" class="hint"></p></div></section>
       </aside>
     </div>
+    <section id="workbenchEmpty" class="workbench-empty" aria-label="Empty workbench">
+      <div class="wb-empty-inner">
+        <div class="wb-empty-brand"><span class="brand-mark">t</span><span>trace<span class="brand-period">.</span></span></div>
+        <div class="wb-empty-meta mono"><span id="wbEmptyProject">Counter demo</span> · EP4CE6E22C8N · Cyclone IV</div>
+        <div class="wb-empty-list">
+          <button type="button" class="wb-empty-row" data-wb-open="editor"><span>Code Editor</span><kbd>Ctrl+E</kbd></button>
+          <button type="button" class="wb-empty-row" data-wb-open="board"><span>3D Devboard Simulator</span><kbd>Alt+B</kbd></button>
+          <button type="button" class="wb-empty-row" data-wb-open="signals"><span>Logic Analyzer (Waveforms)</span><kbd>Signals</kbd></button>
+          <button type="button" class="wb-empty-row" data-wb-open="tools"><span>Output &amp; Tools</span><kbd>Tools</kbd></button>
+        </div>
+        <button id="wbResetLayout" type="button" class="btn">Reset Default Layout</button>
+      </div>
+    </section>
   </main>
   <footer class="bench-footer" id="statusBar"><span class="bench-state"><span id="statusPill" class="status-pill paused">Paused</span><span class="mode-label">Behavioral simulation</span><button id="sbProblems" class="sb-item mono" title="View compiler problems"><span id="sbErr">✖ 0</span> <span id="sbWarn">▲ 0</span></button></span><span class="simulation-note">Digital logic only <button id="btnLimits" class="text-btn">Model limits ↗</button></span><div class="sb-right"><span id="sbCursor" class="sb-item mono">Ln 1, Col 1</span><span id="sbLang" class="sb-item mono">VHDL-1993</span><label for="clkHz">Clock</label><select id="clkHz"><option value="1">1 Hz</option><option value="10">10 Hz</option><option value="100">100 Hz</option><option value="1000" selected>1 kHz</option><option value="10000">10 kHz</option><option value="50000000">50 MHz</option></select><label for="speed">Rate</label><input id="speed" type="range" min="0" max="100" value="55" aria-label="Simulation playback rate"><span id="rateLabel">1×</span><span id="roTime" class="mono">0 ns</span><button id="btnMute" class="text-btn muted" aria-pressed="true"><span id="muteLabel">Sound off</span></button></div></footer>
   <section id="homeView" class="home-view" aria-label="Trace IDE Welcome Screen">

@@ -319,6 +319,7 @@ export function createIde(api) {
     const dialog = $('#sourceDialog');
     const isOpen = !!dialog?.open;
     $('#ideMain')?.classList.toggle('editor-closed', !isOpen);
+    if ($('#wbEmptyProject')) $('#wbEmptyProject').textContent = currentProjectTitle();
     if ($('#btnFocusBoard')) {
       $('#btnFocusBoard').setAttribute('aria-pressed', String(isOpen));
       $('#btnFocusBoard').classList.toggle('active', isOpen);
@@ -339,6 +340,7 @@ export function createIde(api) {
   }
   function syncBoardVisibility() {
     $('#ideMain')?.classList.toggle('board-closed', !boardPaneOpen);
+    if ($('#wbEmptyProject')) $('#wbEmptyProject').textContent = currentProjectTitle();
     const btn = $('#btnToggleBoard');
     if (btn) {
       btn.setAttribute('aria-pressed', String(boardPaneOpen));
@@ -982,6 +984,14 @@ export function createIde(api) {
     $('#btnFocusBoard')?.addEventListener('click', () => setEditorPaneOpen(!$('#sourceDialog')?.open));
     $('#btnToggleBoard')?.addEventListener('click', () => setBoardPaneOpen(!boardPaneOpen));
     $('#closeBoardPane')?.addEventListener('click', () => setBoardPaneOpen(false));
+    $$('[data-wb-open]').forEach(btn => btn.addEventListener('click', () => {
+      const target = btn.dataset.wbOpen;
+      if (target === 'editor') setEditorPaneOpen(true);
+      else if (target === 'board') setBoardPaneOpen(true);
+      else if (target === 'signals') commands.panelWaves();
+      else if (target === 'tools') api.openTools();
+    }));
+    $('#wbResetLayout')?.addEventListener('click', resetLayout);
     $('#btnOpenFirst')?.addEventListener('click', () => { if (S.sources.length) openFile(S.sources[0].name); else showNewFile(); });
     $('#btnNewFile')?.addEventListener('click', showNewFile);
     $('#btnNewFileExplorer')?.addEventListener('click', showNewFile);
