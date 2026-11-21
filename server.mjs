@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { promises as fs, appendFileSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compileDesign, configuration, sessions } from './backend/engine.mjs';
+import { compileDesign, configuration, sessions, closeAllSessions } from './backend/engine.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -137,6 +137,10 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, await fs.readFile(full), 'application/octet-stream');
     }
     if (url.pathname === '/api/sim/compile' && req.method === 'POST') return send(res, 200, await compileDesign(await json(req)));
+    if (url.pathname === '/api/sim/close-all' && (req.method === 'POST' || req.method === 'DELETE')) {
+      await closeAllSessions();
+      return send(res, 200, { ok: true });
+    }
     const match = url.pathname.match(/^\/api\/sim\/([a-f0-9-]+)(?:\/(step|vcd|close))?$/);
     if (match) {
       const session = sessions.get(match[1]);

@@ -10,8 +10,17 @@ import readline from 'node:readline';
 const exec = promisify(execFile);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const GHDL = process.env.GHDL_PATH || 'ghdl';
-let configPromise, compiling = 0;
+let configPromise;
+const activeCompiles = new Set();
 export const sessions = new Map();
+
+export async function closeAllSessions() {
+  for (const token of activeCompiles) token.cancelled = true;
+  activeCompiles.clear();
+  const active = [...sessions.values()];
+  sessions.clear();
+  await Promise.all(active.map(s => s.close().catch(() => {})));
+}
 
 export function configuration() {
   return configPromise ??= (async () => {
@@ -38,11 +47,13 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
   if (top && !/^[a-z][a-z0-9_]*$/i.test(top)) throw new Error('Invalid top entity name.');
   if (!/^[a-z][a-z0-9_]*$/i.test(topLibrary)) throw new Error('Invalid top library name.');
   if (!generics || typeof generics !== 'object' || Array.isArray(generics)) throw new Error('Generic overrides must be an object.');
-  if (sessions.size + compiling >= 4) throw new Error('Four simulations are already open or compiling. Close another session first.');
-  compiling++;
+  if (sessions.size + activeCompiles.size >= 4) throw new Error('Four simulations are already open or compiling. Close another session first.');
+  const compileToken = { cancelled: false };
+  activeCompiles.add(compileToken);
   let session, dir;
   try {
     const cfg = await configuration();
+    if (compileToken.cancelled) throw new Error('Simulation compilation cancelled.');
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'trace-ghdl-'));
     topLibrary = topLibrary.toLowerCase();
     const entities = new Set(), groups = new Map(), names = new Set(), manifests = [];
@@ -95,8 +106,13 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
       await fs.writeFile(path.join(dir, 'timing.sdf'), sdf.text);
       args.push(`--sdf=${sdf.corner || 'typ'}=${sdf.instance}=timing.sdf`);
     }
+    if (compileToken.cancelled) throw new Error('Simulation compilation cancelled.');
     session = new EngineSession(spawn(GHDL, args, { cwd: dir, env: cfg.env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }), dir);
     const initial = await session.result();
+    if (compileToken.cancelled) {
+      await session.close();
+      throw new Error('Simulation compilation cancelled.');
+    }
     top = top.toLowerCase();
     for (const signal of session.schema.signals) signal.driveable = [1, 3].includes(signal.direction) && signal.name.startsWith(top + '.') && !signal.name.slice(top.length + 1).includes('.');
     sessions.set(session.id, session);
@@ -105,7 +121,7 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
     if (session) await session.close();
     else if (dir) await fs.rm(dir, { recursive: true, force: true });
     throw new Error(error.stderr || error.message);
-  } finally { compiling--; }
+  } finally { activeCompiles.delete(compileToken); }
 }
 
 class EngineSession {

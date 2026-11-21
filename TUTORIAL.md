@@ -94,6 +94,7 @@ Screenshots illustrate the layout; your design, clock, open panels, and signal v
 
 | Area | What it does |
 |---|---|
+| Home (left rail / top brand) | Open a confirmation dialog to save or discard recent project changes, cancel and stop all active simulations, and return to the Welcome screen |
 | Top circular arrow | Restart the current simulation, or rewind a VCD replay |
 | Top Step icon | Advance one generated clock cycle; in replay, advance one recorded timestamp |
 | Run / Pause | Start or pause automatic advancement |

@@ -104,6 +104,7 @@ function uiSnapshot() {
     deck: $('#deck')?.classList.contains('hidden') ? 'closed' : 'open',
     about: $('#aboutDialog')?.open ? 'open' : 'closed',
     keysDlg: $('#keysDialog')?.open ? 'open' : 'closed',
+    homeDlg: $('#homeConfirmDialog')?.open ? 'open' : 'closed',
     menu: $$('.menu-btn[aria-expanded="true"]')[0]?.dataset.menu || 'closed',
     theme: document.documentElement.dataset.theme || 'light',
     power: S.power ? 'on' : 'off',
@@ -127,7 +128,7 @@ function uiSnapshot() {
   };
 }
 function diffSnapshot(before, after) {
-  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tab', 'editor', 'left', 'waves', 'right', 'deck', 'about', 'keysDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
+  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tab', 'editor', 'left', 'waves', 'right', 'deck', 'about', 'keysDlg', 'homeDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
   const out = [];
   for (const k of keys) if (before[k] !== after[k]) out.push(`${k}:${before[k]}->${after[k]}`);
   return out;
@@ -174,10 +175,15 @@ function wireActionLogger() {
     const keyBtn = e.target.closest?.('.key-btn');
     if (keyBtn) trackUiAction('PRESS', keyBtn);
   }, true);
+  let dispatchingClick = false;
   document.addEventListener('click', e => {
-    if (e.target.closest?.('.key-btn')) return;
+    if (dispatchingClick || e.target.closest?.('.key-btn')) return;
     const ctrl = e.target.closest?.('button, a, summary, [role="tab"], [role="button"]');
-    if (ctrl) trackUiAction('CLICK', ctrl);
+    if (ctrl) {
+      dispatchingClick = true;
+      queueMicrotask(() => { dispatchingClick = false; });
+      trackUiAction('CLICK', ctrl);
+    }
   }, true);
   document.addEventListener('change', e => {
     const el = e.target;
@@ -276,6 +282,41 @@ function renderSources() {
   ide?.syncFromSources();
 }
 async function closeSession(sim) { if (sim?.id) await api(`/api/sim/${sim.id}`, undefined, 'DELETE').catch(() => {}); }
+async function stopAllSimulations() {
+  pause();
+  releaseKeys();
+  ++S.generation;
+  S.pending = [];
+  S.building = false;
+  S.busy = false;
+  S.truthBusy = false;
+  S.importing = false;
+  S.exporting = false;
+  S.error = false;
+  const prevSim = S.sim;
+  S.sim = null;
+  S.vcd = null;
+  S.bindings = {};
+  S.inputs = {};
+  S.values.clear();
+  S.time = 0;
+  S.cycles = 0;
+  $('#replayControls')?.classList.add('hidden');
+  $('#virtualInputs')?.replaceChildren();
+  $('#virtualInputs')?.classList.add('hidden');
+  $('#roTime').textContent = fmtTime(0);
+  uart.reset();
+  board?.clearOutputs();
+  sampleOutputs();
+  waves?.setSignals([]);
+  renderSignalChips();
+  renderPins();
+  setStatus();
+  await Promise.all([
+    closeSession(prevSim),
+    fetch('/api/sim/close-all', { method: 'POST' }).catch(() => {}),
+  ]);
+}
 async function build(top = $('#topSelect').value) {
   if (S.building || S.exporting) return;
   if (ide?.hasUnsaved()) {
@@ -320,10 +361,10 @@ async function build(top = $('#topSelect').value) {
     log(`${result.backend}\nCompiled ${result.top}. ${result.signals.length} observable signals.`);
     result.diagnostics.forEach(d => log(d, 'warning'));
     ide?.setProblems(parseDiagnostics((result.diagnostics || []).join('\n')));
-    if ($('#homeView')?.classList.contains('hidden')) ide?.recordRecentProject();
     toast(`Compiled ${result.top}`, 'ok');
     waves.fit();
   } catch (e) {
+    if (generation !== S.generation) return;
     await closeSession(S.sim); S.sim = null; S.bindings = {}; S.inputs = {}; S.values.clear(); S.time = 0;
     board?.clearOutputs(); sampleOutputs(); renderPins(); waves.setSignals([]); renderSignalChips();
     $('#virtualInputs').replaceChildren(); $('#virtualInputs').classList.add('hidden');
@@ -621,7 +662,7 @@ async function runTruth() {
       const tr = document.createElement('tr'); [...ins.map(s => inputs.find(p => p.id === s.id).value), ...outs.map(s => result.samples.at(-1).values[s.id])].forEach(v => { const td = document.createElement('td'); td.textContent = v; tr.append(td); }); $('#truthBody').append(tr);
     }
     $('#truthSummary').textContent = `${2 ** names.length} input combinations · isolated GHDL run · no timing advance`;
-  } catch (e) { toast(e.message, 'err'); log(e.message, 'error'); } finally { await closeSession(isolated); S.truthBusy = false; setStatus(); }
+  } catch (e) { if (generation === S.generation) { toast(e.message, 'err'); log(e.message, 'error'); } } finally { await closeSession(isolated); S.truthBusy = false; setStatus(); }
 }
 async function loadFiles(files) {
   if (S.building || S.importing || S.exporting) throw new Error('Wait for the current import, build or export to finish.');
@@ -814,7 +855,7 @@ function wire() {
   $('#btnMute').onclick = () => { const muted = !audio.isMuted(); audio.setMuted(muted); if (!muted) audio.resume(); $('#btnMute').setAttribute('aria-pressed', String(muted)); $('#muteLabel').textContent = muted ? 'Sound off' : 'Sound on'; };
   $('#btnElab').onclick = () => build(); $('#topSelect').onchange = () => build();
   $('#btnDemo').onclick = () => { S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; S.assignments.clear(); S.sdf = null; $('#genericInput').value = ''; $('#topLibrary').value = 'work'; $('#standardSelect').value = '93'; renderSdf(); renderSources(); build(DEMO_TOP); };
-  $('#btnSaveProject').onclick = () => { saveProject(); download(JSON.stringify(projectData(), null, 2), 'trace-project.json', 'application/json'); toast('Project saved, including sources, libraries and pin mappings.'); };
+  $('#btnSaveProject').onclick = () => { saveProject(); ide?.recordRecentProject(); ide?.captureBaseline(); download(JSON.stringify(projectData(), null, 2), 'trace-project.json', 'application/json'); toast('Project saved, including sources, libraries and pin mappings.'); };
   for (const id of ['standardSelect', 'topLibrary', 'genericInput', 'sdfInstance', 'sdfCorner']) $('#' + id).onchange = markDirty;
   $('#clearSdf').onclick = () => { S.sdf = null; renderSdf(); markDirty(); };
   $('#replayScope').onchange = e => { S.vcd.scope = e.target.value; buildBindings(); renderPins(); board?.clearOutputs(); sampleOutputs(); };
@@ -863,8 +904,8 @@ function wire() {
     if (mod && !e.altKey && (e.key.toLowerCase() === 'b' || e.key.toLowerCase() === 's')) { e.preventDefault(); ide?.saveAndFlash(); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'e') { e.preventDefault(); ide?.setEditorPaneOpen(!$('#sourceDialog')?.open); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'o') { e.preventDefault(); $('#fileInput').click(); return; }
-    if (e.key === 'Escape' && $('#homeView') && !$('#homeView').classList.contains('hidden')) { ide?.showHome(false); return; }
-    if (e.target.closest('input,select,textarea,dialog:modal') || ($('#homeView') && !$('#homeView').classList.contains('hidden')) || e.repeat) return;
+    if (e.key === 'Escape' && !document.querySelector('dialog:modal') && $('#homeView') && !$('#homeView').classList.contains('hidden')) { ide?.resumeWorkbench(); return; }
+    if (e.target.closest('input,select,textarea,dialog:modal') || document.querySelector('dialog:modal') || ($('#homeView') && !$('#homeView').classList.contains('hidden')) || e.repeat) return;
     if (e.altKey && ['1', '2', '3', '4'].includes(e.key)) { e.preventDefault(); toggleDip(Number(e.key) - 1); return; }
     if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); centerSelection(); return; }
     if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'v') { e.preventDefault(); setTool(board?.toolMode === 'select' ? 'interact' : 'select'); return; }
@@ -1074,7 +1115,7 @@ function wire() {
   $('#consoleClear').onclick = () => { $('#consoleOut').replaceChildren(); $('#consoleCount').textContent = consoleCount = 0; };
   $('#consoleCopy').onclick = copyConsole;
   $('#uartClear').onclick = () => $('#uartOut').replaceChildren(); $('#btnTruth').onclick = runTruth;
-  window.addEventListener('pagehide', () => { flushActions(); if (S.sim?.id) navigator.sendBeacon(`/api/sim/${S.sim.id}/close`, ''); });
+  window.addEventListener('pagehide', () => { flushActions(); navigator.sendBeacon('/api/sim/close-all', ''); });
 }
 function frame(now) {
   requestAnimationFrame(frame); const dt = Math.max(0, Math.min(.1, (now - lastFrame) / 1000)); lastFrame = now;
@@ -1089,14 +1130,16 @@ async function boot() {
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
   try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed), onDip: index => toggleDip(index), onSelect: part => renderInspector(part), onPower: on => { $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.4); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames')); applyTheme(document.documentElement.dataset.theme); wire();
-  ide = createIde({ S, toast, markDirty, build, renderSources, openTools, syncNavigation, projectData, restoreProject, loadFiles });
+  ide = createIde({ S, toast, markDirty, build, renderSources, openTools, syncNavigation, projectData, saveProject, restoreProject, loadFiles, stopAllSimulations });
   wireActionLogger();
   fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);
-  window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, get ide() { return ide; }, get actions() { return [...uiActions]; }, flushActions, build, advance, loadFiles, toggleDip };
+  window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, get ide() { return ide; }, get actions() { return [...uiActions]; }, flushActions, build, advance, loadFiles, toggleDip, stopAllSimulations };
   try { const saved = localStorage.getItem('trace.project.v1'); if (saved) { const parsed = JSON.parse(saved); if (Array.isArray(parsed?.sources) && parsed.sources.length) restoreProject(parsed); } } catch (e) { importError(new Error(`Saved project could not be restored: ${e.message}`)); S.sources = []; renderSources(); setStatus(); return; }
   ide.openFirst();
+  ide.captureBaseline();
   ide.showHome(true);
+  await fetch('/api/sim/close-all', { method: 'POST' }).catch(() => {});
   await build();
 }
 boot();

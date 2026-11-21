@@ -535,6 +535,8 @@ export function createIde(api) {
   }
 
   // ---------- home interface & recent projects ----------
+  let baselineProject = null, baselineStorage = null, baselineRecents = [], projectTitle = '', pendingFocusWizard = false;
+
   function loadRecents() {
     try {
       const list = JSON.parse(localStorage.getItem(RECENTS_KEY) || '[]');
@@ -544,11 +546,46 @@ export function createIde(api) {
   function saveRecents(list) {
     try { localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0, 12))); } catch {}
   }
+  function currentProjectTitle() {
+    const topName = $('#topSelect')?.value || S.sim?.top || S.sources[0]?.name.replace(/\.[^.]+$/, '') || 'fpga_project';
+    return projectTitle || (topName === DEMO_TOP ? 'Counter demo' : topName);
+  }
+  function captureBaseline(customTitle = '', { keepPreSession = false, prevRecents = null, prevStorage = undefined } = {}) {
+    if (customTitle !== undefined) projectTitle = customTitle;
+    try { baselineProject = api.projectData ? JSON.parse(JSON.stringify(api.projectData())) : null; } catch { baselineProject = null; }
+    if (!keepPreSession) {
+      try { baselineStorage = prevStorage !== undefined ? prevStorage : localStorage.getItem('trace.project.v1'); } catch { baselineStorage = null; }
+      baselineRecents = prevRecents !== null ? prevRecents : loadRecents();
+    }
+  }
+  function describeRecentChanges() {
+    const dirtyTabs = [...docs.keys()].filter(isDirty);
+    const changes = [];
+    if (dirtyTabs.length) changes.push(`unsaved editor edits in ${dirtyTabs.join(', ')}`);
+    if (baselineProject) {
+      const baseFiles = new Map((baselineProject.sources || []).map(s => [s.name, s.text]));
+      const curFiles = new Map(S.sources.map(s => [s.name, docs.has(s.name) ? docs.get(s.name).editor.value : s.text]));
+      const modified = [];
+      for (const [name, text] of curFiles) {
+        if (!baseFiles.has(name) || baseFiles.get(name) !== text) modified.push(name);
+      }
+      for (const name of baseFiles.keys()) {
+        if (!curFiles.has(name)) modified.push(name);
+      }
+      const uniqueMod = [...new Set(modified)].filter(n => !dirtyTabs.includes(n));
+      if (uniqueMod.length) changes.push(`modified sources (${uniqueMod.join(', ')})`);
+      if (JSON.stringify([...S.assignments]) !== JSON.stringify(baselineProject.assignments || [])) changes.push('pin mappings');
+      if (($('#standardSelect')?.value || S.standard) !== baselineProject.standard || ($('#genericInput')?.value || '') !== (baselineProject.generics || '')) changes.push('compiler options');
+    }
+    return changes.length
+      ? `Detected ${changes.join(', ')}. Saving updates your workspace and Recent Projects list; discarding reverts these changes. All active simulations will be cancelled and stopped.`
+      : 'Saving updates your workspace and Recent Projects list; discarding reverts any changes from this session. Returning to the Home menu will cancel and stop all active simulations.';
+  }
   function recordRecentProject(customTitle = '') {
     if (!S.sources.length || !api.projectData) return;
     const project = api.projectData();
     const topName = project.top || S.sim?.top || project.sources[0]?.name.replace(/\.[^.]+$/, '') || 'fpga_project';
-    const title = customTitle || (topName === DEMO_TOP ? 'Counter demo' : topName);
+    const title = customTitle || projectTitle || (topName === DEMO_TOP ? 'Counter demo' : topName);
     const key = `${title.toLowerCase()}::${project.sources.map(s => s.name).join(',')}`;
     const list = loadRecents().filter(item => item.key !== key);
     list.unshift({
@@ -605,9 +642,13 @@ export function createIde(api) {
       openBtn.append(titleRow, filesRow);
       openBtn.onclick = async () => {
         try {
+          const prevRecents = loadRecents();
+          let prevStorage = null;
+          try { prevStorage = localStorage.getItem('trace.project.v1'); } catch {}
           for (const name of [...docs.keys()]) closeTab(name, true);
           api.restoreProject(item.project);
           openFirst();
+          captureBaseline(item.title, { prevRecents, prevStorage });
           showHome(false);
           api.markDirty();
           await api.build(item.project.top || '');
@@ -637,12 +678,78 @@ export function createIde(api) {
     view.classList.toggle('hidden', !visible);
     $('#btnHome')?.classList.toggle('active', visible);
   }
+  async function resumeWorkbench() {
+    captureBaseline(projectTitle);
+    showHome(false);
+    if (!S.sim && !S.building && !S.importing && S.sources.length) {
+      await api.build($('#topSelect')?.value || '');
+    }
+  }
+  function requestReturnHome({ focusWizard = false } = {}) {
+    const view = $('#homeView');
+    if (!view || !view.classList.contains('hidden')) {
+      if (focusWizard) { $('#npName')?.focus(); $('#npName')?.select(); }
+      return;
+    }
+    pendingFocusWizard = focusWizard;
+    const dlg = $('#homeConfirmDialog');
+    if (!dlg) {
+      api.stopAllSimulations?.();
+      showHome(true);
+      return;
+    }
+    if ($('#homeConfirmProject')) $('#homeConfirmProject').textContent = currentProjectTitle();
+    if ($('#homeConfirmDetail')) $('#homeConfirmDetail').textContent = describeRecentChanges();
+    if (!dlg.open) dlg.showModal();
+  }
+  async function confirmSaveAndReturnHome() {
+    if (!validateLibraries()) return;
+    commitAll();
+    api.renderSources();
+    api.saveProject?.();
+    recordRecentProject(projectTitle);
+    captureBaseline(projectTitle);
+    $('#homeConfirmDialog')?.close();
+    await api.stopAllSimulations?.();
+    showHome(true);
+    if (pendingFocusWizard) {
+      pendingFocusWizard = false;
+      $('#npName')?.focus();
+      $('#npName')?.select();
+    }
+    api.toast('Saved project changes. All simulations stopped.');
+  }
+  async function confirmDiscardAndReturnHome() {
+    for (const name of [...docs.keys()]) closeTab(name, true);
+    if (baselineProject) {
+      try { api.restoreProject(JSON.parse(JSON.stringify(baselineProject))); } catch {}
+    }
+    openFirst();
+    try {
+      if (baselineStorage === null) localStorage.removeItem('trace.project.v1');
+      else localStorage.setItem('trace.project.v1', baselineStorage);
+    } catch {}
+    saveRecents(baselineRecents);
+    setProblems([]);
+    $('#homeConfirmDialog')?.close();
+    await api.stopAllSimulations?.();
+    showHome(true);
+    if (pendingFocusWizard) {
+      pendingFocusWizard = false;
+      $('#npName')?.focus();
+      $('#npName')?.select();
+    }
+    api.toast('Discarded recent changes. All simulations stopped.');
+  }
   async function launchTemplateProject({ name, entity, standard = '08', templateKind = 'board_io' }) {
     const cleanEntity = entity.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
     if (!/^[a-z][a-z0-9_]*$/i.test(cleanEntity)) {
       api.toast('Top-level entity must start with a letter and use letters, digits or underscores.', 'err');
       return;
     }
+    const prevRecents = loadRecents();
+    let prevStorage = null;
+    try { prevStorage = localStorage.getItem('trace.project.v1'); } catch {}
     const fileName = `${cleanEntity}.vhd`;
     const code = buildStarterSource(templateKind, cleanEntity);
     for (const tabName of [...docs.keys()]) closeTab(tabName, true);
@@ -658,8 +765,8 @@ export function createIde(api) {
       sdf: null,
     };
     api.restoreProject(project);
-    recordRecentProject(name || cleanEntity);
     openFirst();
+    captureBaseline(name || cleanEntity, { prevRecents, prevStorage });
     showHome(false);
     api.markDirty();
     await api.build(cleanEntity);
@@ -687,10 +794,14 @@ export function createIde(api) {
         btn.append(kind, pathSpan);
         btn.onclick = async () => {
           try {
+            const prevRecents = loadRecents();
+            let prevStorage = null;
+            try { prevStorage = localStorage.getItem('trace.project.v1'); } catch {}
             const response = await fetch('/api/hdl/file?path=' + encodeURIComponent(file.rel));
             if (!response.ok) throw new Error('File could not be read.');
             showHome(false);
             await api.loadFiles([new File([await response.blob()], file.name)]);
+            captureBaseline(file.name.replace(/\.[^.]+$/, ''), { prevRecents, prevStorage });
           } catch (e) { api.toast(e.message, 'err'); }
         };
         container.append(btn);
@@ -700,8 +811,8 @@ export function createIde(api) {
 
   // ---------- menus ----------
   const commands = {
-    home: () => showHome(true),
-    newProject: () => { showHome(true); $('#npName')?.focus(); },
+    home: () => requestReturnHome(),
+    newProject: () => requestReturnHome({ focusWizard: true }),
     newFile: showNewFile,
     openFiles: () => $('#fileInput').click(),
     save: saveAndFlash,
@@ -784,13 +895,26 @@ export function createIde(api) {
       else if (!e.matches && tabs.length && !$('#sourceDialog')?.open) setEditorPaneOpen(true);
     });
     // Home Interface wiring
-    $('#topbar .brand')?.addEventListener('click', e => { e.preventDefault(); showHome(true); });
-    $('#btnHome')?.addEventListener('click', () => showHome(!$('#homeView') || $('#homeView').classList.contains('hidden')));
-    $('#homeContinueBtn')?.addEventListener('click', () => showHome(false));
+    $('#topbar .brand')?.addEventListener('click', e => { e.preventDefault(); requestReturnHome(); });
+    $('#btnHome')?.addEventListener('click', () => {
+      if (!$('#homeView') || $('#homeView').classList.contains('hidden')) requestReturnHome();
+      else resumeWorkbench();
+    });
+    $('#homeContinueBtn')?.addEventListener('click', () => resumeWorkbench());
+    $('#homeConfirmSave')?.addEventListener('click', () => confirmSaveAndReturnHome());
+    $('#homeConfirmDiscard')?.addEventListener('click', () => confirmDiscardAndReturnHome());
+    $('#homeConfirmCancel')?.addEventListener('click', () => { pendingFocusWizard = false; $('#homeConfirmDialog')?.close(); });
     $('#homeThemeBtn')?.addEventListener('click', () => $('#btnTheme')?.click());
     $('#homeAboutBtn')?.addEventListener('click', () => $('#btnAbout')?.click());
     $('#homeOpenBtn')?.addEventListener('click', () => $('#fileInput')?.click());
-    $('#homeDemoBtn')?.addEventListener('click', () => { showHome(false); $('#btnDemo')?.click(); });
+    $('#homeDemoBtn')?.addEventListener('click', () => {
+      const prevRecents = loadRecents();
+      let prevStorage = null;
+      try { prevStorage = localStorage.getItem('trace.project.v1'); } catch {}
+      showHome(false);
+      $('#btnDemo')?.click();
+      captureBaseline('Counter demo', { prevRecents, prevStorage });
+    });
     $('#homeNewProjectBtn')?.addEventListener('click', () => { $('#npName')?.focus(); $('#npName')?.select(); });
     $('#homeClearRecents')?.addEventListener('click', () => { saveRecents([]); renderHome(); });
     let entityTouched = false;
@@ -831,7 +955,7 @@ export function createIde(api) {
   return {
     openFile, closeTab, activate, commitAll, hasUnsaved, validateLibraries, saveAndFlash, syncFromSources, openFirst, updateStatus,
     setProblems, reportBuildFailure, resetLayout, setEditorPaneOpen,
-    showHome, renderHome, recordRecentProject, populateHomeHdl,
+    showHome, requestReturnHome, resumeWorkbench, captureBaseline, renderHome, recordRecentProject, populateHomeHdl,
     get active() { return active; },
     get tabs() { return [...tabs]; },
     get problems() { return problems; },
