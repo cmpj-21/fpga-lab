@@ -107,9 +107,11 @@ function uiSnapshot() {
     time: fmtTime(S.time),
     cycles: S.cycles,
     files: S.sources.map(s => s.name).join(',') || 'none',
+    tabs: ide?.tabs?.join(',') || 'none',
     tab: ide?.active || 'none',
     editor: $('#sourceDialog')?.open ? 'open' : 'closed',
     left: !leftOpen ? 'closed' : ($('#ltab-pins')?.classList.contains('active') ? 'pins' : 'library'),
+    hdlOpen: $$('#hdlTree .hdl-group.open').length,
     waves: $('#app')?.classList.contains('no-waves') ? 'hidden' : 'open',
     right: $('#right')?.classList.contains('hidden') ? 'closed' : ($$('#right .tab.active')[0]?.dataset.rtab || 'open'),
     deck: $('#deck')?.classList.contains('hidden') ? 'closed' : 'open',
@@ -140,7 +142,7 @@ function uiSnapshot() {
   };
 }
 function diffSnapshot(before, after) {
-  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tab', 'editor', 'left', 'waves', 'right', 'deck', 'about', 'keysDlg', 'homeDlg', 'newProjDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
+  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tabs', 'tab', 'editor', 'left', 'hdlOpen', 'waves', 'right', 'deck', 'about', 'keysDlg', 'homeDlg', 'newProjDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
   const out = [];
   for (const k of keys) if (before[k] !== after[k]) out.push(`${k}:${before[k]}->${after[k]}`);
   return out;
@@ -155,7 +157,7 @@ function trackUiAction(kind, el, detail = '') {
     recordActionLine(`#${id} ${kind.padEnd(8)} ${target} -> BLOCKED (0ms) [reason:control disabled | status:${before.status} | view:${before.view}]`);
     return;
   }
-  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnSaveProject|#btnVcd|#btnImport|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
+  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnSaveProject|#btnVcd|#btnImport|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#ciPins|#btnOpenPinoutRef|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
   setTimeout(async () => {
     await new Promise(r => requestAnimationFrame(r));
     const waitStart = performance.now();
@@ -923,6 +925,8 @@ function renderPins() {
 function renderInspector(part) {
   const card = $('#compInspector'), centerBtn = $('#btnCenterComp');
   $$('#pinBody tr').forEach(tr => tr.classList.toggle('selected-pin', !!part && part.nets.includes(tr.dataset.net)));
+  const partPins = new Set((part?.nets || []).map(n => String(NET_PIN[n] || '')).filter(Boolean));
+  $$('#pinoutRefBody tr').forEach(tr => tr.classList.toggle('selected-pin', !!part && partPins.has(tr.dataset.pin)));
   if (centerBtn) {
     centerBtn.classList.toggle('has-target', !!part);
     centerBtn.title = part ? `Center camera on ${part.title} (F)` : 'Center camera on selected component or reset view (F)';
@@ -1239,9 +1243,32 @@ function wire() {
   $('#ciCenter').onclick = centerSelection;
   $('#ciClose').onclick = () => board?.selectPart(null);
   $('#ciPins').onclick = () => {
+    const leftClosed = getComputedStyle($('#left')).display === 'none';
+    if (leftClosed) {
+      if (window.innerWidth <= 1000) $('#app').classList.add('mobile-library');
+      else $('#app').classList.remove('no-library');
+    }
     leftTab('pins');
-    if ($('#app').classList.contains('no-library') || window.innerWidth <= 1000) toggleLeft('pins');
-    $('#pinBody tr.selected-pin')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    const row = $('#pinBody tr.selected-pin');
+    if (row) {
+      row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      const inp = row.querySelector('input');
+      if (inp && !inp.disabled) { inp.focus(); inp.select(); }
+      return;
+    }
+    const part = board?.selectedPart;
+    const partPins = (part?.nets || []).map(n => NET_PIN[n]).filter(Boolean);
+    if (partPins.length) {
+      if ($('#pinoutSearch')?.value) { $('#pinoutSearch').value = ''; renderPinoutRef(); }
+      openTools('pinout');
+      $$('#pinoutRefBody tr.selected-pin').forEach(tr => tr.classList.remove('selected-pin'));
+      let firstMatch = null;
+      for (const pin of partPins) {
+        const refRow = $(`#pinoutRefBody tr[data-pin="${pin}"]`);
+        if (refRow) { refRow.classList.add('selected-pin'); if (!firstMatch) firstMatch = refRow; }
+      }
+      firstMatch?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
   };
   window.addEventListener('keydown', e => {
     const mod = e.ctrlKey || e.metaKey;
