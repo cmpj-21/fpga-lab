@@ -13,7 +13,7 @@ import * as audio from './ui/audio.js';
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
-const S = { sources: [], sim: null, flashed: false, compiledHash: '', flashedHash: '', projectDir: null, projectName: '', running: false, power: true, building: false, busy: false, clkHz: 1000, speed: 55, time: 0, inputs: {}, assignments: new Map(), compiledAssignments: new Map(), discoveredPorts: [], bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0 };
+const S = { sources: [], sim: null, flashed: false, compiledHash: '', flashedHash: '', projectDir: null, projectName: '', running: false, power: true, building: false, busy: false, clkHz: 50000000, speed: 55, time: 0, inputs: {}, assignments: new Map(), compiledAssignments: new Map(), discoveredPorts: [], bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0 };
 let board, waves, ide, toastTimer, sourceIndex, consoleCount = 0, logFile = '', actionLogFile = '', currentHdlRoot = '', reportCount = 0;
 let lastFrame = performance.now(), accumulator = 0, lastDraw = 0;
 let actionSeq = 0, lastErrorSeq = 0, lastErrorMsg = '', actionFlushTimer = 0, eventFlushTimer = 0, stateFlushTimer = 0;
@@ -380,6 +380,7 @@ function projectData() {
     top: $('#topSelect').value,
     topLibrary: $('#topLibrary').value,
     standard: $('#standardSelect').value,
+    clkHz: S.clkHz,
     generics: $('#genericInput').value,
     sdf: S.sdf ? { ...S.sdf, instance: $('#sdfInstance').value, corner: $('#sdfCorner').value } : null,
     projectDir: S.projectDir || null,
@@ -492,6 +493,13 @@ function restoreProject(project) {
   S.compiledHash = typeof project.compiledHash === 'string' ? project.compiledHash : '';
   S.flashedHash = typeof project.flashedHash === 'string' ? project.flashedHash : '';
   $('#standardSelect').value = project.standard; $('#genericInput').value = project.generics; $('#topLibrary').value = project.topLibrary || 'work';
+  const savedClk = Number(project.clkHz);
+  if (Number.isFinite(savedClk) && savedClk > 0 && $(`#clkHz option[value="${savedClk}"]`)) {
+    S.clkHz = savedClk;
+    $('#clkHz').value = String(savedClk);
+  } else {
+    S.clkHz = Number($('#clkHz')?.value) || 50000000;
+  }
   renderSources(); $('#topSelect').value = project.top || ''; renderSdf(); renderPins(); syncProjectSaveUI();
   const topName = project.top || allEntities()[0] || S.sources[0]?.name || 'No design';
   $('#designTitle').textContent = S.projectName || (topName === DEMO_TOP ? 'Counter demo' : topName);
@@ -924,10 +932,11 @@ function syncKeys() {
     const net = button.dataset.key === 'reset' ? 'reset_btn' : button.dataset.key.replace('key', 's');
     const bound = S.bindings[net];
     const isDown = !!S.keys[net];
-    const isNetLow = S.power && S.flashed && bound && S.inputs[bound.signal.id]?.[bound.offset] === '0';
-    button.classList.toggle('down', isDown || isNetLow);
-    button.classList.toggle('unmapped', !!(S.flashed && !bound));
-    button.setAttribute('aria-pressed', String(isDown || isNetLow));
+    const isNetLow = Boolean(S.power && S.flashed && bound && S.inputs[bound.signal.id]?.[bound.offset] === '0');
+    const active = isDown || isNetLow;
+    button.classList.toggle('down', active);
+    button.classList.toggle('unmapped', Boolean(S.flashed && !bound));
+    button.setAttribute('aria-pressed', String(active));
     button.disabled = false;
     board?.setKeyVisual(button.dataset.key, isDown);
   });
@@ -1587,7 +1596,7 @@ function wire() {
   };
   $('#btnReset').onclick = restartSimulation;
   $('#speed').oninput = e => { S.speed = Number(e.target.value); $('#rateLabel').textContent = `${(10 ** ((S.speed - 55) / 25)).toFixed(1).replace('.0', '')}×`; };
-  $('#clkHz').onchange = e => { S.clkHz = Number(e.target.value); accumulator = 0; log(`Ideal clock: ${S.clkHz} Hz. Execution speed is limited by native simulation and display throughput.`); };
+  $('#clkHz').onchange = e => { S.clkHz = Number(e.target.value); accumulator = 0; saveProject(); log(`Ideal clock: ${S.clkHz} Hz. Execution speed is limited by native simulation and display throughput.`); };
   $('#btnMute').onclick = () => { const muted = !audio.isMuted(); audio.setMuted(muted); if (!muted) audio.resume(); $('#btnMute').setAttribute('aria-pressed', String(muted)); $('#muteLabel').textContent = muted ? 'Sound off' : 'Sound on'; };
   $('#btnElab').onclick = () => ide ? ide.saveAndCompile() : build(); $('#topSelect').onchange = markDirty;
   $('#btnDemo').onclick = async () => { await stopAllSimulations(); ide?.closeDiskTabs?.(); S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; S.assignments.clear(); S.discoveredPorts = []; S.compiledAssignments = new Map(); S.compiledHash = ''; S.flashedHash = ''; S.projectDir = null; S.projectName = 'Counter demo'; S.sdf = null; $('#genericInput').value = ''; $('#topLibrary').value = 'work'; $('#standardSelect').value = '93'; renderSdf(); renderSources(); $('#topSelect').value = DEMO_TOP; $('#designTitle').textContent = 'Counter demo'; $('#designSubtitle').textContent = 'Build needed · VHDL-1993'; renderPins(); syncProjectSaveUI(); ide?.refreshProjectTree?.(); markDirty(); toast('Counter demo loaded. Click Compile when ready.'); };
