@@ -1,10 +1,11 @@
 import http from 'node:http';
 import { execFile } from 'node:child_process';
-import { promises as fs, appendFileSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { promises as fs, appendFileSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compileDesign, configuration, sessions, closeAllSessions, setEngineLogger } from './backend/engine.mjs';
+import { compileDesign, restartSession, configuration, sessions, closeAllSessions, setEngineLogger } from './backend/engine.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -13,6 +14,20 @@ const USER_DATA_DIR = path.resolve(process.env.TRACE_DATA_DIR || (IS_PACKAGED ? 
 const CONFIG_FILE = path.resolve(process.env.TRACE_CONFIG_FILE || path.join(USER_DATA_DIR, 'trace.config.json'));
 const STATE_FILE = path.resolve(process.env.TRACE_STATE_FILE || path.join(USER_DATA_DIR, 'trace.state.json'));
 let stateWriteQueue = Promise.resolve();
+let configWriteQueue = Promise.resolve();
+
+async function atomicWriteJson(filePath, obj) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(obj, null, 2) + '\n', 'utf8');
+  try {
+    await fs.rename(tmp, filePath);
+  } catch {
+    await fs.writeFile(filePath, JSON.stringify(obj, null, 2) + '\n', 'utf8');
+    await fs.rm(tmp, { force: true }).catch(() => {});
+  }
+}
+
 async function readAppState() {
   try {
     const raw = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
@@ -23,7 +38,7 @@ async function patchAppState(patch) {
   if (!patch || typeof patch !== 'object') return readAppState();
   const allowed = ['recents', 'lastProject', 'theme', 'layout'];
   let nextState = {};
-  await (stateWriteQueue = stateWriteQueue.then(async () => {
+  const op = stateWriteQueue.catch(() => {}).then(async () => {
     const current = await readAppState();
     const next = { ...current };
     for (const key of allowed) {
@@ -32,10 +47,11 @@ async function patchAppState(patch) {
         else next[key] = patch[key];
       }
     }
-    await fs.mkdir(path.dirname(STATE_FILE), { recursive: true });
-    await fs.writeFile(STATE_FILE, JSON.stringify(next, null, 2) + '\n', 'utf8');
+    await atomicWriteJson(STATE_FILE, next);
     nextState = next;
-  }));
+  });
+  stateWriteQueue = op.catch(() => {});
+  await op;
   return nextState;
 }
 function loadInitialHdlRoot() {
@@ -53,12 +69,40 @@ function loadInitialHdlRoot() {
   return IS_PACKAGED ? path.join(os.homedir(), 'Documents') : ROOT;
 }
 let hdlRoot = loadInitialHdlRoot();
+const authorizedRoots = new Set();
+const saveTokens = new Map();
+function authorizeRoot(dir) {
+  if (typeof dir !== 'string' || !path.isAbsolute(dir)) return;
+  authorizedRoots.add(path.resolve(dir).toLowerCase());
+}
+function isAuthorizedDir(dir) {
+  if (typeof dir !== 'string' || !path.isAbsolute(dir)) return false;
+  const resolved = path.resolve(dir);
+  const low = resolved.toLowerCase();
+  for (const root of authorizedRoots) {
+    if (low === root || within(root, low)) return true;
+  }
+  return false;
+}
+authorizeRoot(hdlRoot);
+authorizeRoot(ROOT);
+try {
+  const initialState = JSON.parse(readFileSync(STATE_FILE, 'utf8'));
+  if (initialState?.lastProject?.projectDir) authorizeRoot(initialState.lastProject.projectDir);
+  if (Array.isArray(initialState?.recents)) {
+    for (const r of initialState.recents) if (r?.dir) authorizeRoot(r.dir);
+  }
+} catch {}
+
 async function persistConfig(patch) {
-  let current = {};
-  try { current = JSON.parse(await fs.readFile(CONFIG_FILE, 'utf8')); } catch {}
-  const next = { ...current, ...patch };
-  await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
-  await fs.writeFile(CONFIG_FILE, JSON.stringify(next, null, 2) + '\n', 'utf8');
+  const op = configWriteQueue.catch(() => {}).then(async () => {
+    let current = {};
+    try { current = JSON.parse(await fs.readFile(CONFIG_FILE, 'utf8')); } catch {}
+    const next = { ...current, ...patch };
+    await atomicWriteJson(CONFIG_FILE, next);
+  });
+  configWriteQueue = op.catch(() => {});
+  await op;
 }
 async function setHdlRoot(dir) {
   if (typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error('Local HDL library folder must be an absolute path.');
@@ -66,6 +110,7 @@ async function setHdlRoot(dir) {
   const st = await fs.stat(resolved).catch(() => null);
   if (!st || !st.isDirectory()) throw new Error(`Folder does not exist: ${resolved}`);
   hdlRoot = resolved;
+  authorizeRoot(hdlRoot);
   await persistConfig({ hdlRoot }).catch(e => appendLogLine('warn', 'app', `Could not save config: ${e.message}`));
   if (ownsLog) appendLogLine('info', 'app', `Changed Local HDL library folder to ${hdlRoot}`);
   return { ok: true, root: hdlRoot, groups: await hdlTree() };
@@ -147,10 +192,30 @@ function archiveLog() {
     rmSync(ACTION_LOG_FILE);
   } catch (e) { if (e.code !== 'ENOENT') console.error(`Cannot archive ${ACTION_LOG_FILE}: ${e.message}`); }
 }
+const LOG_LOCK_FILE = path.join(os.tmpdir(), `trace-log-owner-${createHash('sha256').update(LOG_DIR.toLowerCase()).digest('hex').slice(0, 12)}.pid`);
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
 function claimLog(startupNote = '') {
+  try {
+    const holder = Number(readFileSync(LOG_LOCK_FILE, 'utf8').trim());
+    if (isPidAlive(holder)) {
+      ownsLog = false;
+      if (startupNote) appendLogLineSync('info', 'app', `${startupNote} [window pid=${process.pid}]`);
+      return;
+    }
+  } catch {}
   ownsLog = true;
+  try { writeFileSync(LOG_LOCK_FILE, String(process.pid), 'utf8'); } catch {}
   archiveLog();
   if (startupNote) appendLogLineSync('info', 'app', startupNote);
+}
+function releaseLogLock() {
+  try {
+    const holder = Number(readFileSync(LOG_LOCK_FILE, 'utf8').trim());
+    if (holder === process.pid) rmSync(LOG_LOCK_FILE, { force: true });
+  } catch {}
 }
 setEngineLogger((level, message) => { if (ownsLog) appendLogLine(level, 'engine', message); });
 function eventReport(body) {
@@ -182,8 +247,18 @@ function actionReport(body) {
   return lines.join('\n') + '\n';
 }
 
-function send(res, code, body, type = 'application/json; charset=utf-8') {
-  res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer', 'Cross-Origin-Resource-Policy': 'same-origin', 'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" });
+function send(res, code, body, type = 'application/json; charset=utf-8', extraHeaders = null) {
+  const headers = {
+    'Content-Type': type,
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+    'Cross-Origin-Resource-Policy': 'same-origin',
+    'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    ...(extraHeaders || {}),
+  };
+  res.writeHead(code, headers);
   res.end(typeof body === 'object' && !Buffer.isBuffer(body) ? JSON.stringify(body) : body);
 }
 async function json(req, limit = 8 * 1024 * 1024) {
@@ -191,9 +266,9 @@ async function json(req, limit = 8 * 1024 * 1024) {
   for await (const chunk of req) { size += chunk.length; if (size > limit) throw new Error(`Request exceeds ${limit >= 1024 * 1024 ? `${limit / 1024 / 1024} MB` : `${limit / 1024} KB`}.`); chunks.push(chunk); }
   return JSON.parse(Buffer.concat(chunks).toString());
 }
-async function runPowershell(script) {
+async function runPowershell(script, envPatch = {}) {
   return new Promise((resolve, reject) => {
-    execFile('powershell.exe', ['-NoProfile', '-STA', '-Command', script], { windowsHide: true, timeout: 180000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile('powershell.exe', ['-NoProfile', '-STA', '-Command', script], { windowsHide: true, timeout: 180000, maxBuffer: 1024 * 1024, env: { ...process.env, ...envPatch } }, (err, stdout, stderr) => {
       if (err) return reject(new Error(stderr?.trim() || err.message));
       resolve(stdout.trim());
     });
@@ -209,24 +284,27 @@ async function pickProjectFolder(initialDir = '', description = 'Choose FPGA Pro
     const exists = await fs.stat(start).then(s => s.isDirectory(), () => false);
     if (!exists) start = ROOT;
   }
-  const safeStart = start.replace(/'/g, "''");
-  const safeDesc = String(description || 'Choose Folder').replace(/'/g, "''");
   const ps = [
     'Add-Type -AssemblyName System.Windows.Forms',
     '$owner = New-Object System.Windows.Forms.Form',
     '$owner.TopMost = $true',
     '$owner.StartPosition = "CenterScreen"',
     '$dlg = New-Object System.Windows.Forms.FolderBrowserDialog',
-    `$dlg.Description = '${safeDesc}'`,
+    '$dlg.Description = $env:TRACE_PICK_DESC',
     '$dlg.UseDescriptionForTitle = $true',
     '$dlg.ShowNewFolderButton = $true',
-    `$dlg.SelectedPath = '${safeStart}'`,
+    '$dlg.SelectedPath = $env:TRACE_PICK_START',
     '$res = $dlg.ShowDialog($owner)',
     '$owner.Dispose()',
     'if ($res -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dlg.SelectedPath }',
   ].join('; ');
-  const chosen = await runPowershell(ps);
-  return chosen ? { cancelled: false, dir: path.resolve(chosen) } : { cancelled: true };
+  const chosen = await runPowershell(ps, { TRACE_PICK_START: start, TRACE_PICK_DESC: String(description || 'Choose Folder') });
+  if (chosen) {
+    const resolved = path.resolve(chosen);
+    authorizeRoot(resolved);
+    return { cancelled: false, dir: resolved };
+  }
+  return { cancelled: true };
 }
 async function pickProjectFile(initialDir = '') {
   if (process.platform !== 'win32') throw new Error('Native file picker is supported on Windows.');
@@ -238,21 +316,25 @@ async function pickProjectFile(initialDir = '') {
     const exists = await fs.stat(start).then(s => s.isDirectory(), () => false);
     if (!exists) start = ROOT;
   }
-  const safeStart = start.replace(/'/g, "''");
   const ps = [
     'Add-Type -AssemblyName System.Windows.Forms',
     '$owner = New-Object System.Windows.Forms.Form',
     '$owner.TopMost = $true',
     '$dlg = New-Object System.Windows.Forms.OpenFileDialog',
     '$dlg.Title = "Open Trace / Quartus FPGA Project"',
-    `$dlg.InitialDirectory = '${safeStart}'`,
+    '$dlg.InitialDirectory = $env:TRACE_PICK_START',
     '$dlg.Filter = "FPGA Projects (*.qpf;*.qsf;*.json)|*.qpf;*.qsf;*.json|All Files (*.*)|*.*"',
     '$res = $dlg.ShowDialog($owner)',
     '$owner.Dispose()',
     'if ($res -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dlg.FileName }',
   ].join('; ');
-  const chosen = await runPowershell(ps);
-  return chosen ? { cancelled: false, file: path.resolve(chosen) } : { cancelled: true };
+  const chosen = await runPowershell(ps, { TRACE_PICK_START: start });
+  if (chosen) {
+    const resolved = path.resolve(chosen);
+    authorizeRoot(path.dirname(resolved));
+    return { cancelled: false, file: resolved };
+  }
+  return { cancelled: true };
 }
 async function pickSaveFile(initialDir = '', defaultName = 'untitled.vhd') {
   if (process.platform !== 'win32') throw new Error('Native file dialog is supported on Windows.');
@@ -264,27 +346,33 @@ async function pickSaveFile(initialDir = '', defaultName = 'untitled.vhd') {
     const exists = await fs.stat(start).then(s => s.isDirectory(), () => false);
     if (!exists) start = ROOT;
   }
-  const safeStart = start.replace(/'/g, "''");
-  const safeName = String(defaultName || 'untitled.vhd').replace(/'/g, "''");
   const ps = [
     'Add-Type -AssemblyName System.Windows.Forms',
     '$owner = New-Object System.Windows.Forms.Form',
     '$owner.TopMost = $true',
     '$dlg = New-Object System.Windows.Forms.SaveFileDialog',
     '$dlg.Title = "Save File As"',
-    `$dlg.InitialDirectory = '${safeStart}'`,
-    `$dlg.FileName = '${safeName}'`,
+    '$dlg.InitialDirectory = $env:TRACE_PICK_START',
+    '$dlg.FileName = $env:TRACE_PICK_DEFAULT',
     '$dlg.Filter = "VHDL Files (*.vhd;*.vhdl)|*.vhd;*.vhdl|Quartus Settings (*.qsf;*.qpf)|*.qsf;*.qpf|Data & Text (*.txt;*.md;*.hex;*.mif;*.mem;*.dat)|*.txt;*.md;*.hex;*.mif;*.mem;*.dat|All Files (*.*)|*.*"',
     '$res = $dlg.ShowDialog($owner)',
     '$owner.Dispose()',
     'if ($res -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dlg.FileName }',
   ].join('; ');
-  const chosen = await runPowershell(ps);
-  return chosen ? { cancelled: false, file: path.resolve(chosen) } : { cancelled: true };
+  const chosen = await runPowershell(ps, { TRACE_PICK_START: start, TRACE_PICK_DEFAULT: String(defaultName || 'untitled.vhd') });
+  if (chosen) {
+    const resolved = path.resolve(chosen);
+    const saveToken = randomUUID();
+    saveTokens.set(saveToken, { file: resolved, expires: Date.now() + 5 * 60 * 1000 });
+    for (const [k, v] of saveTokens) if (v.expires < Date.now()) saveTokens.delete(k);
+    return { cancelled: false, file: resolved, filePath: resolved, saveToken };
+  }
+  return { cancelled: true };
 }
 function resolveProjectRel(dir, rel = '', { allowRoot = false } = {}) {
   if (typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error('Project folder must be an absolute path.');
   const root = path.resolve(dir);
+  if (!isAuthorizedDir(root)) throw new Error('Project directory is not authorized. Open or save the project folder first.');
   const clean = String(rel || '').replaceAll('\\', '/').replace(/^\/+|\/+$/g, '');
   if (!clean) {
     if (allowRoot) return { root, full: root, rel: '' };
@@ -301,7 +389,7 @@ async function readProjectTree(dir) {
   const { root } = resolveProjectRel(dir, '', { allowRoot: true });
   const st = await fs.stat(root).catch(() => null);
   if (!st || !st.isDirectory()) throw new Error(`Project folder not found: ${root}`);
-  const SKIP = new Set(['.git', 'node_modules', 'work', 'greybox_tmp', 'db', 'incremental_db', 'output_files']);
+  const SKIP = new Set(['.git', '.trace-build', 'node_modules', 'work', 'greybox_tmp', 'db', 'incremental_db', 'output_files']);
   async function walk(cur, relPrefix, depth) {
     const entries = await fs.readdir(cur, { withFileTypes: true }).catch(() => []);
     const dirs = [], files = [];
@@ -339,14 +427,20 @@ async function writeProjectFile({ dir, rel, text }) {
   appendLogLine('info', 'app', `Saved file ${clean} in ${dir}`);
   return { ok: true, rel: clean, full };
 }
-async function writeAbsoluteFile({ filePath, text }) {
+async function writeAbsoluteFile({ filePath, text, saveToken }) {
   if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('File path must be absolute.');
   if (typeof text !== 'string') throw new Error('File content must be a string.');
   const full = path.resolve(filePath);
+  const tok = saveToken ? saveTokens.get(saveToken) : null;
+  const authorizedByToken = tok && tok.expires >= Date.now() && tok.file.toLowerCase() === full.toLowerCase();
+  if (!authorizedByToken && !isAuthorizedDir(path.dirname(full))) {
+    throw new Error('Destination path is not authorized. Use Save File As to pick a destination.');
+  }
+  if (authorizedByToken) saveTokens.delete(saveToken);
   await fs.mkdir(path.dirname(full), { recursive: true });
   await fs.writeFile(full, text, 'utf8');
   appendLogLine('info', 'app', `Saved file as ${full}`);
-  return { ok: true, file: full, name: path.basename(full), dir: path.dirname(full) };
+  return { ok: true, file: full, filePath: full, name: path.basename(full), dir: path.dirname(full) };
 }
 async function mkdirInProject({ dir, rel }) {
   const { full, rel: clean } = resolveProjectRel(dir, rel);
@@ -393,6 +487,7 @@ async function saveProjectToFolder({ dir, projectName, project }) {
   if (typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error('Project folder must be an absolute path.');
   if (!project || !Array.isArray(project.sources) || !project.sources.length || project.sources.length > 100) throw new Error('Project must contain 1–100 source files.');
   const targetDir = path.resolve(dir);
+  if (!isAuthorizedDir(targetDir)) throw new Error('Project folder is not authorized. Use Save Project As to choose a folder.');
   await fs.mkdir(targetDir, { recursive: true });
   const top = String(project.top || '').trim() || project.sources[0].name.replace(/\.[^.]+$/, '');
   const slug = sanitizeProjectSlug(projectName || top || path.basename(targetDir));
@@ -455,6 +550,10 @@ async function saveProjectToFolder({ dir, projectName, project }) {
     generics: project.generics || '',
     sdf: sdfFile,
     extraFiles: project.sources.filter(s => !/\.(vhd|vhdl|vho)$/i.test(s.name)).map(s => s.name),
+    compiledHash: typeof project.compiledHash === 'string' ? project.compiledHash : '',
+    flashedHash: typeof project.flashedHash === 'string' ? project.flashedHash : '',
+    compiledAssignments: Array.isArray(project.compiledAssignments) ? project.compiledAssignments : [],
+    discoveredPorts: Array.isArray(project.discoveredPorts) ? project.discoveredPorts : [],
   };
   qsfLines.push('', `# TRACE_META: ${JSON.stringify(meta)}`, '');
   await fs.writeFile(path.join(targetDir, qpfName), qpfBody, 'utf8');
@@ -506,6 +605,7 @@ async function openProjectFromDisk(inputPath) {
   if (st.isFile() && /\.json$/i.test(resolved)) {
     const parsed = JSON.parse(await fs.readFile(resolved, 'utf8'));
     const dir = path.dirname(resolved);
+    authorizeRoot(dir);
     appendLogLine('info', 'app', `Opened JSON project from ${resolved}`);
     return { ok: true, dir, projectName: parsed.top || path.basename(resolved, '.json'), qpf: null, qsf: null, project: parsed };
   }
@@ -528,18 +628,26 @@ async function openProjectFromDisk(inputPath) {
   const sources = [];
   const seen = new Set();
   for (const ref of parsed.files) {
-    const candidate = await fs.stat(path.resolve(dir, ref.rel)).then(() => path.resolve(dir, ref.rel), () => path.join(dir, ref.name));
-    const text = await fs.readFile(candidate, 'utf8').catch(() => null);
-    const relFromDir = within(dir, candidate) ? path.relative(dir, candidate).replaceAll('\\', '/') : ref.name;
+    const relTarget = path.resolve(dir, ref.rel);
+    const flatTarget = path.resolve(dir, ref.name);
+    let candidate = null;
+    if (within(dir, relTarget) && await fs.stat(relTarget).then(s => s.isFile(), () => false)) candidate = relTarget;
+    else if (within(dir, flatTarget) && await fs.stat(flatTarget).then(s => s.isFile(), () => false)) candidate = flatTarget;
+    if (!candidate) continue;
+    const relFromDir = path.relative(dir, candidate).replaceAll('\\', '/');
     const srcName = SAFE_SRC_NAME.test(relFromDir) ? relFromDir : ref.name;
-    if (text !== null && SAFE_SRC_NAME.test(srcName) && !seen.has(srcName.toLowerCase())) {
+    if (!SAFE_SRC_NAME.test(srcName) || seen.has(srcName.toLowerCase())) continue;
+    const text = await fs.readFile(candidate, 'utf8').catch(() => null);
+    if (text !== null) {
       seen.add(srcName.toLowerCase());
       sources.push({ name: srcName, text, library: ref.library || 'work' });
     }
   }
   for (const extra of parsed.meta?.extraFiles || []) {
     if (SAFE_SRC_NAME.test(extra) && !seen.has(extra.toLowerCase())) {
-      const text = await fs.readFile(path.join(dir, extra), 'utf8').catch(() => null);
+      const extraFull = path.resolve(dir, extra);
+      if (!within(dir, extraFull)) continue;
+      const text = await fs.readFile(extraFull, 'utf8').catch(() => null);
       if (text !== null) { seen.add(extra.toLowerCase()); sources.push({ name: extra, text, library: 'work' }); }
     }
   }
@@ -552,10 +660,14 @@ async function openProjectFromDisk(inputPath) {
   }
   if (!sources.length) throw new Error(`No readable VHDL source files found for ${qsfName} in ${dir}`);
   let sdf = null;
-  if (parsed.meta?.sdf?.name) {
-    const sdfText = await fs.readFile(path.join(dir, parsed.meta.sdf.name), 'utf8').catch(() => null);
-    if (sdfText !== null) sdf = { name: parsed.meta.sdf.name, text: sdfText, instance: parsed.meta.sdf.instance || '/', corner: parsed.meta.sdf.corner || 'typ' };
+  if (parsed.meta?.sdf?.name && /^[a-z0-9_][a-z0-9_. -]*\.sdf$/i.test(parsed.meta.sdf.name)) {
+    const sdfFull = path.resolve(dir, parsed.meta.sdf.name);
+    if (within(dir, sdfFull)) {
+      const sdfText = await fs.readFile(sdfFull, 'utf8').catch(() => null);
+      if (sdfText !== null) sdf = { name: parsed.meta.sdf.name, text: sdfText, instance: parsed.meta.sdf.instance || '/', corner: parsed.meta.sdf.corner || 'typ' };
+    }
   }
+  authorizeRoot(dir);
   const project = {
     format: 'trace-project',
     version: 1,
@@ -566,6 +678,10 @@ async function openProjectFromDisk(inputPath) {
     standard: parsed.standard || '08',
     generics: parsed.meta?.generics || '',
     sdf,
+    compiledHash: typeof parsed.meta?.compiledHash === 'string' ? parsed.meta.compiledHash : '',
+    flashedHash: typeof parsed.meta?.flashedHash === 'string' ? parsed.meta.flashedHash : '',
+    compiledAssignments: Array.isArray(parsed.meta?.compiledAssignments) ? parsed.meta.compiledAssignments : [],
+    discoveredPorts: Array.isArray(parsed.meta?.discoveredPorts) ? parsed.meta.discoveredPorts : [],
   };
   const projectName = parsed.meta?.projectName || path.basename(qsfName, '.qsf');
   appendLogLine('info', 'app', `Opened project "${projectName}" from ${dir} (${sources.length} source(s), ${parsed.pins.length} pin(s))`);
@@ -577,10 +693,13 @@ async function hdlTree() {
     const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
     const files = [];
     for (const e of entries) {
-      if (e.name.startsWith('.') || ['work', 'greybox_tmp'].includes(e.name)) continue;
+      if (e.name.startsWith('.') || ['work', 'greybox_tmp', '.trace-build'].includes(e.name)) continue;
       const full = path.join(dir, e.name), r = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory() && depth < 4) await walk(full, r, depth + 1);
-      else if (e.isFile() && /\.(vhd|vhdl|qpf|qsf|sof|pof|vo|vho|vcd|cf|sdf|hex|mif|mem|txt|dat)$/i.test(e.name)) files.push({ name: e.name, rel: r, size: (await fs.stat(full)).size, kind: path.extname(e.name).slice(1).toLowerCase() });
+      else if (e.isFile() && /\.(vhd|vhdl|qpf|qsf|sof|pof|vo|vho|vcd|cf|sdf|hex|mif|mem|txt|dat)$/i.test(e.name)) {
+        const info = await fs.stat(full).catch(() => null);
+        if (info) files.push({ name: e.name, rel: r, size: info.size, kind: path.extname(e.name).slice(1).toLowerCase() });
+      }
     }
     if (files.length) groups.push({ dir: rel || '.', files: files.sort((a, b) => a.name.localeCompare(b.name)) });
   }
@@ -695,7 +814,7 @@ const server = http.createServer(async (req, res) => {
       if (openCount > 0) appendLogLine('info', 'engine', `Stopped and closed ${openCount} active simulation session(s)`);
       return send(res, 200, { ok: true });
     }
-    const match = url.pathname.match(/^\/api\/sim\/([a-f0-9-]+)(?:\/(step|vcd|close))?$/);
+    const match = url.pathname.match(/^\/api\/sim\/([a-f0-9-]+)(?:\/(step|vcd|close|restart))?$/);
     if (match) {
       const session = sessions.get(match[1]);
       if (!session) return send(res, 404, { error: 'Simulation session ended. Build the design again.' });
@@ -704,22 +823,27 @@ const server = http.createServer(async (req, res) => {
         appendLogLine('info', 'engine', `Closed simulation session ${match[1].slice(0, 8)}`);
         return send(res, 200, { ok: true });
       }
+      if (match[2] === 'restart' && req.method === 'POST') {
+        const restarted = await restartSession(match[1]);
+        appendLogLine('info', 'engine', `Restarted simulation ${restarted.top} (session ${match[1].slice(0, 8)} -> ${restarted.id.slice(0, 8)}, cached)`);
+        return send(res, 200, restarted);
+      }
       if (match[2] === 'step' && req.method === 'POST') return send(res, 200, await session.step(await json(req)));
       if (match[2] === 'vcd' && req.method === 'POST') {
         const vcd = await session.exportVcd();
         appendLogLine('info', 'engine', `Exported VCD for session ${match[1].slice(0, 8)} (${vcd.length} bytes)`);
         return send(res, 200, vcd, 'text/plain; charset=utf-8');
       }
+      return send(res, 405, { error: 'Method not allowed.' });
     }
     if (req.method !== 'GET') return send(res, 405, { error: 'Method not allowed.' });
     const full = path.resolve(PUBLIC, '.' + decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname));
     if (!within(PUBLIC, full)) return send(res, 403, 'Forbidden', 'text/plain');
     const actual = await fs.realpath(full).catch(() => null);
-    if (!actual || !within(PUBLIC, actual)) return send(res, 404, 'Not found', 'text/plain');
-    if (IS_PACKAGED && /^\/(vendor|assets)\//.test(url.pathname)) {
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-    }
-    return send(res, 200, await fs.readFile(actual), MIME[path.extname(actual)] || 'application/octet-stream');
+    const actualStat = actual ? await fs.stat(actual).catch(() => null) : null;
+    if (!actual || !actualStat?.isFile() || !within(PUBLIC, actual)) return send(res, 404, 'Not found', 'text/plain');
+    const cacheHeaders = IS_PACKAGED && /^\/(vendor|assets)\//.test(url.pathname) ? { 'Cache-Control': 'public, max-age=31536000, immutable' } : null;
+    return send(res, 200, await fs.readFile(actual), MIME[path.extname(actual)] || 'application/octet-stream', cacheHeaders);
   } catch (e) {
     if (ownsLog && /^\/api\/(sim|hdl)\//.test(req.url || '')) {
       appendLogLine('warn', 'engine', `${req.method} ${req.url} failed: ${String(e.message || e).split(/\r?\n/)[0]}`);
@@ -754,7 +878,7 @@ server.on('error', async error => {
   appendLogSync({ source: 'server', message: `Cannot start Trace: ${error.message}`, stack: error.stack, details: { Address: address } });
 });
 process.on('uncaughtExceptionMonitor', (error, origin) => appendLogSync({ source: 'server', message: `Server crashed (${origin}): ${error?.message ?? error}`, stack: error?.stack, details: { Address: address, Node: process.version } }));
-process.on('exit', () => { if (ownsLog) archiveLog(); });
+process.on('exit', () => { if (ownsLog) { archiveLog(); releaseLogLock(); } });
 async function shutdown() {
   if (stopping) return;
   stopping = true;

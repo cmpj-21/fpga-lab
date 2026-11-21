@@ -6,10 +6,11 @@
 
 #define MAX_SIGNALS 512
 static vpiHandle signals[MAX_SIGNALS];
-static int count = 0, clock_id = -1, remaining = 0, level = 0, limit_error = 0;
+static int count = 0, skipped_signals = 0, clock_id = -1, remaining = 0, level = 0, limit_error = 0;
 static uint64_t half_period = 0;
 static int pending_count = 0, pending_ids[MAX_SIGNALS];
 static char pending_values[MAX_SIGNALS][4097];
+static char stdout_buf[65536];
 static PLI_INT32 boundary(p_cb_data cb);
 static PLI_INT32 settled(p_cb_data cb);
 
@@ -22,6 +23,7 @@ static void later(int reason, uint64_t delay, PLI_INT32 (*fn)(p_cb_data)) {
 }
 
 static void quoted(const char *s) {
+  if (!s) s = "";
   putchar('"');
   for (; *s; s++) {
     unsigned char c = (unsigned char)*s;
@@ -33,18 +35,23 @@ static void quoted(const char *s) {
 }
 
 static void collect(vpiHandle scope, int depth) {
-  if (depth > 16) { limit_error = 1; return; }
+  if (depth > 16) { skipped_signals++; return; }
   int kinds[] = {vpiNet, vpiReg, vpiIntegerVar};
   for (int k = 0; k < 3; k++) {
     vpiHandle it = vpi_iterate(kinds[k], scope), h;
     while (it && (h = vpi_scan(it))) {
+      const char *raw = vpi_get_str(vpiFullName, h);
+      if (!raw || !raw[0]) { skipped_signals++; continue; }
       char name[4096];
-      snprintf(name, sizeof(name), "%s", vpi_get_str(vpiFullName, h));
+      snprintf(name, sizeof(name), "%s", raw);
       int duplicate = 0;
-      for (int i = 0; i < count; i++) if (!strcmp(name, vpi_get_str(vpiFullName, signals[i]))) duplicate = 1;
+      for (int i = 0; i < count; i++) {
+        const char *existing = vpi_get_str(vpiFullName, signals[i]);
+        if (existing && !strcmp(name, existing)) { duplicate = 1; break; }
+      }
       if (!duplicate) {
         int width = vpi_get(vpiSize, h);
-        if (count >= MAX_SIGNALS || width < 1 || width > 4096) limit_error = 1;
+        if (count >= MAX_SIGNALS || width < 1 || width > 4096) skipped_signals++;
         else signals[count++] = h;
       }
     }
@@ -71,17 +78,19 @@ static void put(int id, const char *bits) {
 }
 
 static int command(void) {
+  fflush(stdout);
   char line[256];
   if (!fgets(line, sizeof(line), stdin)) { vpi_control(vpiFinish, 0); return 0; }
+  if (!strchr(line, '\n') && !feof(stdin)) { vpi_control(vpiFinish, 1); return 0; }
   if (line[0] == 'Q') { vpi_control(vpiFinish, 0); return 0; }
   unsigned long long hp;
-  if (sscanf(line, "R %d %llu %d %d", &remaining, &hp, &clock_id, &pending_count) != 4 || remaining < 0 || remaining > 8192 || pending_count < 0 || pending_count > MAX_SIGNALS) {
+  if (sscanf(line, "R %d %llu %d %d", &remaining, &hp, &clock_id, &pending_count) != 4 || remaining < 0 || remaining > 8192 || (remaining > 0 && hp == 0) || pending_count < 0 || pending_count > MAX_SIGNALS) {
     vpi_control(vpiFinish, 1); return 0;
   }
   half_period = (uint64_t)hp;
   for (int i = 0; i < pending_count; i++) {
     char input[4160];
-    if (!fgets(input, sizeof(input), stdin) || sscanf(input, "%d %4096s", &pending_ids[i], pending_values[i]) != 2) { vpi_control(vpiFinish, 1); return 0; }
+    if (!fgets(input, sizeof(input), stdin) || (!strchr(input, '\n') && !feof(stdin)) || sscanf(input, "%d %4096s", &pending_ids[i], pending_values[i]) != 2) { vpi_control(vpiFinish, 1); return 0; }
   }
   level = 0;
   if (clock_id >= 0 && clock_id < count) {
@@ -96,7 +105,7 @@ static int command(void) {
 
 static PLI_INT32 finished(p_cb_data cb) {
   (void)cb;
-  sample(); fflush(NULL); puts("@TRACE {\"type\":\"done\"}"); fflush(stdout); command();
+  puts("@TRACE {\"type\":\"done\"}"); fflush(stdout); command();
   return 0;
 }
 
@@ -141,9 +150,12 @@ static PLI_INT32 changed(p_cb_data cb) {
 
 static PLI_INT32 start(p_cb_data cb) {
   (void)cb;
-  setvbuf(stdout, NULL, _IONBF, 0);
+  setvbuf(stdout, stdout_buf, _IOFBF, sizeof(stdout_buf));
   collect(NULL, 0);
-  if (limit_error) { puts("Bridge observation limit exceeded: 512 signals, 4096 bits per signal, 16 hierarchy levels."); vpi_control(vpiFinish, 1); return 0; }
+  if (limit_error) { puts("Bridge observation limit exceeded: 512 signals, 4096 bits per signal, 16 hierarchy levels."); fflush(stdout); vpi_control(vpiFinish, 1); return 0; }
+  if (skipped_signals > 0) {
+    printf("Note: skipped %d signal(s) exceeding observation limits (512 signals, 4096 bits, depth 16).\n", skipped_signals);
+  }
   printf("@TRACE {\"type\":\"ready\",\"precision\":%d,\"signals\":[", vpi_get(vpiTimePrecision, NULL));
   for (int i = 0; i < count; i++) {
     if (i) putchar(',');
@@ -156,15 +168,16 @@ static PLI_INT32 start(p_cb_data cb) {
       vpi_get_value(left, &l); vpi_get_value(right, &r);
       printf(",\"left\":%d,\"right\":%d", l.value.integer, r.value.integer);
     }
+    if (left) vpi_free_object(left);
+    if (right) vpi_free_object(right);
     putchar('}');
   }
   puts("]}");
+  fflush(stdout);
   for (int i = 0; i < count; i++) {
     s_cb_data change = {0};
-    s_vpi_time time = {0}; time.type = vpiSimTime;
-    s_vpi_value value = {0}; value.format = vpiBinStrVal;
     change.reason = cbValueChange; change.cb_rtn = changed; change.obj = signals[i];
-    change.time = &time; change.value = &value; change.user_data = (PLI_BYTE8 *)(intptr_t)i;
+    change.time = NULL; change.value = NULL; change.user_data = (PLI_BYTE8 *)(intptr_t)i;
     vpi_register_cb(&change);
   }
   later(cbAfterDelay, 0, boundary);
@@ -174,7 +187,7 @@ static PLI_INT32 start(p_cb_data cb) {
 static PLI_INT32 end_simulation(p_cb_data cb) {
   (void)cb;
   if (!limit_error) sample();
-  fflush(NULL);
+  fflush(stdout);
   return 0;
 }
 
