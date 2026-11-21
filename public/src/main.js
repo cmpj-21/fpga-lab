@@ -148,7 +148,7 @@ function trackUiAction(kind, el, detail = '') {
   setTimeout(async () => {
     await new Promise(r => requestAnimationFrame(r));
     const waitStart = performance.now();
-    while ((S.building || S.importing || S.exporting || S.busy || S.truthBusy) && performance.now() - waitStart < 12000) {
+    while ((S.building || S.importing || S.exporting || (!S.running && S.busy) || S.truthBusy) && performance.now() - waitStart < 12000) {
       await new Promise(r => setTimeout(r, 30));
     }
     const ms = Math.round(performance.now() - t0);
@@ -418,8 +418,11 @@ async function flashToBoard() {
     }
   }
   if (!S.sim.ended && S.pending.length) {
-    const initial = await api(`/api/sim/${S.sim.id}/step`, { cycles: 0, inputs: S.pending.splice(0), clock: clockId(), halfPeriod: halfPeriod() });
-    consume(initial);
+    S.busy = true;
+    try {
+      const initial = await api(`/api/sim/${S.sim.id}/step`, { cycles: 0, inputs: S.pending.splice(0), clock: clockId(), halfPeriod: halfPeriod() });
+      consume(initial);
+    } finally { S.busy = false; }
   } else {
     sampleOutputs();
   }
@@ -1218,7 +1221,7 @@ async function boot() {
   syncNavigation();
   audio.setMuted(true);
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
-  try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed), onDip: index => toggleDip(index), onSelect: part => renderInspector(part), onPower: on => { $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.4); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
+  try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { if (pressed) trackUiAction('3D', $('#view3d'), `press ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.4); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames')); applyTheme(document.documentElement.dataset.theme); wire();
   ide = createIde({ S, toast, markDirty, build, flashToBoard, renderSources, openTools, syncNavigation, projectData, saveProject, restoreProject, loadFiles, stopAllSimulations });
   wireActionLogger();
