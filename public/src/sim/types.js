@@ -137,14 +137,25 @@ export function valToString(x) {
     default: return String(x.v);
   }
 }
-export function fmtTime(fs) {
+const TIME_UNITS = { fs: 1, ps: 1e3, ns: 1e6, us: 1e9, ms: 1e12, s: 1e15 };
+function fmtNum(val) {
+  if (!Number.isFinite(val)) return String(val);
+  if (Math.abs(val) < 1e-12) return '0';
+  if (Math.abs(val) >= 1e9 || Math.abs(val) < 1e-4) return val.toExponential(3).replace(/\.?0+e/, 'e');
+  return Number(val.toPrecision(6)).toString();
+}
+export function fmtTime(fs, unit = 'auto') {
+  if (unit && unit !== 'auto' && Object.hasOwn(TIME_UNITS, unit)) {
+    const label = unit === 'us' ? 'µs' : unit;
+    return `${fmtNum(fs / TIME_UNITS[unit])} ${label}`;
+  }
   const abs = Math.abs(fs);
-  if (abs >= 1e15) return `${(fs / 1e15).toPrecision(6)} s`;
-  if (abs >= 1e12) return `${(fs / 1e12).toPrecision(6)} ms`;
-  if (abs >= 1e9) return `${(fs / 1e9).toPrecision(6)} us`;
-  if (abs >= 1e6) return `${(fs / 1e6).toPrecision(6)} ns`;
-  if (abs >= 1e3) return `${(fs / 1e3).toPrecision(6)} ps`;
-  return `${fs} fs`;
+  if (abs >= 1e15) return `${fmtNum(fs / 1e15)} s`;
+  if (abs >= 1e12) return `${fmtNum(fs / 1e12)} ms`;
+  if (abs >= 1e9) return `${fmtNum(fs / 1e9)} µs`;
+  if (abs >= 1e6) return `${fmtNum(fs / 1e6)} ns`;
+  if (abs >= 1e3) return `${fmtNum(fs / 1e3)} ps`;
+  return `${Math.round(fs)} fs`;
 }
 
 // ---- numeric conversions (BigInt backbone, exact for any width) ----

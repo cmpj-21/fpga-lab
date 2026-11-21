@@ -10,7 +10,7 @@ export class WaveViewer {
   constructor(canvas, namesEl, scrollTrackEl = null, scrollThumbEl = null) {
     this.canvas = canvas; this.ctx = canvas.getContext('2d'); this.namesEl = namesEl;
     this.scrollTrack = scrollTrackEl; this.scrollThumb = scrollThumbEl; this.scrollDrag = null;
-    this.signals = []; this.tStart = 0; this.tEnd = 1e9; this.cursorT = 0; this.lastTime = 0; this.maxSamples = 40000; this.drag = null;
+    this.signals = []; this.tStart = 0; this.tEnd = 1e9; this.cursorT = 0; this.lastTime = 0; this.maxSamples = 40000; this.drag = null; this.timeUnit = 'auto';
     this.dpr = Math.min(devicePixelRatio || 1, 2);
     this.setTheme();
     new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
@@ -103,9 +103,16 @@ export class WaveViewer {
   setTheme() {
     const style = getComputedStyle(document.documentElement);
     this.palette = Object.fromEntries(['bg', 'grid', 'row', 'text', 'unknown', 'cursor'].map(key => [key, style.getPropertyValue(`--wave-${key}`).trim()]));
+    this.palette.header = style.getPropertyValue('--wave-header').trim() || this.palette.bg;
+    this.palette.line = style.getPropertyValue('--line').trim() || this.palette.grid;
     this.colors = document.documentElement.dataset.theme === 'dark' ? DARK_COLORS : COLORS;
     this.signals.forEach((signal, i) => signal.color = this.colors[i % this.colors.length]);
     this.renderNames(); this.draw();
+  }
+  setTimeUnit(unit = 'auto') {
+    this.timeUnit = unit || 'auto';
+    this.draw();
+    this.onCursor?.(this.cursorT);
   }
   setSignals(list) {
     this.signals = list.map((s, i) => ({ ...s, width: s.width || 1, visible: s.visible !== false, color: this.colors[i % this.colors.length], samples: [], last: null }));
@@ -114,6 +121,9 @@ export class WaveViewer {
   toggle(name) { const signal = this.signals.find(s => s.name === name); if (!signal) return false; signal.visible = !signal.visible; this.renderNames(); this.resize(); return signal.visible; }
   renderNames() {
     this.namesEl.replaceChildren(); this.valueElements = new Map();
+    const head = document.createElement('div'); head.className = 'wave-names-head';
+    head.innerHTML = '<span>Signal</span><span>Value</span>';
+    this.namesEl.append(head);
     for (const signal of this.signals.filter(s => s.visible)) {
       const row = document.createElement('div'); row.className = 'wave-name'; row.title = signal.name;
       const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = signal.color;
@@ -152,14 +162,17 @@ export class WaveViewer {
     const g = this.ctx, width = this.canvas.width / this.dpr, height = this.canvas.height / this.dpr;
     if (!width || !height) return;
     g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); g.clearRect(0, 0, width, height); g.fillStyle = this.palette.bg; g.fillRect(0, 0, width, height);
+    g.fillStyle = this.palette.header; g.fillRect(0, 0, width, HEADER);
     const span = this.tEnd - this.tStart || 1, xOf = time => (time - this.tStart) / span * width;
     const raw = span / Math.max(3, width / 100), magnitude = 10 ** Math.floor(Math.log10(raw)), normalized = raw / magnitude;
     const grid = (normalized < 1.5 ? 1 : normalized < 3 ? 2 : normalized < 7 ? 5 : 10) * magnitude;
-    g.font = '8px Consolas, monospace'; g.textBaseline = 'alphabetic'; g.lineWidth = 1;
+    g.font = '8.5px Consolas, monospace'; g.textBaseline = 'middle'; g.lineWidth = 1;
     for (let t = Math.ceil(this.tStart / grid) * grid; t <= this.tEnd; t += grid) {
-      const x = xOf(t); g.strokeStyle = this.palette.grid; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, height); g.stroke();
-      g.fillStyle = this.palette.text; g.fillText(fmtTime(t).replace(/\.0+ /, ' '), x + 5, 14);
+      const x = xOf(t); g.strokeStyle = this.palette.grid; g.beginPath(); g.moveTo(x, HEADER); g.lineTo(x, height); g.stroke();
+      g.strokeStyle = this.palette.line; g.beginPath(); g.moveTo(x, HEADER - 5); g.lineTo(x, HEADER); g.stroke();
+      g.fillStyle = this.palette.text; g.fillText(fmtTime(t, this.timeUnit), x + 5, HEADER / 2);
     }
+    g.strokeStyle = this.palette.line; g.lineWidth = 1; g.beginPath(); g.moveTo(0, HEADER - 0.5); g.lineTo(width, HEADER - 0.5); g.stroke();
     this.signals.filter(s => s.visible).forEach((signal, row) => {
       const top = HEADER + row * ROW, high = top + 6, low = top + ROW - 7, mid = (high + low) / 2;
       g.strokeStyle = this.palette.row; g.beginPath(); g.moveTo(0, top + ROW); g.lineTo(width, top + ROW); g.stroke();

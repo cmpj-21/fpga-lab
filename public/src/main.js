@@ -1630,7 +1630,8 @@ function wire() {
   };
   $('#btnVcd').onclick = exportVcd; $('#waveZoomIn').onclick = () => { $('#waveFollow').checked = false; waves.zoom(1 / 1.4); }; $('#waveZoomOut').onclick = () => { $('#waveFollow').checked = false; waves.zoom(1.4); }; $('#waveFit').onclick = () => { $('#waveFollow').checked = false; waves.fit(); };
   $('#waveFollow').onchange = () => { if ($('#waveFollow').checked && S.time > 0) { waves.follow(S.time, waveFollowSpan()); waves.draw(); } };
-  waves.onCursor = time => $('#waveCursor').textContent = `Cursor ${fmtTime(time)}`; waves.onNavigate = () => $('#waveFollow').checked = false;
+  if ($('#waveTimeUnit')) $('#waveTimeUnit').onchange = e => waves.setTimeUnit(e.target.value);
+  waves.onCursor = time => $('#waveCursor').textContent = `Cursor ${fmtTime(time, waves.timeUnit)}`; waves.onNavigate = () => $('#waveFollow').checked = false;
   $('#btnLibrary').onclick = () => toggleLeft('library');
   if ($('#btnChangeHdlRoot')) $('#btnChangeHdlRoot').onclick = changeHdlRoot;
   if ($('#homeChangeHdlRoot')) $('#homeChangeHdlRoot').onclick = changeHdlRoot;
