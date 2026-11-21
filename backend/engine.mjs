@@ -322,7 +322,7 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
     }
 
     const runFlags = [`--std=${standard}`, '-fsynopsys', '-fexplicit', `--work=${topLibrary}`, `--workdir=${cacheDir}`, `-P${cacheDir}`];
-    const runArgs = ['-r', ...runFlags, resolvedTop, ...genericArgs, `--vpi=${cfg.plugin}`, '--assert-level=error', '--stop-delta=10000', '--unbuffered', '--vcd=trace.vcd'];
+    const runArgs = ['-r', ...runFlags, resolvedTop, ...genericArgs, `--vpi=${cfg.plugin}`, '--assert-level=error', '--stop-delta=10000'];
     const spec = { cfg, runArgs, cacheDir, dataFiles, sdf, top: resolvedTop, topLibrary, standard, entities: [...entities], diagnostics: cachedDiagnostics, buildHash, cached };
     return await spawnFromSpec(spec, compileToken);
   } catch (error) {
@@ -332,10 +332,28 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
   }
 }
 
+function vcdIdFor(index) {
+  let s = '', x = index;
+  do { s += String.fromCharCode(33 + (x % 94)); x = Math.floor(x / 94); } while (x > 0);
+  return s;
+}
+function vcdBits(raw) {
+  let out = '';
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    out += (ch === '0' || ch === 'L') ? '0' : (ch === '1' || ch === 'H') ? '1' : ch === 'Z' ? 'z' : 'x';
+  }
+  return out;
+}
+function vcdTimescale(precision) {
+  const map = { '-15': '1fs', '-14': '10fs', '-13': '100fs', '-12': '1ps', '-11': '10ps', '-10': '100ps', '-9': '1ns', '-8': '10ns', '-7': '100ns', '-6': '1us', '-3': '1ms', '0': '1s' };
+  return map[String(precision)] || '1fs';
+}
+
 class EngineSession {
   constructor(child, dir, spawnSpec = null) {
     this.id = randomUUID(); this.child = child; this.dir = dir; this.spawnSpec = spawnSpec;
-    this.schema = null; this.samples = []; this.logs = []; this.failure = null;
+    this.schema = null; this.samples = []; this.vcdHistory = []; this.logs = []; this.failure = null;
     this.pending = null; this.completed = null; this.lastUsed = Date.now();
     this.busy = true; this.time = 0n; this.closePromise = null;
     const output = readline.createInterface({ input: child.stdout });
@@ -354,6 +372,11 @@ class EngineSession {
           const sample = { time: data.time, values: [...this.values] };
           if (this.samples.at(-1)?.time === data.time) this.samples[this.samples.length - 1] = sample;
           else this.samples.push(sample);
+          if (this.vcdHistory.at(-1)?.time === data.time) this.vcdHistory[this.vcdHistory.length - 1] = sample;
+          else {
+            this.vcdHistory.push(sample);
+            if (this.vcdHistory.length > 25000) this.vcdHistory.splice(1, 2500);
+          }
           if (this.samples.length >= 50000) {
             this.child.kill();
             throw new Error('Signal event limit exceeded for one batch; reduce step size.');
@@ -398,14 +421,15 @@ class EngineSession {
       this.pending = { resolve, reject, timer };
     });
   }
-  async step({ cycles = 1, halfPeriod = '500000000000', clock = -1, inputs = [] }) {
+  async step({ cycles = 1, halfPeriod = '500000000000', clock = -1, inputs = [], stride = 1 }) {
     if (this.failure) throw this.failure;
     if (this.ended || this.closing) throw new Error('Simulation complete. Export its waveform or build again.');
     if (this.busy) throw new Error('A simulation step is already in progress.');
-    if (!Number.isInteger(cycles) || cycles < 0 || cycles > 4096) throw new Error('Cycles must be 0–4096.');
+    if (!Number.isInteger(cycles) || cycles < 0 || cycles > 131072) throw new Error('Cycles must be 0–131072.');
+    if (!Number.isInteger(stride) || stride < 1 || stride > 262144) throw new Error('Invalid sample stride.');
     if (!/^\d+$/.test(String(halfPeriod))) throw new Error('Half period must be a positive integer in simulator ticks.');
     const hp = BigInt(halfPeriod);
-    if (hp < 1n || hp > 1000000000000000n || this.time + hp * BigInt(cycles * 2) > 9007199254740991n) throw new Error('Time is outside the supported exact waveform range; reset or reduce the duration.');
+    if (hp < 1n || hp > 1000000000000000n || this.time + hp * BigInt(cycles * 2) > 18000000000000000000n) throw new Error('Time is outside the supported 64-bit simulation range; restart the simulation.');
     const clk = this.schema.signals[clock];
     if (clock !== -1 && (!clk || !clk.driveable || clk.direction !== 1 || clk.width !== 1)) throw new Error('Clock must be a scalar input port.');
     if (!Array.isArray(inputs) || inputs.length > 512) throw new Error('Invalid input list.');
@@ -416,16 +440,55 @@ class EngineSession {
       return `${id} ${value.toUpperCase()}`;
     });
     this.busy = true;
-    const vcd = await fs.stat(path.join(this.dir, 'trace.vcd')).catch(() => null);
-    if (vcd?.size > 64 * 1024 * 1024) {
-      this.busy = false;
-      engineLog('warn', `Session ${this.id.slice(0, 8)} reached 64 MB VCD capture limit`);
-      throw new Error('Waveform capture reached 64 MB. Export and restart the simulation.');
-    }
     this.lastUsed = Date.now();
     const result = this.result();
-    this.child.stdin.write(`R ${cycles * 2} ${hp} ${clock} ${lines.length}\n${lines.length ? lines.join('\n') + '\n' : ''}`);
+    this.child.stdin.write(`R ${cycles * 2} ${hp} ${clock} ${lines.length} ${stride}\n${lines.length ? lines.join('\n') + '\n' : ''}`);
     return result;
+  }
+  buildVcd() {
+    const signals = this.schema?.signals || [];
+    const lines = [
+      '$date', `  ${new Date().toUTCString()}`, '$end',
+      '$version', '  Trace FPGA Workbench (GHDL)', '$end',
+      '$timescale', `  ${vcdTimescale(this.schema?.precision ?? -15)}`, '$end',
+    ];
+    const tree = { children: new Map(), vars: [] };
+    signals.forEach((sig, idx) => {
+      const parts = String(sig.name || `sig_${idx}`).split('.');
+      const leaf = parts.pop();
+      let node = tree;
+      for (const p of parts) {
+        if (!node.children.has(p)) node.children.set(p, { children: new Map(), vars: [] });
+        node = node.children.get(p);
+      }
+      const range = sig.width > 1 && Number.isInteger(sig.left) && Number.isInteger(sig.right) ? ` [${sig.left}:${sig.right}]` : '';
+      node.vars.push({ id: vcdIdFor(idx), width: sig.width || 1, label: `${leaf}${range}` });
+    });
+    const emitTree = node => {
+      for (const v of node.vars) lines.push(`$var wire ${v.width} ${v.id} ${v.label} $end`);
+      for (const [scope, child] of node.children) {
+        lines.push(`$scope module ${scope} $end`);
+        emitTree(child);
+        lines.push('$upscope $end');
+      }
+    };
+    emitTree(tree);
+    lines.push('$enddefinitions $end');
+    const prev = Array(signals.length).fill(null);
+    for (let sIdx = 0; sIdx < this.vcdHistory.length; sIdx++) {
+      const sample = this.vcdHistory[sIdx];
+      lines.push(`#${sample.time}`);
+      if (sIdx === 0) lines.push('$dumpvars');
+      for (let i = 0; i < signals.length; i++) {
+        const bits = vcdBits(sample.values[i] || 'U'.repeat(signals[i].width || 1));
+        if (sIdx > 0 && bits === prev[i]) continue;
+        prev[i] = bits;
+        const id = vcdIdFor(i);
+        lines.push((signals[i].width || 1) === 1 ? `${bits}${id}` : `b${bits} ${id}`);
+      }
+      if (sIdx === 0) lines.push('$end');
+    }
+    return lines.join('\n') + '\n';
   }
   async exportVcd() {
     if (this.busy) throw new Error('Pause and finish the current step before exporting.');
@@ -443,7 +506,7 @@ class EngineSession {
         await this.closed;
         clearTimeout(timer);
       }
-      try { return capture ? await fs.readFile(path.join(this.dir, 'trace.vcd'), 'utf8') : undefined; }
+      try { return capture ? this.buildVcd() : undefined; }
       finally { await fs.rm(this.dir, { recursive: true, force: true }).catch(() => {}); }
     })();
     return this.closePromise;

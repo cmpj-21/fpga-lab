@@ -7,6 +7,7 @@
 #define MAX_SIGNALS 512
 static vpiHandle signals[MAX_SIGNALS];
 static int count = 0, skipped_signals = 0, clock_id = -1, remaining = 0, level = 0, limit_error = 0;
+static int fast_mode = 0, sample_stride = 1, step_counter = 0;
 static uint64_t half_period = 0;
 static int pending_count = 0, pending_ids[MAX_SIGNALS];
 static char pending_values[MAX_SIGNALS][4097];
@@ -84,9 +85,14 @@ static int command(void) {
   if (!strchr(line, '\n') && !feof(stdin)) { vpi_control(vpiFinish, 1); return 0; }
   if (line[0] == 'Q') { vpi_control(vpiFinish, 0); return 0; }
   unsigned long long hp;
-  if (sscanf(line, "R %d %llu %d %d", &remaining, &hp, &clock_id, &pending_count) != 4 || remaining < 0 || remaining > 8192 || (remaining > 0 && hp == 0) || pending_count < 0 || pending_count > MAX_SIGNALS) {
+  sample_stride = 1;
+  int parsed = sscanf(line, "R %d %llu %d %d %d", &remaining, &hp, &clock_id, &pending_count, &sample_stride);
+  if (parsed < 4 || remaining < 0 || remaining > 262144 || (remaining > 0 && hp == 0) || pending_count < 0 || pending_count > MAX_SIGNALS) {
     vpi_control(vpiFinish, 1); return 0;
   }
+  if (parsed < 5 || sample_stride < 1) sample_stride = 1;
+  fast_mode = (sample_stride > 1) ? 1 : 0;
+  step_counter = 0;
   half_period = (uint64_t)hp;
   for (int i = 0; i < pending_count; i++) {
     char input[4160];
@@ -119,7 +125,7 @@ static PLI_INT32 settled(p_cb_data cb) {
   (void)cb;
   sample();
   if (remaining > 0) later(cbAfterDelay, half_period, boundary);
-  else later(cbAfterDelay, 0, finish_boundary);
+  else { fast_mode = 0; later(cbAfterDelay, 0, finish_boundary); }
   return 0;
 }
 
@@ -128,10 +134,18 @@ static PLI_INT32 boundary(p_cb_data cb) {
   if (pending_count) {
     for (int i = 0; i < pending_count; i++) put(pending_ids[i], pending_values[i]);
     pending_count = 0;
-  } else if (remaining > 0) {
+    later(cbReadWriteSynch, 0, settled);
+    return 0;
+  }
+  if (remaining > 0) {
     level = !level;
     if (clock_id >= 0) put(clock_id, level ? "1" : "0");
     remaining--;
+    step_counter++;
+    if (fast_mode && remaining > 0 && (step_counter % sample_stride) != 0) {
+      later(cbAfterDelay, half_period, boundary);
+      return 0;
+    }
   }
   /* Input commands can enqueue same-time writes; read-only callbacks corrupt delayed scheduling in GHDL. */
   later(cbReadWriteSynch, 0, settled);
@@ -139,6 +153,7 @@ static PLI_INT32 boundary(p_cb_data cb) {
 }
 
 static PLI_INT32 changed(p_cb_data cb) {
+  if (fast_mode) return 0;
   int id = (int)(intptr_t)cb->user_data;
   s_vpi_time t = {0}; t.type = vpiSimTime; vpi_get_time(NULL, &t);
   s_vpi_value v = {0}; v.format = vpiBinStrVal; vpi_get_value(signals[id], &v);

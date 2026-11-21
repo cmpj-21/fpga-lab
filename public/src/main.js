@@ -318,7 +318,7 @@ function setStatus() {
   const atTimeLimit = !S.vcd && S.sim && S.flashed && !S.sim.ended && !S.dirty && !S.error && remainingSimCycles() <= 0;
   const name = S.building ? 'Compiling' : S.error ? 'Error' : !S.power ? 'Power off' : S.dirty ? 'Build needed' : S.sim && !S.flashed && !S.vcd ? 'Ready to flash' : S.sim?.ended ? 'Complete' : atTimeLimit ? 'Time limit' : S.running ? 'Running' : S.sim && (S.flashed || S.vcd) ? 'Paused' : 'No design';
   $('#statusPill').className = `status-pill ${name.toLowerCase().replaceAll(' ', '-')}`; $('#statusPill').textContent = name;
-  if (atTimeLimit && $('#inputHint')) $('#inputHint').textContent = 'Clock stopped at 9 s limit — click Restart (↻) or use 50 MHz clock';
+  if (atTimeLimit && $('#inputHint')) $('#inputHint').textContent = 'Reached simulation time limit — click Restart (↻) to continue from 0 ns';
   $('#btnRun').classList.toggle('running', S.running); $('#runLabel').textContent = S.running ? 'Pause' : 'Run';
   $('#btnRun').setAttribute('aria-label', S.running ? 'Pause simulation' : 'Run simulation');
   const locked = S.building || S.importing || S.exporting;
@@ -643,10 +643,11 @@ function attachSignalShortNames(result) {
 }
 async function applyInitialFlashedState({ preserveWaves = false } = {}) {
   const prevVis = preserveWaves ? new Map(waves.signals.map(s => [s.name, !!s.visible])) : null;
+  const prevExp = preserveWaves ? new Map(waves.signals.map(s => [s.name, !!s.expanded])) : null;
   S.time = 0; S.cycles = 0; S.inputs = {}; S.values.clear(); S.pending = [];
   if ($('#waveFollow')) $('#waveFollow').checked = true;
   buildBindings();
-  buildWaves(prevVis);
+  buildWaves(prevVis, prevExp);
   renderVirtualInputs();
   renderPins();
   renderTruthInputs();
@@ -830,7 +831,8 @@ function reloadQsfText(text, fileName = 'project.qsf') {
     log(`Reloaded ${parsed.pins.length} pin assignment(s) from ${fileName}.`);
   } catch {}
 }
-const MAX_SIM_FS = 9007199254740991;
+const MAX_SIM_FS = 1.8e19;
+let adaptiveMaxCycles = 8192;
 function remainingSimCycles() {
   if (!S.sim || S.vcd) return Infinity;
   const stepFs = 2 * Number(halfPeriod()) * 10 ** (15 + (S.sim.precision ?? -15));
@@ -844,31 +846,45 @@ async function advance(cycles = 1) {
     const maxCycles = remainingSimCycles();
     if (maxCycles <= 0) {
       pause();
-      log('Reached 9 s exact femtosecond waveform window (2^53 fs). Click Restart to continue from 0 ns.', 'info');
-      toast('Reached 9 s capture window. Click Restart to continue from 0 ns.');
+      log('Reached 64-bit simulation time ceiling (~5 hours at 1 fs). Click Restart to continue from 0 ns.', 'info');
+      toast('Reached simulation time limit. Click Restart to continue from 0 ns.');
       return;
     }
     if (cycles > maxCycles) cycles = maxCycles;
   }
   S.busy = true; const generation = S.generation;
+  const stepStart = performance.now();
   const pending = S.pending.splice(0);
   const batches = [[]]; let ids = new Set();
   for (const input of pending) {
     if (ids.has(input.id)) { batches.push([]); ids = new Set(); }
     batches.at(-1).push(input); ids.add(input.id);
   }
+  // Use non-aliasing odd decimation stride for large bursts (>64 cycles) so GHDL runs at full native speed
+  // while still sampling ~96 evenly-spaced points across every frame for 7-seg multiplexing & waveforms.
+  const stride = cycles > 64 ? Math.max(3, Math.floor((cycles * 2) / 96) | 1) : 1;
   try {
     for (let i = 0; i < batches.length; i++) {
-      const result = await api(`/api/sim/${S.sim.id}/step`, { cycles: i === batches.length - 1 ? cycles : 0, halfPeriod: halfPeriod(), clock: clockId(), inputs: batches[i] });
+      const isLast = i === batches.length - 1;
+      const batchCycles = isLast ? cycles : 0;
+      const result = await api(`/api/sim/${S.sim.id}/step`, { cycles: batchCycles, stride: batchCycles > 64 ? stride : 1, halfPeriod: halfPeriod(), clock: clockId(), inputs: batches[i] });
       if (generation !== S.generation) return;
       consume(result);
       if (S.sim.ended) break;
     }
     S.cycles += cycles;
+    if (cycles >= 256) {
+      const elapsed = performance.now() - stepStart;
+      if (elapsed < 16 && cycles >= adaptiveMaxCycles * 0.85) {
+        adaptiveMaxCycles = Math.min(131072, Math.round(adaptiveMaxCycles * 1.5));
+      } else if (elapsed > 32) {
+        adaptiveMaxCycles = Math.max(512, Math.round(adaptiveMaxCycles * 0.7));
+      }
+    }
     if (S.running && remainingSimCycles() <= 0) {
       pause();
-      log('Reached 9 s exact femtosecond waveform window (2^53 fs). Click Restart to continue from 0 ns.', 'info');
-      toast('Reached 9 s capture window. Click Restart to continue from 0 ns.');
+      log('Reached 64-bit simulation time ceiling (~5 hours at 1 fs). Click Restart to continue from 0 ns.', 'info');
+      toast('Reached simulation time limit. Click Restart to continue from 0 ns.');
     }
   } catch (e) { if (generation === S.generation) fail(e); } finally { S.busy = false; }
 }
@@ -952,8 +968,16 @@ function renderVirtualInputs() {
   }
   wrap.classList.toggle('hidden', !wrap.children.length);
 }
-function buildWaves(prevVis = null) {
-  waves.setSignals(S.sim.signals.map(s => ({ name: s.short, width: s.width, visible: prevVis ? !!prevVis.get(s.short) : false })));
+function buildWaves(prevVis = null, prevExp = null) {
+  waves.setSignals(S.sim.signals.map(s => ({
+    name: s.short,
+    width: s.width,
+    left: s.left,
+    right: s.right,
+    kind: s.kind,
+    visible: prevVis ? !!prevVis.get(s.short) : false,
+    expanded: prevExp ? !!prevExp.get(s.short) : false,
+  })));
   renderSignalChips();
 }
 function updateSignalCount() {
@@ -980,10 +1004,13 @@ function renderSignalChips() {
     box.append(bulk);
   }
   waves.signals.forEach(signal => {
+    const real = ['real', 'realtime'].includes(signal.kind);
+    const range = signal.width > 1 && !real ? `[${Number.isInteger(signal.left) ? signal.left : signal.width - 1}:${Number.isInteger(signal.right) ? signal.right : 0}]` : '';
     const label = document.createElement('label'); label.className = `sig-chip ${signal.visible ? 'on' : 'off'}`;
+    label.title = range ? `${signal.name}${range} (${signal.width}-bit vector — click ▸ in Logic Analyzer to expand bits)` : signal.name;
     const check = document.createElement('input'); check.type = 'checkbox'; check.checked = signal.visible; check.setAttribute('aria-label', `Toggle ${signal.name} waveform`);
     const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = signal.color;
-    label.append(check, dot, document.createTextNode(signal.name));
+    label.append(check, dot, document.createTextNode(`${signal.name}${range}`));
     check.onchange = () => {
       const on = waves.toggle(signal.name);
       check.checked = on;
@@ -1547,7 +1574,7 @@ function wire() {
     if (ide?.hasUnsaved()) { markDirty(); return toast('Compile and flash your design before running.', 'err'); }
     if (!S.sim || S.sim.ended || S.dirty || S.error) return;
     if (!S.vcd && remainingSimCycles() <= 0) {
-      return toast('Reached 9 s capture window. Click Restart to continue from 0 ns.');
+      return toast('Reached simulation time limit. Click Restart to continue from 0 ns.');
     }
     S.running = true; setStatus(); lastFrame = performance.now();
     recordLogEvent('info', `Simulation started (${S.sim.top}, clock=${S.clkHz} Hz)`);
@@ -1911,14 +1938,16 @@ function wire() {
 function frame(now) {
   requestAnimationFrame(frame); const dt = Math.max(0, Math.min(.1, (now - lastFrame) / 1000)); lastFrame = now;
   if (now - lastDraw > 250) { $('#roFps').textContent = board ? Math.round(board.fps) : '—'; lastDraw = now; }
-  if (S.running && !S.busy) {
-    const maxPerFrame = S.clkHz >= 100000 ? 4096 : 512;
+  if (S.running) {
+    const maxPerFrame = S.clkHz >= 10000 ? adaptiveMaxCycles : 4096;
     accumulator += S.clkHz * 10 ** ((S.speed - 55) / 25) * dt;
-    const cycles = Math.min(maxPerFrame, Math.floor(accumulator));
-    if (Number.isInteger(cycles) && cycles > 0) {
-      accumulator -= cycles;
-      accumulator = Math.max(0, Math.min(accumulator, maxPerFrame));
-      advance(cycles);
+    accumulator = Math.min(accumulator, maxPerFrame * 2);
+    if (!S.busy) {
+      const cycles = Math.min(maxPerFrame, Math.floor(accumulator));
+      if (Number.isInteger(cycles) && cycles > 0) {
+        accumulator -= cycles;
+        advance(cycles);
+      }
     }
   }
   else if (!S.running && S.pending.length && !S.busy && !S.building) advance(0);

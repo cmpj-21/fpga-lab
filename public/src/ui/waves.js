@@ -100,9 +100,28 @@ export class WaveViewer {
     }, { passive: false });
     this.resize();
   }
+  displayRows() {
+    const rows = [];
+    for (const signal of this.signals) {
+      if (!signal.visible) continue;
+      rows.push({ key: signal.name, signal, bitOffset: null, bitLabel: null });
+      const real = ['real', 'realtime'].includes(signal.kind);
+      if (signal.width > 1 && !real && signal.expanded) {
+        const left = Number.isInteger(signal.left) ? signal.left : signal.width - 1;
+        const right = Number.isInteger(signal.right) ? signal.right : 0;
+        const step = left <= right ? 1 : -1;
+        for (let offset = 0; offset < signal.width; offset++) {
+          const bitIdx = left + offset * step;
+          const label = `${signal.name}[${bitIdx}]`;
+          rows.push({ key: label, signal, bitOffset: offset, bitLabel: label });
+        }
+      }
+    }
+    return rows;
+  }
   resize() {
     const width = this.canvas.parentElement.clientWidth; if (!width) return;
-    const height = Math.max(HEADER + this.signals.filter(s => s.visible).length * ROW, this.canvas.parentElement.parentElement.clientHeight - 2);
+    const height = Math.max(HEADER + this.displayRows().length * ROW, this.canvas.parentElement.parentElement.clientHeight - 2);
     this.canvas.width = Math.round(width * this.dpr); this.canvas.height = Math.round(height * this.dpr);
     this.canvas.style.width = `${width}px`; this.canvas.style.height = `${height}px`; this.namesEl.style.minHeight = `${height}px`;
     this.draw();
@@ -122,22 +141,41 @@ export class WaveViewer {
     this.onCursor?.(this.cursorT);
   }
   setSignals(list) {
-    this.signals = list.map((s, i) => ({ ...s, width: s.width || 1, visible: s.visible !== false, color: this.colors[i % this.colors.length], samples: [], last: null }));
+    this.signals = list.map((s, i) => ({ ...s, width: s.width || 1, visible: s.visible !== false, expanded: !!s.expanded, color: this.colors[i % this.colors.length], samples: [], last: null }));
     this.tStart = 0; this.tEnd = 1e9; this.cursorT = 0; this.lastTime = 0; this.renderNames(); this.resize();
     if (!this.signals.length) this.onCursor?.(null);
   }
   toggle(name) { const signal = this.signals.find(s => s.name === name); if (!signal) return false; signal.visible = !signal.visible; this.renderNames(); this.resize(); return signal.visible; }
+  toggleExpand(name) { const signal = this.signals.find(s => s.name === name); if (!signal || signal.width <= 1) return false; signal.expanded = !signal.expanded; this.renderNames(); this.resize(); return signal.expanded; }
   renderNames() {
     this.namesEl.replaceChildren(); this.valueElements = new Map();
     const head = document.createElement('div'); head.className = 'wave-names-head';
     head.innerHTML = '<span>Signal</span><span>Value</span>';
     this.namesEl.append(head);
-    for (const signal of this.signals.filter(s => s.visible)) {
-      const row = document.createElement('div'); row.className = 'wave-name'; row.title = signal.name;
+    for (const entry of this.displayRows()) {
+      const { signal, bitOffset, bitLabel, key } = entry;
+      const real = ['real', 'realtime'].includes(signal.kind);
+      const isBus = bitOffset === null && signal.width > 1 && !real;
+      const range = isBus ? `[${Number.isInteger(signal.left) ? signal.left : signal.width - 1}:${Number.isInteger(signal.right) ? signal.right : 0}]` : '';
+      const row = document.createElement('div');
+      row.className = bitOffset !== null ? 'wave-name wave-bit' : 'wave-name';
+      row.title = bitLabel || `${signal.name}${range}`;
+      if (isBus) {
+        const exp = document.createElement('button');
+        exp.type = 'button';
+        exp.className = 'wave-exp';
+        exp.textContent = signal.expanded ? '▾' : '▸';
+        exp.setAttribute('aria-label', `${signal.expanded ? 'Collapse' : 'Expand'} ${signal.name} bits`);
+        exp.title = signal.expanded ? `Collapse ${signal.name}${range} bits` : `Expand ${signal.name}${range} into ${signal.width} bit waveforms`;
+        exp.onclick = e => { e.stopPropagation(); this.toggleExpand(signal.name); };
+        row.append(exp);
+      }
       const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = signal.color;
-      const name = document.createElement('span'); name.textContent = signal.name;
+      const name = document.createElement('span'); name.textContent = bitLabel || `${signal.name}${range}`;
       const value = document.createElement('span'); value.className = 'wn-val'; value.textContent = '—';
-      row.append(dot, name, value); this.namesEl.append(row); this.valueElements.set(signal.name, value);
+      row.append(dot, name, value);
+      if (isBus) { row.style.cursor = 'pointer'; row.onclick = () => this.toggleExpand(signal.name); }
+      this.namesEl.append(row); this.valueElements.set(key, value);
     }
   }
   push(time, values) {
@@ -157,7 +195,7 @@ export class WaveViewer {
   }
   follow(time, span) { this.tStart = Math.max(0, time - span); this.tEnd = Math.max(time + span * .04, span); this.cursorT = time; this.onCursor?.(this.cursorT); }
   zoom(factor, center = (this.tStart + this.tEnd) / 2) {
-    const span = Math.max(1, Math.min(9e15, (this.tEnd - this.tStart) * factor));
+    const span = Math.max(1, Math.min(1.8e19, (this.tEnd - this.tStart) * factor));
     const fraction = (center - this.tStart) / (this.tEnd - this.tStart); this.tStart = Math.max(0, center - span * fraction); this.tEnd = this.tStart + span; this.draw();
   }
   sampleIndex(signal, time) {
@@ -181,33 +219,40 @@ export class WaveViewer {
       g.fillStyle = this.palette.text; g.fillText(fmtTime(t, this.timeUnit), x + 5, HEADER / 2);
     }
     g.strokeStyle = this.palette.line; g.lineWidth = 1; g.beginPath(); g.moveTo(0, HEADER - 0.5); g.lineTo(width, HEADER - 0.5); g.stroke();
-    this.signals.filter(s => s.visible).forEach((signal, row) => {
+    this.displayRows().forEach((entry, row) => {
+      const { signal, bitOffset, key } = entry;
       const top = HEADER + row * ROW, high = top + 6, low = top + ROW - 7, mid = (high + low) / 2;
       g.strokeStyle = this.palette.row; g.beginPath(); g.moveTo(0, top + ROW); g.lineTo(width, top + ROW); g.stroke();
       const samples = signal.samples; let previousY = null;
       const start = Math.max(0, this.sampleIndex(signal, this.tStart));
+      const real = ['real', 'realtime'].includes(signal.kind);
+      const isSingleBit = bitOffset !== null || (signal.width === 1 && !real);
       for (let i = start; i < samples.length; i++) {
         const sample = samples[i]; if (sample.t > this.tEnd) break;
         const nextTime = samples[i + 1]?.t ?? (this.lastTime > sample.t ? this.lastTime : this.tEnd);
         if (nextTime < this.tStart) continue;
         const x1 = Math.max(0, xOf(sample.t)), x2 = Math.min(width, xOf(nextTime));
-        const real = ['real', 'realtime'].includes(signal.kind);
-        const unknown = !real && /[^01LH]/.test(sample.v); g.strokeStyle = unknown ? this.palette.unknown : signal.color; g.fillStyle = g.strokeStyle; g.lineWidth = 1.4;
-        if (signal.width === 1 && !real) {
-          const y = unknown ? mid : /[1H]/.test(sample.v) ? high : low;
+        const val = bitOffset !== null ? (sample.v[bitOffset] ?? 'U') : sample.v;
+        const unknown = !real && /[^01LH]/.test(val); g.strokeStyle = unknown ? this.palette.unknown : signal.color; g.fillStyle = g.strokeStyle; g.lineWidth = 1.4;
+        if (isSingleBit) {
+          const y = unknown ? mid : /[1H]/.test(val) ? high : low;
           g.setLineDash(unknown ? [3, 3] : []); g.beginPath();
           if (previousY !== null) { g.moveTo(x1, previousY); g.lineTo(x1, y); } else g.moveTo(x1, y);
           g.lineTo(x2, y); g.stroke(); g.setLineDash([]); previousY = y;
-          if (unknown && x2 - x1 > 20) { g.font = '9px Consolas, monospace'; g.fillText(sample.v, x1 + 5, mid - 3); }
+          if (unknown && x2 - x1 > 20) { g.font = '9px Consolas, monospace'; g.fillText(val, x1 + 5, mid - 3); }
         } else if (x2 - x1 > .5) {
           g.globalAlpha = .07; g.fillRect(x1, high, x2 - x1, low - high); g.globalAlpha = 1;
           const bevel = Math.min(3, (x2 - x1) / 2);
           g.beginPath(); g.moveTo(x1, mid); g.lineTo(x1 + bevel, high); g.lineTo(x2 - bevel, high); g.lineTo(x2, mid); g.lineTo(x2 - bevel, low); g.lineTo(x1 + bevel, low); g.closePath(); g.stroke();
-          if (x2 - x1 > 24) { g.save(); g.beginPath(); g.rect(x1, high, x2 - x1, low - high); g.clip(); g.font = '9px Consolas, monospace'; g.textBaseline = 'middle'; g.fillText(real ? sample.v : hexOf(sample.v), x1 + 6, mid); g.restore(); }
+          if (x2 - x1 > 24) { g.save(); g.beginPath(); g.rect(x1, high, x2 - x1, low - high); g.clip(); g.font = '9px Consolas, monospace'; g.textBaseline = 'middle'; g.fillText(real ? val : hexOf(val), x1 + 6, mid); g.restore(); }
         }
       }
-      const value = this.valueAt(signal, this.cursorT); const element = this.valueElements?.get(signal.name);
-      if (element) element.textContent = value === null ? '—' : signal.width === 1 || ['real','realtime'].includes(signal.kind) ? value : hexOf(value);
+      const rawVal = this.valueAt(signal, this.cursorT); const element = this.valueElements?.get(key);
+      if (element) {
+        if (rawVal === null) element.textContent = '—';
+        else if (bitOffset !== null) element.textContent = rawVal[bitOffset] ?? 'U';
+        else element.textContent = signal.width === 1 || real ? rawVal : hexOf(rawVal);
+      }
     });
     const cursor = xOf(this.cursorT);
     if (cursor >= 0 && cursor <= width) { g.strokeStyle = this.palette.cursor; g.lineWidth = 1; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(cursor, HEADER); g.lineTo(cursor, height); g.stroke(); g.setLineDash([]); }

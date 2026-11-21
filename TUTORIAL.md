@@ -638,9 +638,9 @@ The current application limits include:
 - Four simultaneous native simulations, including temporary truth-table runs.
 - 100 source/data files; ordinary source/project imports are limited to 6 MB.
 - 512 observed native signals, 4096 bits per signal, and 16 hierarchy levels.
-- A native waveform capture limit of 64 MB.
-- VCD replay imports limited to 32 MB and 250,000 timestamps; a large native export may therefore exceed the replay import limit.
-- Exact integer timestamp limits. At femtosecond resolution, the safe range is roughly nine seconds of simulated time; a 1 Hz experiment can reach it quickly.
+- Live sessions capture a rolling in-memory VCD history (up to 25,000 timestamps) instead of writing unbounded VCD files to disk, so continuous board runs do not hit a 64 MB capture crash.
+- VCD replay imports limited to 32 MB and 250,000 timestamps.
+- 64-bit femtosecond simulation time (~5 hours per session). Clocks from `1 Hz` up to `1 MHz` run at 1:1 real-world time; `50 MHz` runs at maximum single-core GHDL burst throughput (up to 131,072 cycles per frame) so hardware clock dividers and multiplexed 7-segment displays render steadily.
 
 ### What this website is — and is not
 
