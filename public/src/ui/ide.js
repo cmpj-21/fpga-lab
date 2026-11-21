@@ -726,8 +726,10 @@ export function createIde(api) {
       openNewProjectWizard();
     }
     api.toast('Saved project changes. All simulations stopped.');
+    api.logEvent?.('info', `Returned to Home: saved changes to ${currentProjectTitle()} and stopped all simulations`);
   }
   async function confirmDiscardAndReturnHome() {
+    const discardedTitle = currentProjectTitle();
     for (const name of [...docs.keys()]) closeTab(name, true);
     if (baselineProject) {
       try { api.restoreProject(JSON.parse(JSON.stringify(baselineProject))); } catch {}
@@ -747,6 +749,7 @@ export function createIde(api) {
       openNewProjectWizard();
     }
     api.toast('Discarded recent changes. All simulations stopped.');
+    api.logEvent?.('info', `Returned to Home: discarded changes to ${discardedTitle} and stopped all simulations`);
   }
   async function launchTemplateProject({ name, entity, standard = '08', templateKind = 'board_io', extraFiles = '' }) {
     const cleanEntity = entity.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
@@ -791,6 +794,7 @@ export function createIde(api) {
     showHome(false);
     api.markDirty();
     api.toast(`Created ${name || cleanEntity} (${sources.length} file${sources.length === 1 ? '' : 's'}). Click Build & Compile when ready.`);
+    api.logEvent?.('info', `Project created: ${name || cleanEntity} (top=${cleanEntity}, std=VHDL-${standard}, files=${sources.map(s => s.name).join(', ')})`);
   }
   function populateHomeHdl(groups = []) {
     const container = $('#homeHdlList');

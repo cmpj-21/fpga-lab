@@ -10,9 +10,10 @@ import readline from 'node:readline';
 const exec = promisify(execFile);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const GHDL = process.env.GHDL_PATH || 'ghdl';
-let configPromise;
+let configPromise, engineLog = () => {};
 const activeCompiles = new Set();
 export const sessions = new Map();
+export function setEngineLogger(fn) { engineLog = typeof fn === 'function' ? fn : () => {}; }
 
 export async function closeAllSessions() {
   for (const token of activeCompiles) token.cancelled = true;
@@ -35,8 +36,10 @@ export function configuration() {
     const plugin = path.join(ROOT, `bridge-${hash}.vpi`);
     const built = await fs.stat(plugin).catch(() => null);
     if (!built) {
+      engineLog('info', `Building VPI plugin ${path.basename(plugin)} with ${gcc}`);
       await exec(gcc, ['-shared', '-O2', '-Wall', `-I${include}`, source, `-L${lib}`, '-lghdlvpi', '-o', plugin], { ...options, env });
     }
+    engineLog('info', `GHDL engine ready: ${version} (VPI: ${path.basename(plugin)})`);
     return { version, plugin, env };
   })();
 }
@@ -50,6 +53,7 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
   while (sessions.size + activeCompiles.size >= 4) {
     const oldestIdle = [...sessions.values()].filter(s => !s.busy).sort((a, b) => a.lastUsed - b.lastUsed)[0];
     if (!oldestIdle) break;
+    engineLog('info', `Auto-evicting oldest idle simulation session ${oldestIdle.id.slice(0, 8)} to free pool slot`);
     await oldestIdle.close().catch(() => {});
   }
   if (sessions.size + activeCompiles.size >= 4) throw new Error('Four simulations are already open or compiling. Close another session first.');
@@ -184,6 +188,7 @@ class EngineSession {
     if (this.completed) { const value = this.completed; this.completed = null; return Promise.resolve(value); }
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
+        engineLog('warn', `Session ${this.id.slice(0, 8)} timed out after 15s; killing GHDL process`);
         this.fail(new Error('GHDL did not respond within 15 seconds; simulation stopped.'));
         this.child.kill();
       }, 15000);
@@ -209,7 +214,11 @@ class EngineSession {
     });
     this.busy = true;
     const vcd = await fs.stat(path.join(this.dir, 'trace.vcd')).catch(() => null);
-    if (vcd?.size > 64 * 1024 * 1024) { this.busy = false; throw new Error('Waveform capture reached 64 MB. Export and restart the simulation.'); }
+    if (vcd?.size > 64 * 1024 * 1024) {
+      this.busy = false;
+      engineLog('warn', `Session ${this.id.slice(0, 8)} reached 64 MB VCD capture limit`);
+      throw new Error('Waveform capture reached 64 MB. Export and restart the simulation.');
+    }
     this.lastUsed = Date.now();
     const result = this.result();
     this.child.stdin.write(`R ${cycles * 2} ${hp} ${clock} ${lines.length}\n${lines.length ? lines.join('\n') + '\n' : ''}`);

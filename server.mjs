@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { promises as fs, appendFileSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compileDesign, configuration, sessions, closeAllSessions } from './backend/engine.mjs';
+import { compileDesign, configuration, sessions, closeAllSessions, setEngineLogger } from './backend/engine.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -84,8 +84,9 @@ function archiveLog() {
 function claimLog(startupNote = '') {
   ownsLog = true;
   archiveLog();
-  if (startupNote) appendLogLineSync('info', 'server', startupNote);
+  if (startupNote) appendLogLineSync('info', 'app', startupNote);
 }
+setEngineLogger((level, message) => { if (ownsLog) appendLogLine(level, 'engine', message); });
 function eventReport(body) {
   if (!body || typeof body !== 'object' || !Array.isArray(body.events) || !body.events.length) throw new Error('Event log entries need events.');
   const lines = body.events.slice(0, 50)
@@ -177,13 +178,13 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/sim/compile' && req.method === 'POST') {
       const payload = await json(req);
       const compiled = await compileDesign(payload);
-      appendLogLine('info', 'server', `Compiled ${compiled.top} (VHDL-${compiled.standard}, ${payload.sources?.length || 0} source(s), ${compiled.signals?.length || 0} signals, session ${compiled.id.slice(0, 8)})`);
+      appendLogLine('info', 'engine', `Compiled ${compiled.top} (VHDL-${compiled.standard}, ${payload.sources?.length || 0} source(s), ${compiled.signals?.length || 0} signals, session ${compiled.id.slice(0, 8)})`);
       return send(res, 200, compiled);
     }
     if (url.pathname === '/api/sim/close-all' && (req.method === 'POST' || req.method === 'DELETE')) {
       const openCount = sessions.size;
       await closeAllSessions();
-      if (openCount > 0) appendLogLine('info', 'server', `Stopped and closed ${openCount} active simulation session(s)`);
+      if (openCount > 0) appendLogLine('info', 'engine', `Stopped and closed ${openCount} active simulation session(s)`);
       return send(res, 200, { ok: true });
     }
     const match = url.pathname.match(/^\/api\/sim\/([a-f0-9-]+)(?:\/(step|vcd|close))?$/);
@@ -192,13 +193,13 @@ const server = http.createServer(async (req, res) => {
       if (!session) return send(res, 404, { error: 'Simulation session ended. Build the design again.' });
       if (req.method === 'DELETE' || (match[2] === 'close' && req.method === 'POST')) {
         await session.close();
-        appendLogLine('info', 'server', `Closed simulation session ${match[1].slice(0, 8)}`);
+        appendLogLine('info', 'engine', `Closed simulation session ${match[1].slice(0, 8)}`);
         return send(res, 200, { ok: true });
       }
       if (match[2] === 'step' && req.method === 'POST') return send(res, 200, await session.step(await json(req)));
       if (match[2] === 'vcd' && req.method === 'POST') {
         const vcd = await session.exportVcd();
-        appendLogLine('info', 'server', `Exported VCD for session ${match[1].slice(0, 8)} (${vcd.length} bytes)`);
+        appendLogLine('info', 'engine', `Exported VCD for session ${match[1].slice(0, 8)} (${vcd.length} bytes)`);
         return send(res, 200, vcd, 'text/plain; charset=utf-8');
       }
     }
@@ -208,7 +209,12 @@ const server = http.createServer(async (req, res) => {
     const actual = await fs.realpath(full).catch(() => null);
     if (!actual || !within(PUBLIC, actual)) return send(res, 404, 'Not found', 'text/plain');
     return send(res, 200, await fs.readFile(actual), MIME[path.extname(actual)] || 'application/octet-stream');
-  } catch (e) { return send(res, 400, { error: e.message }); }
+  } catch (e) {
+    if (ownsLog && /^\/api\/(sim|hdl)\//.test(req.url || '')) {
+      appendLogLine('warn', 'engine', `${req.method} ${req.url} failed: ${String(e.message || e).split(/\r?\n/)[0]}`);
+    }
+    return send(res, 400, { error: e.message });
+  }
 });
 const address = `http://127.0.0.1:${PORT}`;
 function openBrowser() {
@@ -229,7 +235,7 @@ process.on('exit', () => { if (ownsLog) archiveLog(); });
 async function shutdown() {
   if (stopping) return;
   stopping = true;
-  if (ownsLog) appendLogLine('info', 'server', 'Trace workbench shutting down');
+  if (ownsLog) appendLogLine('info', 'app', 'Trace workbench shutting down');
   server.close();
   await Promise.race([Promise.all([...sessions.values()].map(s => s.close().catch(() => {}))), new Promise(r => setTimeout(r, 2000))]);
   await logQueue;

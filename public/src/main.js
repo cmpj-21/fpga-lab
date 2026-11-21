@@ -440,7 +440,8 @@ async function flashToBoard() {
   syncKeys();
   setStatus();
   waves.fit();
-  const boundCount = Object.keys(S.bindings).length;
+  const boundEntries = Object.entries(S.bindings);
+  const boundCount = boundEntries.length;
   $('#designSubtitle').textContent = boundCount
     ? `Flashed (${boundCount} pin${boundCount === 1 ? '' : 's'} connected) · VHDL-${S.standard === '08' ? '2008' : S.standard === '93' ? '1993' : '2002'}`
     : 'Flashed (0 pins connected — board I/O inactive)';
@@ -450,7 +451,8 @@ async function flashToBoard() {
     log(`Flashed ${S.sim.top} to devboard with 0 connected pins. Because no pins were assigned in Pin Planner before compiling, the devboard will behave as if no code was flashed.`, 'warning');
     toast(`Flashed ${S.sim.top} with 0 pins mapped (devboard I/O is unconnected).`);
   } else {
-    log(`Flashed ${S.sim.top} onto 3D devboard (${boundCount} pin${boundCount === 1 ? '' : 's'} connected).`);
+    const pinList = boundEntries.map(([net, b]) => `${b.bit === null ? b.signal.short : `${b.signal.short}[${b.bit}]`}->${net}(P${NET_PIN[net]})`).join(', ');
+    log(`Flashed ${S.sim.top} onto 3D devboard (${boundCount} pin${boundCount === 1 ? '' : 's'} connected: ${pinList}).`);
     toast(`Flashed ${S.sim.top} to devboard (${boundCount} pin${boundCount === 1 ? '' : 's'} connected).`, 'ok');
   }
 }
@@ -931,13 +933,14 @@ function wire() {
   };
   $('#btnRun').onclick = async () => {
     if (!S.power || S.building || S.importing || S.exporting) return;
-    if (S.running) { pause(); return; }
+    if (S.running) { pause(); recordLogEvent('info', `Simulation paused (${S.sim?.top || 'design'}, ${S.cycles} cycles)`); return; }
     if (ide?.hasUnsaved()) { markDirty(); return toast('Build design or Flash before running.', 'err'); }
     if (!S.sim || S.sim.ended || S.dirty || S.error) return;
     if (!S.vcd && remainingSimCycles() <= 0) {
       return toast('Reached 9 s capture window. Click Restart or Build design to continue.');
     }
     S.running = true; setStatus('Running'); lastFrame = performance.now();
+    recordLogEvent('info', `Simulation started (${S.sim.top}, clock=${S.clkHz} Hz)`);
   };
   $('#btnStep').onclick = async () => {
     if (!S.power || S.building || S.importing || S.exporting) return;
@@ -1023,7 +1026,7 @@ function wire() {
   window.addEventListener('keyup', e => { if (keys[e.key.toLowerCase()]) keyInput(keys[e.key.toLowerCase()], false); });
   window.addEventListener('blur', releaseKeys);
   document.addEventListener('visibilitychange', () => { if (document.hidden) { releaseKeys(); pause(); } });
-  $('#pwrToggle').onchange = e => { S.power = e.target.checked; pause(); board?.setPower(S.power); if (!S.power) { releaseKeys(); board?.clearOutputs(); sampleOutputs(); } else { if (S.flashed) KEY_NETS.forEach(updateNetInput); sampleOutputs(); } syncKeys(); setStatus(); };
+  $('#pwrToggle').onchange = e => { S.power = e.target.checked; pause(); board?.setPower(S.power); recordLogEvent('info', `Board power switched ${S.power ? 'ON' : 'OFF'}`); if (!S.power) { releaseKeys(); board?.clearOutputs(); sampleOutputs(); } else { if (S.flashed) KEY_NETS.forEach(updateNetInput); sampleOutputs(); } syncKeys(); setStatus(); };
   const camera = name => { board?.setCamera(name); $('#center').classList.toggle('closeup', ['leds','fpga','display','dtubes','io','macro_low'].includes(name)); if ($('#camPreset').querySelector(`option[value="${name}"]`)) $('#camPreset').value = name; if ($('#pmCamSelect')) $('#pmCamSelect').value = name; $$('[data-camera]').forEach(b => b.classList.toggle('active', b.dataset.camera === name)); };
   $$('[data-camera]').forEach(b => b.onclick = () => camera(b.dataset.camera)); $('#camPreset').onchange = e => camera(e.target.value);
   $('#btnViewSettings').onclick = () => { $('#deck').classList.toggle('hidden'); $('#btnViewSettings').setAttribute('aria-expanded', String(!$('#deck').classList.contains('hidden'))); };
@@ -1234,7 +1237,7 @@ async function boot() {
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
   try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { if (pressed) trackUiAction('3D', $('#view3d'), `press ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.4); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames')); applyTheme(document.documentElement.dataset.theme); wire();
-  ide = createIde({ S, toast, markDirty, build, flashToBoard, renderSources, openTools, syncNavigation, projectData, saveProject, restoreProject, loadFiles, stopAllSimulations });
+  ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, renderSources, openTools, syncNavigation, projectData, saveProject, restoreProject, loadFiles, stopAllSimulations });
   wireActionLogger();
   fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);
