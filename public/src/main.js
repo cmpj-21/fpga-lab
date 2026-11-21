@@ -161,7 +161,7 @@ function trackUiAction(kind, el, detail = '') {
     recordActionLine(`#${id} ${kind.padEnd(8)} ${target} -> BLOCKED (0ms) [reason:control disabled | status:${before.status} | view:${before.view}]`);
     return;
   }
-  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnSaveProject|#btnVcd|#btnImport|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#btnChangeHdlRoot|#homeChangeHdlRoot|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#ciPins|#btnOpenPinoutRef|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
+  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnTruthCopy|#btnTruthExport|#btnSaveProject|#btnVcd|#btnImport|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#btnChangeHdlRoot|#homeChangeHdlRoot|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#ciPins|#btnOpenPinoutRef|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
   setTimeout(async () => {
     await new Promise(r => requestAnimationFrame(r));
     const waitStart = performance.now();
@@ -745,18 +745,44 @@ function renderVirtualInputs() {
   wrap.classList.toggle('hidden', !wrap.children.length);
 }
 function buildWaves() {
-  const preferred = ['clk', 's1', 'count', 'scan', 'seven_seg', 'dtube1', 'led1'];
-  waves.setSignals(S.sim.signals.map(s => ({ name: s.short, width: s.width, visible: preferred.includes(s.short) || S.sim.signals.length < 10 })));
+  waves.setSignals(S.sim.signals.map(s => ({ name: s.short, width: s.width, visible: false })));
   renderSignalChips();
 }
+function updateSignalCount() {
+  const total = waves.signals.length;
+  const shown = waves.signals.filter(s => s.visible).length;
+  $('#signalCount').textContent = total ? `${shown} / ${total} signals` : '0 signals';
+}
 function renderSignalChips() {
-  $('#sigChips').replaceChildren(); $('#signalCount').textContent = `${waves.signals.length} signals`;
+  const box = $('#sigChips');
+  box.replaceChildren();
+  updateSignalCount();
+  if (waves.signals.length) {
+    const bulk = document.createElement('span');
+    bulk.className = 'sig-bulk';
+    const setAll = visible => {
+      for (const s of waves.signals) s.visible = visible;
+      waves.renderNames();
+      waves.resize();
+      renderSignalChips();
+    };
+    const allBtn = document.createElement('button'); allBtn.type = 'button'; allBtn.textContent = 'All'; allBtn.title = 'Show all signals'; allBtn.onclick = () => setAll(true);
+    const noneBtn = document.createElement('button'); noneBtn.type = 'button'; noneBtn.textContent = 'None'; noneBtn.title = 'Hide all signals'; noneBtn.onclick = () => setAll(false);
+    bulk.append(allBtn, noneBtn);
+    box.append(bulk);
+  }
   waves.signals.forEach(signal => {
-    const button = document.createElement('button'); button.className = `sig-chip ${signal.visible ? 'on' : 'off'}`;
+    const label = document.createElement('label'); label.className = `sig-chip ${signal.visible ? 'on' : 'off'}`;
+    const check = document.createElement('input'); check.type = 'checkbox'; check.checked = signal.visible; check.setAttribute('aria-label', `Toggle ${signal.name} waveform`);
     const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = signal.color;
-    button.append(dot, document.createTextNode(signal.name)); button.setAttribute('aria-pressed', String(signal.visible));
-    button.onclick = () => { const on = waves.toggle(signal.name); button.className = `sig-chip ${on ? 'on' : 'off'}`; button.setAttribute('aria-pressed', String(on)); };
-    $('#sigChips').append(button);
+    label.append(check, dot, document.createTextNode(signal.name));
+    check.onchange = () => {
+      const on = waves.toggle(signal.name);
+      check.checked = on;
+      label.className = `sig-chip ${on ? 'on' : 'off'}`;
+      updateSignalCount();
+    };
+    box.append(label);
   });
 }
 function parsePinInput(raw) {
@@ -1013,8 +1039,44 @@ function uartSample() {
   result.errors.forEach(message => log(message, 'warning'));
   if (result.bytes.length) { const output = $('#uartOut'); output.textContent = (output.textContent + String.fromCharCode(...result.bytes)).slice(-16384); output.scrollTop = output.scrollHeight; }
 }
+function syncTruthExportButtons() {
+  const hasRows = ($('#truthBody')?.children.length || 0) > 0;
+  if ($('#btnTruthCopy')) $('#btnTruthCopy').disabled = !hasRows;
+  if ($('#btnTruthExport')) $('#btnTruthExport').disabled = !hasRows;
+}
+function formatTruthTable(format = $('#truthFormat')?.value || 'tsv') {
+  const headers = $$('#truthHead th').map(th => th.textContent || '');
+  const rows = $$('#truthBody tr').map(tr => [...tr.children].map(td => td.textContent || ''));
+  if (!headers.length || !rows.length) return null;
+  const spec = {
+    tsv: { sep: '\t', ext: 'tsv', mime: 'text/tab-separated-values;charset=utf-8', label: 'TSV' },
+    csv: { sep: ',', ext: 'csv', mime: 'text/csv;charset=utf-8', label: 'CSV' },
+    psv: { sep: '|', ext: 'psv', mime: 'text/plain;charset=utf-8', label: 'PSV' },
+  }[format] || { sep: '\t', ext: 'tsv', mime: 'text/tab-separated-values;charset=utf-8', label: 'TSV' };
+  const esc = cell => (cell.includes(spec.sep) || cell.includes('"') || /[\r\n]/.test(cell)) ? `"${cell.replace(/"/g, '""')}"` : cell;
+  const lines = [headers, ...rows].map(r => r.map(esc).join(spec.sep));
+  return { ...spec, text: lines.join('\n') + '\n', count: rows.length };
+}
+async function copyTruthTable() {
+  const formatted = formatTruthTable();
+  if (!formatted) return toast('Generate a truth table first.', 'err');
+  try {
+    await navigator.clipboard.writeText(formatted.text);
+  } catch {
+    const ta = document.createElement('textarea'); ta.value = formatted.text; document.body.append(ta); ta.select(); document.execCommand('copy'); ta.remove();
+  }
+  toast(`Copied truth table as ${formatted.label} (${formatted.count} rows).`);
+}
+function exportTruthTable() {
+  const formatted = formatTruthTable();
+  if (!formatted) return toast('Generate a truth table first.', 'err');
+  const slug = (S.sim?.top || 'truth_table').replace(/[^a-z0-9_-]/gi, '_');
+  download(formatted.text, `${slug}_truth_table.${formatted.ext}`, formatted.mime);
+  toast(`Exported ${slug}_truth_table.${formatted.ext} (${formatted.count} rows).`);
+}
 function renderTruthInputs() {
   $('#truthInputs').replaceChildren(); $('#truthHead').replaceChildren(); $('#truthBody').replaceChildren(); $('#truthSummary').textContent = '';
+  syncTruthExportButtons();
   S.sim.signals.filter(s => s.driveable && s.direction === 1 && s.width === 1 && s.id !== clockId()).slice(0, 12).forEach((signal, i) => {
     const label = document.createElement('label'); label.className = 'truth-chip'; const input = document.createElement('input'); input.type = 'checkbox'; input.checked = i < 4; input.dataset.truth = signal.short;
     label.append(input, document.createTextNode(signal.short)); $('#truthInputs').append(label);
@@ -1040,6 +1102,7 @@ async function runTruth() {
       const tr = document.createElement('tr'); [...ins.map(s => inputs.find(p => p.id === s.id).value), ...outs.map(s => result.samples.at(-1).values[s.id])].forEach(v => { const td = document.createElement('td'); td.textContent = v; tr.append(td); }); $('#truthBody').append(tr);
     }
     $('#truthSummary').textContent = `${2 ** names.length} input combinations · isolated GHDL run · no timing advance`;
+    syncTruthExportButtons();
   } catch (e) { if (generation === S.generation) { toast(e.message, 'err'); log(e.message, 'error'); } } finally { await closeSession(isolated); S.truthBusy = false; setStatus(); }
 }
 async function loadFiles(files) {
@@ -1163,7 +1226,7 @@ async function loadVcd(text, name) {
   S.sim = { top: name, signals: vcd.vars.map(v => ({ ...v, short: v.name, localName: v.shortName, driveable: false })) };
   S.vcd = { data: vcd, index: 0, text, scope: scopes[0] }; S.time = 0; S.values.clear(); S.inputs = {}; S.pending = []; S.error = false; S.dirty = false;
   for (const v of vcd.vars) S.values.set(v.name, ['real','realtime'].includes(v.kind) ? '—' : 'U'.repeat(v.width));
-  waves.setSignals(vcd.vars.map((v, i) => ({ name: v.name, width: v.width, kind: v.kind, visible: i < 8 }))); renderSignalChips();
+  waves.setSignals(vcd.vars.map(v => ({ name: v.name, width: v.width, kind: v.kind, visible: false }))); renderSignalChips();
   $('#replayScope').replaceChildren(...scopes.map(s => new Option(s || '(root)', s))); $('#replayControls').classList.remove('hidden');
   $('#virtualInputs').replaceChildren(); $('#virtualInputs').classList.add('hidden'); $('#designTitle').textContent = name; $('#designSubtitle').textContent = 'Recorded waveform · read-only'; $('.mode-label').textContent = 'VCD replay';
   $('#inputHint').textContent = 'Read-only recorded outputs'; $('#truthInputs').replaceChildren(); $('#truthHead').replaceChildren(); $('#truthBody').replaceChildren(); $('#truthSummary').textContent = '';
@@ -1580,6 +1643,8 @@ function wire() {
   $('#consoleClear').onclick = () => { $('#consoleOut').replaceChildren(); $('#consoleCount').textContent = consoleCount = 0; };
   $('#consoleCopy').onclick = copyConsole;
   $('#uartClear').onclick = () => $('#uartOut').replaceChildren(); $('#btnTruth').onclick = runTruth;
+  if ($('#btnTruthCopy')) $('#btnTruthCopy').onclick = copyTruthTable;
+  if ($('#btnTruthExport')) $('#btnTruthExport').onclick = exportTruthTable;
   window.addEventListener('pagehide', () => { flushActions(); flushEvents(); if (S.sim?.id) navigator.sendBeacon(`/api/sim/${S.sim.id}/close`, ''); });
 }
 function frame(now) {
