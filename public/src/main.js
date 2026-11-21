@@ -16,13 +16,27 @@ const $$ = s => [...document.querySelectorAll(s)];
 const S = { sources: [], sim: null, flashed: false, compiledHash: '', flashedHash: '', projectDir: null, projectName: '', running: false, power: true, building: false, busy: false, clkHz: 1000, speed: 55, time: 0, inputs: {}, assignments: new Map(), compiledAssignments: new Map(), discoveredPorts: [], bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0 };
 let board, waves, ide, toastTimer, sourceIndex, consoleCount = 0, logFile = '', actionLogFile = '', currentHdlRoot = '', reportCount = 0;
 let lastFrame = performance.now(), accumulator = 0, lastDraw = 0;
-let actionSeq = 0, lastErrorSeq = 0, lastErrorMsg = '', actionFlushTimer = 0, eventFlushTimer = 0;
+let actionSeq = 0, lastErrorSeq = 0, lastErrorMsg = '', actionFlushTimer = 0, eventFlushTimer = 0, stateFlushTimer = 0;
 const uart = new UartReceiver();
 const reported = new Map();
 const uiActions = [], pendingActions = [], pendingEvents = [];
+let pendingStatePatch = null;
 
+function flushState(useBeacon = false) {
+  if (!pendingStatePatch) return;
+  const patch = pendingStatePatch;
+  pendingStatePatch = null;
+  const body = JSON.stringify(patch);
+  if (useBeacon && navigator.sendBeacon) {
+    try { navigator.sendBeacon('/api/state', new Blob([body], { type: 'application/json' })); return; } catch {}
+  }
+  try { fetch('/api/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).catch(() => {}); } catch {}
+}
 function persistAppState(patch) {
-  try { fetch('/api/state', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).catch(() => {}); } catch {}
+  if (!patch || typeof patch !== 'object') return;
+  pendingStatePatch = pendingStatePatch ? { ...pendingStatePatch, ...patch } : { ...patch };
+  clearTimeout(stateFlushTimer);
+  stateFlushTimer = setTimeout(() => flushState(false), 100);
 }
 function flushEvents(useBeacon = false) {
   if (!pendingEvents.length) return;
@@ -31,7 +45,11 @@ function flushEvents(useBeacon = false) {
   if (useBeacon && navigator.sendBeacon) {
     try { navigator.sendBeacon('/api/log/event', new Blob([body], { type: 'application/json' })); return; } catch {}
   }
-  try { fetch('/api/log/event', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body }).catch(() => {}); } catch {}
+  try { fetch('/api/log/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).catch(() => {}); } catch {}
+  if (pendingEvents.length) {
+    clearTimeout(eventFlushTimer);
+    eventFlushTimer = setTimeout(() => flushEvents(false), 180);
+  }
 }
 function recordLogEvent(level, message) {
   pendingEvents.push({ level, message: String(message), simTime: fmtTime(S.time) });
@@ -45,7 +63,11 @@ function flushActions(useBeacon = false) {
   if (useBeacon && navigator.sendBeacon) {
     try { navigator.sendBeacon('/api/log/action', new Blob([body], { type: 'application/json' })); return; } catch {}
   }
-  try { fetch('/api/log/action', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body }).catch(() => {}); } catch {}
+  try { fetch('/api/log/action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).catch(() => {}); } catch {}
+  if (pendingActions.length) {
+    clearTimeout(actionFlushTimer);
+    actionFlushTimer = setTimeout(() => flushActions(false), 180);
+  }
 }
 function recordActionLine(line) {
   uiActions.push(line);
@@ -89,7 +111,7 @@ function report(message, stack = '') {
   if (now - (reported.get(key) || 0) < 3000 || reportCount >= 200) return;
   reported.set(key, now); reportCount++;
   flushActions();
-  setTimeout(() => { try { fetch('/api/log', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: key, stack: stack || '', details: sessionDetails(), recent: consoleLines().slice(-20), actions: uiActions.slice(-25) }) }).catch(() => {}); } catch {} });
+  setTimeout(() => { try { fetch('/api/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: key, stack: stack || '', details: sessionDetails(), recent: consoleLines().slice(-20), actions: uiActions.slice(-25) }) }).catch(() => {}); } catch {} });
 }
 function describeControl(el) {
   if (!el || !el.tagName || el === document.body || el === document.documentElement) return 'window';
@@ -206,7 +228,7 @@ function wireActionLogger() {
   }, true);
   let dispatchingClick = false;
   document.addEventListener('click', e => {
-    if (dispatchingClick || e.target.closest?.('.key-btn')) return;
+    if (!e.isTrusted || dispatchingClick || e.target.closest?.('.key-btn')) return;
     const ctrl = e.target.closest?.('button, a, summary, [role="tab"], [role="button"]');
     if (ctrl) {
       dispatchingClick = true;
@@ -1846,7 +1868,7 @@ function wire() {
   $('#uartClear').onclick = () => $('#uartOut').replaceChildren(); $('#btnTruth').onclick = runTruth;
   if ($('#btnTruthCopy')) $('#btnTruthCopy').onclick = copyTruthTable;
   if ($('#btnTruthExport')) $('#btnTruthExport').onclick = exportTruthTable;
-  window.addEventListener('pagehide', () => { flushActions(true); flushEvents(true); if (S.sim?.id) navigator.sendBeacon(`/api/sim/${S.sim.id}/close`, ''); });
+  window.addEventListener('pagehide', () => { flushState(true); flushActions(true); flushEvents(true); if (S.sim?.id) navigator.sendBeacon(`/api/sim/${S.sim.id}/close`, ''); });
 }
 function frame(now) {
   requestAnimationFrame(frame); const dt = Math.max(0, Math.min(.1, (now - lastFrame) / 1000)); lastFrame = now;
