@@ -65,24 +65,8 @@ if (!(Test-Path $icoPath)) {
   & (Join-Path $pkgDir 'make-icon.ps1') -OutPath $icoPath
 }
 
-# 3. Generate WebView2 IID header directly from WebView2.h (100% MinGW compatible)
+# 3. Prepare build directory
 New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
-$iidsPath = Join-Path $buildDir 'webview2_iids.h'
-$wv2Text = Get-Content -Path $wv2Header -Raw
-$pattern = 'MIDL_INTERFACE\("([0-9a-fA-F]{8})-([0-9a-fA-F]{4})-([0-9a-fA-F]{4})-([0-9a-fA-F]{2})([0-9a-fA-F]{2})-([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})"\)\s*(?:struct\s+)?(?:DECLSPEC_NOVTABLE\s+)?(ICoreWebView2\w*)'
-$matches = [regex]::Matches($wv2Text, $pattern)
-$iidLines = New-Object System.Collections.Generic.List[string]
-$iidLines.Add('#pragma once')
-$seenIids = @{}
-foreach ($m in $matches) {
-  $name = $m.Groups[12].Value
-  if ($seenIids.ContainsKey($name)) { continue }
-  $seenIids[$name] = $true
-  $g = $m.Groups
-  $iidLines.Add("DEFINE_GUID(IID_$name, 0x$($g[1].Value), 0x$($g[2].Value), 0x$($g[3].Value), 0x$($g[4].Value), 0x$($g[5].Value), 0x$($g[6].Value), 0x$($g[7].Value), 0x$($g[8].Value), 0x$($g[9].Value), 0x$($g[10].Value), 0x$($g[11].Value));")
-}
-[System.IO.File]::WriteAllLines($iidsPath, $iidLines)
-Write-Host "  Generated $($seenIids.Count) WebView2 COM IIDs from WebView2.h"
 
 # 4. Pre-compile backend bridge-<hash>.vpi against this exact GHDL version
 Write-Host "Pre-compiling GHDL VPI bridge plugin..." -ForegroundColor Cyan

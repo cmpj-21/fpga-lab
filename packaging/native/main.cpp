@@ -7,6 +7,12 @@
 #ifndef _UNICODE
 #define _UNICODE
 #endif
+#ifndef WINVER
+#define WINVER 0x0A00
+#endif
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00
+#endif
 #define WIN32_LEAN_AND_MEAN
 
 #include <windows.h>
@@ -18,9 +24,7 @@
 #include <vector>
 #include <atomic>
 #include <cstdio>
-#include <initguid.h>
 #include <WebView2.h>
-#include "webview2_iids.h"
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
