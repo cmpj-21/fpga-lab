@@ -47,6 +47,11 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
   if (top && !/^[a-z][a-z0-9_]*$/i.test(top)) throw new Error('Invalid top entity name.');
   if (!/^[a-z][a-z0-9_]*$/i.test(topLibrary)) throw new Error('Invalid top library name.');
   if (!generics || typeof generics !== 'object' || Array.isArray(generics)) throw new Error('Generic overrides must be an object.');
+  while (sessions.size + activeCompiles.size >= 4) {
+    const oldestIdle = [...sessions.values()].filter(s => !s.busy).sort((a, b) => a.lastUsed - b.lastUsed)[0];
+    if (!oldestIdle) break;
+    await oldestIdle.close().catch(() => {});
+  }
   if (sessions.size + activeCompiles.size >= 4) throw new Error('Four simulations are already open or compiling. Close another session first.');
   const compileToken = { cancelled: false };
   activeCompiles.add(compileToken);
