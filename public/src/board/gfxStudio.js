@@ -1650,36 +1650,36 @@ export function createGfxStudio(ctx) {
     }
 
     const stagedDigits = stagePose.enabled ? encode7SegText(stagePose.text) : null;
-    const segOffCol = new THREE.Color(pal.segOff), segOnCol = new THREE.Color(pal.segOn), segCoreCol = new THREE.Color(0xfff4d8);
+    const segCoreCol = new THREE.Color(0xfff4d8);
     for (let d = 0; d < segments.length; d++) {
       const digit = segments[d];
-      let digEnergySum = 0;
+      const byte = stagePose.enabled ? stagedDigits[d] : digit.segs;
+      const digActive = stagePose.enabled ? true : digit.enabled;
+      let digLitBits = 0;
       for (let bit = 0; bit < 8; bit++) {
-        const e = stagePose.enabled
-          ? ((powerOn && !!(stagedDigits[d] & (1 << bit))) ? 1 : 0)
-          : (powerOn ? (digit.energy ? digit.energy[bit] : (digit.enabled && !!(digit.segs & (1 << bit)) ? 1 : 0)) : 0);
-        digEnergySum += e;
+        const on = powerOn && digActive && !!(byte & (1 << bit));
+        if (on) digLitBits++;
         const material = digit.meshes[bit].material;
         material.emissive.setHex(pal.em);
-        if (e > 0.01) {
-          const coreMix = Math.min(0.45, (0.14 + segOverdrive * 0.22) * e);
+        if (on) {
+          const coreMix = Math.min(0.45, 0.14 + segOverdrive * 0.22);
           material.emissive.lerp(segCoreCol, coreMix);
         }
-        material.emissiveIntensity = e > 0.01 ? (0.15 + 0.85 * e) * (1.6 + segGlowNorm * 2.6 + segOverdrive * 2.2) : 0;
-        material.color.copy(segOffCol).lerp(segOnCol, e);
+        material.emissiveIntensity = on ? 1.6 + segGlowNorm * 2.6 + segOverdrive * 2.2 : 0;
+        material.color.setHex(on ? pal.segOn : pal.segOff);
       }
       const dLight = digitPointLights[d];
       const dHalo = digitHalos[d];
       if (dLight || dHalo) {
         digit.meshes[6].getWorldPosition(tmpWorldPos);
-        const litFrac = digEnergySum / 7;
+        const litFrac = digLitBits / 7;
         if (dLight) {
           dLight.position.set(tmpWorldPos.x, tmpWorldPos.y + 4.2, tmpWorldPos.z);
           dLight.color.setHex(pal.em);
-          dLight.intensity = bleed > 0 && digEnergySum > 0.02 ? bleed * litFrac * (1.2 + segGlowNorm * 3.2) : 0;
+          dLight.intensity = bleed > 0 && digLitBits > 0 ? bleed * litFrac * (1.2 + segGlowNorm * 3.2) : 0;
         }
         if (dHalo) {
-          const haloStrength = powerOn && digEnergySum > 0.02 && segGlowNorm > 0.01 ? Math.min(0.72, (0.14 * Math.min(1, digEnergySum) + litFrac * 0.34) * (0.45 + segGlowNorm * 0.72)) : 0;
+          const haloStrength = powerOn && digLitBits > 0 && segGlowNorm > 0.01 ? Math.min(0.72, (0.14 + litFrac * 0.34) * (0.45 + segGlowNorm * 0.72)) : 0;
           dHalo.visible = haloStrength > 0.005;
           if (dHalo.visible) {
             dHalo.position.set(tmpWorldPos.x, tmpWorldPos.y + 1.8, tmpWorldPos.z);

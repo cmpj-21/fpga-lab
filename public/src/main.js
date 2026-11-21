@@ -136,8 +136,8 @@ function currentDisplayText() {
   if (!S.power || !board?.displayState) return 'off';
   let anyLit = false;
   const out = board.displayState.map(d => {
-    if (!d.enabled && !d.retained) return '_';
-    const segs = d.enabled ? d.segs : d.latched;
+    if (!d.enabled) return '_';
+    const segs = d.segs;
     const mask = segs & 0x7f;
     if (!mask && !(segs & 0x80)) return '_';
     anyLit = true;
@@ -340,7 +340,7 @@ function setStatus() {
   syncKeys();
 }
 function pause() {
-  S.running = false; accumulator = 0; audio.stopBuzzer(); setStatus();
+  S.running = false; accumulator = 0; displayFrameQueue.length = 0; audio.stopBuzzer(); sampleOutputs(); setStatus();
   if (waves && !$('#app')?.classList.contains('no-waves')) {
     if ($('#waveFollow')?.checked && S.time > 0) waves.follow(S.time, waveFollowSpan());
     waves.draw();
@@ -782,6 +782,22 @@ function boardValue(net) {
   const value = S.values.get(bound.signal.short) ?? 'U';
   return value[bound.offset] ?? 'U';
 }
+const displayFrameQueue = [];
+function captureDisplayFrame() {
+  let segByte = 0; SEG_NETS.forEach((net, b) => { if (/[0L]/.test(boardValue(net))) segByte |= 1 << b; });
+  let digitMask = 0; DIGIT_NETS.forEach((net, i) => { if (/[0L]/.test(boardValue(net))) digitMask |= 1 << i; });
+  let ledMask = 0; LED_NETS.forEach((net, i) => { if (/[0L]/.test(boardValue(net))) ledMask |= 1 << i; });
+  return { segByte, digitMask, ledMask, key: (digitMask << 12) | (segByte << 4) | ledMask };
+}
+function applyDisplayFrame(f) {
+  const active = S.power;
+  for (let i = 0; i < 4; i++) {
+    board?.setSegDigit(i, f.segByte, active && !!(f.digitMask & (1 << i)));
+    const on = active && !!(f.ledMask & (1 << i));
+    board?.setLed(i, on);
+    $(`[data-led="${i}"]`)?.classList.toggle('on', on);
+  }
+}
 function sampleDisplayOnly() {
   const active = S.power;
   let byte = 0; SEG_NETS.forEach((net, b) => { if (/[0L]/.test(boardValue(net))) byte |= 1 << b; });
@@ -822,9 +838,19 @@ function consume(result) {
     S.time = Number(sample.time) * 10 ** (15 + (S.sim?.precision ?? -15));
     S.sim.signals.forEach((signal, i) => S.values.set(signal.short, sample.values[i]));
     waves.push(S.time, S.values);
+    if (S.running && list.length > 1) {
+      const df = captureDisplayFrame();
+      if (displayFrameQueue.at(-1)?.key !== df.key) {
+        displayFrameQueue.push(df);
+        if (displayFrameQueue.length > 12) displayFrameQueue.shift();
+      }
+    }
     if (idx === list.length - 1) sampleOutputs();
     else sampleDisplayOnly();
     uartSample();
+  }
+  if (S.running && displayFrameQueue.length) {
+    applyDisplayFrame(displayFrameQueue.shift());
   }
   if (result.ended) { S.sim.ended = true; S.pending = []; pause(); log('Testbench completed normally. Its final waveform is ready to export.'); }
   $('#roTime').textContent = fmtTime(S.time);
@@ -852,7 +878,7 @@ function reloadQsfText(text, fileName = 'project.qsf') {
   } catch {}
 }
 const MAX_SIM_FS = 1.8e19;
-let adaptiveMaxCycles = 65536;
+let adaptiveMaxCycles = 53249;
 function remainingSimCycles() {
   if (!S.sim || S.vcd) return Infinity;
   const stepFs = 2 * Number(halfPeriod()) * 10 ** (15 + (S.sim.precision ?? -15));
@@ -896,9 +922,9 @@ async function advance(cycles = 1) {
     if (cycles >= 256) {
       const elapsed = performance.now() - stepStart;
       if (elapsed < 28 && cycles >= adaptiveMaxCycles * 0.85) {
-        adaptiveMaxCycles = Math.min(131072, Math.round(adaptiveMaxCycles * 1.5));
+        adaptiveMaxCycles = Math.min(131071, Math.round(adaptiveMaxCycles * 1.45) | 1);
       } else if (elapsed > 60) {
-        adaptiveMaxCycles = Math.max(4096, Math.round(adaptiveMaxCycles * 0.75));
+        adaptiveMaxCycles = Math.max(4097, Math.round(adaptiveMaxCycles * 0.75) | 1);
       }
     }
     if (S.running && remainingSimCycles() <= 0) {
@@ -910,6 +936,7 @@ async function advance(cycles = 1) {
 }
 function setInput(id, value) {
   if (!S.power || S.vcd || S.building || S.importing || S.exporting || S.dirty || S.error || !S.sim || !S.flashed || S.sim.ended || S.inputs[id] === value) return;
+  displayFrameQueue.length = 0;
   S.inputs[id] = value; S.pending.push({ id, value }); syncKeys();
   if (!S.running) advance(0);
 }
@@ -1724,7 +1751,7 @@ function wire() {
   $$('[data-camera]').forEach(b => b.onclick = () => camera(b.dataset.camera)); $('#camPreset').onchange = e => camera(e.target.value);
   $('#btnViewSettings').onclick = () => { $('#deck').classList.toggle('hidden'); $('#btnViewSettings').setAttribute('aria-expanded', String(!$('#deck').classList.contains('hidden'))); };
   $('#deckCollapse').onclick = () => $('#btnViewSettings').click();
-  for (const [id, display, setter] of [['explode', 'explodeVal', 'setExplode'], ['persistence', 'persistVal', 'setPersistence'], ['glow', 'glowVal', 'setGlow']]) $('#' + id).oninput = e => { $('#' + display).textContent = `${e.target.value}%`; if (id === 'explode' && $('#pmExplode')) { $('#pmExplode').value = e.target.value; $('#pmExplodeVal').textContent = `${e.target.value}%`; } if (id === 'persistence' && $('#pmPersistence')) { $('#pmPersistence').value = e.target.value; $('#pmPersistVal').textContent = `${e.target.value}%`; } board?.[setter](Number(e.target.value) / 100); if (id === 'glow') syncGfxUI(); };
+  for (const [id, display, setter] of [['explode', 'explodeVal', 'setExplode'], ['glow', 'glowVal', 'setGlow']]) $('#' + id).oninput = e => { $('#' + display).textContent = `${e.target.value}%`; if (id === 'explode' && $('#pmExplode')) { $('#pmExplode').value = e.target.value; $('#pmExplodeVal').textContent = `${e.target.value}%`; } board?.[setter](Number(e.target.value) / 100); if (id === 'glow') syncGfxUI(); };
   for (const [id, setter] of [['tglOrbit', 'setAutoOrbit'], ['tglLabels', 'setLabels'], ['tglGrid', 'setGrid'], ['tglTraces', 'setTraces']]) $('#' + id).onchange = e => { if (id === 'tglOrbit' && $('#pmTglOrbit')) $('#pmTglOrbit').checked = e.target.checked; board?.[setter](e.target.checked); };
   $('#quality').onchange = e => { board?.setQuality(e.target.value); syncGfxUI(); }; $('#btnResetView').onclick = () => camera('hero');
   $('#btnShot').onclick = () => { if (!board) return; const a = document.createElement('a'); a.href = board.screenshot(); a.download = 'trace-board.png'; a.click(); };
@@ -1873,7 +1900,6 @@ function wire() {
   $('#pmCamSelect').onchange = e => camera(e.target.value);
   $('#pmTglOrbit').onchange = e => { $('#tglOrbit').checked = e.target.checked; board?.setAutoOrbit(e.target.checked); };
   $('#pmExplode').oninput = e => { $('#explode').value = e.target.value; $('#explodeVal').textContent = $('#pmExplodeVal').textContent = `${e.target.value}%`; board?.setExplode(Number(e.target.value) / 100); };
-  if ($('#pmPersistence')) $('#pmPersistence').oninput = e => { $('#persistence').value = e.target.value; $('#persistVal').textContent = $('#pmPersistVal').textContent = `${e.target.value}%`; board?.setPersistence(Number(e.target.value) / 100); };
   const syncStagePose = () => {
     board?.setStagePose({
       enabled: $('#pmStageEnable').checked,
@@ -1960,6 +1986,7 @@ function frame(now) {
   requestAnimationFrame(frame); const dt = Math.max(0, Math.min(.1, (now - lastFrame) / 1000)); lastFrame = now;
   if (now - lastDraw > 250) { $('#roFps').textContent = board ? Math.round(board.fps) : '—'; lastDraw = now; }
   if (S.running) {
+    if (displayFrameQueue.length) applyDisplayFrame(displayFrameQueue.shift());
     const maxPerFrame = S.clkHz >= 10000 ? adaptiveMaxCycles : 4096;
     accumulator += S.clkHz * 10 ** ((S.speed - 55) / 25) * dt;
     accumulator = Math.min(accumulator, maxPerFrame * 2);
