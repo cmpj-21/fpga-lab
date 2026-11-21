@@ -339,7 +339,13 @@ function setStatus() {
   $('#btnVcd').textContent = S.vcd || S.sim?.ended ? 'Export VCD ↗' : 'Finish & export ↗';
   syncKeys();
 }
-function pause() { S.running = false; accumulator = 0; audio.stopBuzzer(); setStatus(); }
+function pause() {
+  S.running = false; accumulator = 0; audio.stopBuzzer(); setStatus();
+  if (waves && !$('#app')?.classList.contains('no-waves')) {
+    if ($('#waveFollow')?.checked && S.time > 0) waves.follow(S.time, waveFollowSpan());
+    waves.draw();
+  }
+}
 function fail(e) { S.error = true; S.pending = []; pause(); log(e.message, 'error'); toast(e.message, 'err'); ide?.reportBuildFailure(e.message); openTools('console'); }
 function fnvHash(str) {
   let h = 2166136261;
@@ -807,6 +813,7 @@ function waveFollowSpan() {
   }
   return Math.max(cycleFs * 40, Math.min(cycleFs * 250, effectiveCyclesPerSec * 0.25 * cycleFs));
 }
+let lastWaveDraw = 0;
 function consume(result) {
   result.logs?.forEach(m => log(m, /warning/i.test(m) ? 'warning' : 'info'));
   const list = result.samples || [];
@@ -821,8 +828,13 @@ function consume(result) {
   }
   if (result.ended) { S.sim.ended = true; S.pending = []; pause(); log('Testbench completed normally. Its final waveform is ready to export.'); }
   $('#roTime').textContent = fmtTime(S.time);
-  if ($('#waveFollow').checked && S.time > 0) waves.follow(S.time, waveFollowSpan());
-  waves.draw();
+  const now = performance.now();
+  const wavesVisible = !$('#app')?.classList.contains('no-waves');
+  if (wavesVisible && (!S.running || now - lastWaveDraw >= 40)) {
+    lastWaveDraw = now;
+    if ($('#waveFollow').checked && S.time > 0) waves.follow(S.time, waveFollowSpan());
+    waves.draw();
+  }
   for (const input of $$('#virtualInputs input')) {
     if (document.activeElement === input) continue;
     input.disabled = S.building || S.dirty || S.error || !S.power || S.sim?.ended;
@@ -883,10 +895,10 @@ async function advance(cycles = 1) {
     S.cycles += cycles;
     if (cycles >= 256) {
       const elapsed = performance.now() - stepStart;
-      if (elapsed < 16 && cycles >= adaptiveMaxCycles * 0.85) {
+      if (elapsed < 28 && cycles >= adaptiveMaxCycles * 0.85) {
         adaptiveMaxCycles = Math.min(131072, Math.round(adaptiveMaxCycles * 1.5));
-      } else if (elapsed > 32) {
-        adaptiveMaxCycles = Math.max(512, Math.round(adaptiveMaxCycles * 0.7));
+      } else if (elapsed > 60) {
+        adaptiveMaxCycles = Math.max(4096, Math.round(adaptiveMaxCycles * 0.75));
       }
     }
     if (S.running && remainingSimCycles() <= 0) {

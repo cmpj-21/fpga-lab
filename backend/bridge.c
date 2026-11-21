@@ -6,7 +6,8 @@
 
 #define MAX_SIGNALS 512
 static vpiHandle signals[MAX_SIGNALS];
-static int count = 0, skipped_signals = 0, clock_id = -1, remaining = 0, level = 0, limit_error = 0;
+static vpiHandle change_cbs[MAX_SIGNALS];
+static int count = 0, skipped_signals = 0, clock_id = -1, remaining = 0, level = 0, limit_error = 0, cbs_registered = 0;
 static int fast_mode = 0, sample_stride = 1, step_counter = 0;
 static uint64_t half_period = 0;
 static int pending_count = 0, pending_ids[MAX_SIGNALS];
@@ -14,6 +15,24 @@ static char pending_values[MAX_SIGNALS][4097];
 static char stdout_buf[65536];
 static PLI_INT32 boundary(p_cb_data cb);
 static PLI_INT32 settled(p_cb_data cb);
+static PLI_INT32 changed(p_cb_data cb);
+
+static void set_change_cbs(int enable) {
+  if (enable && !cbs_registered) {
+    for (int i = 0; i < count; i++) {
+      s_cb_data change = {0};
+      change.reason = cbValueChange; change.cb_rtn = changed; change.obj = signals[i];
+      change.time = NULL; change.value = NULL; change.user_data = (PLI_BYTE8 *)(intptr_t)i;
+      change_cbs[i] = vpi_register_cb(&change);
+    }
+    cbs_registered = 1;
+  } else if (!enable && cbs_registered) {
+    for (int i = 0; i < count; i++) {
+      if (change_cbs[i]) { vpi_remove_cb(change_cbs[i]); change_cbs[i] = NULL; }
+    }
+    cbs_registered = 0;
+  }
+}
 
 static void later(int reason, uint64_t delay, PLI_INT32 (*fn)(p_cb_data)) {
   s_vpi_time t = {0};
@@ -92,6 +111,7 @@ static int command(void) {
   }
   if (parsed < 5 || sample_stride < 1) sample_stride = 1;
   fast_mode = (sample_stride > 1) ? 1 : 0;
+  set_change_cbs(!fast_mode);
   step_counter = 0;
   half_period = (uint64_t)hp;
   for (int i = 0; i < pending_count; i++) {
@@ -189,12 +209,7 @@ static PLI_INT32 start(p_cb_data cb) {
   }
   puts("]}");
   fflush(stdout);
-  for (int i = 0; i < count; i++) {
-    s_cb_data change = {0};
-    change.reason = cbValueChange; change.cb_rtn = changed; change.obj = signals[i];
-    change.time = NULL; change.value = NULL; change.user_data = (PLI_BYTE8 *)(intptr_t)i;
-    vpi_register_cb(&change);
-  }
+  set_change_cbs(1);
   later(cbAfterDelay, 0, boundary);
   return 0;
 }

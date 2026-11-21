@@ -406,8 +406,8 @@ export async function createBoard3D(canvas, opts = {}) {
       led.mesh.material.emissiveIntensity = on ? .7 + state.glow * 2.4 : 0;
       led.mesh.material.color.setHex(led.id === 'pwrled' ? (on ? 0x4fd577 : 0x183520) : (on ? 0xf55f48 : 0x491c20));
     }
-    const holdMs = state.persistence > 0 ? 70 + state.persistence * 190 : 0;
-    const fadeMs = state.persistence > 0 ? 35 + state.persistence * 55 : 1;
+    const holdMs = state.persistence > 0 ? 110 + state.persistence * 260 : 0;
+    const fadeMs = state.persistence > 0 ? 35 + state.persistence * 45 : 1;
     const segOffColor = new THREE.Color(0x361c22), segOnColor = new THREE.Color(0xe84e3c);
     for (const digit of segments) {
       for (let bit = 0; bit < 8; bit++) {
