@@ -14,19 +14,33 @@ import * as audio from './ui/audio.js';
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const S = { sources: [], sim: null, running: false, power: true, building: false, busy: false, clkHz: 1000, speed: 55, time: 0, inputs: {}, assignments: new Map(), bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0 };
-let board, waves, ide, toastTimer, sourceIndex, consoleCount = 0, logFile = '', reportCount = 0;
+let board, waves, ide, toastTimer, sourceIndex, consoleCount = 0, logFile = '', actionLogFile = '', reportCount = 0;
 let lastFrame = performance.now(), accumulator = 0, lastDraw = 0;
+let actionSeq = 0, lastErrorSeq = 0, lastErrorMsg = '', actionFlushTimer = 0;
 const uart = new UartReceiver();
 const reported = new Map();
+const uiActions = [], pendingActions = [];
 
-function toast(message, kind = '') { const el = $('#toast'); el.textContent = message; el.className = `toast ${kind}`; clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.add('hidden'), 4500); if (kind === 'err') report(message); }
+function flushActions() {
+  if (!pendingActions.length) return;
+  const lines = pendingActions.splice(0, 50);
+  try { fetch('/api/log/action', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lines }) }).catch(() => {}); } catch {}
+}
+function recordActionLine(line) {
+  uiActions.push(line);
+  if (uiActions.length > 60) uiActions.shift();
+  pendingActions.push(line);
+  clearTimeout(actionFlushTimer);
+  actionFlushTimer = setTimeout(flushActions, 180);
+}
+function toast(message, kind = '') { const el = $('#toast'); el.textContent = message; el.className = `toast ${kind}`; clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.add('hidden'), 4500); if (kind === 'err') { lastErrorSeq++; lastErrorMsg = String(message); report(message); } }
 function log(message, severity = 'info', stack = '') {
   const row = document.createElement('div'); row.className = `console-line ${severity}`; row.dataset.severity = severity; row.dataset.clock = new Date().toTimeString().slice(0, 8);
   const time = document.createElement('span'); time.className = 'ct'; time.textContent = fmtTime(S.time);
   const text = document.createElement('span'); text.textContent = message; row.append(time, text);
   $('#consoleOut').append(row); while ($('#consoleOut').children.length > 500) $('#consoleOut').firstChild.remove();
   $('#consoleCount').textContent = ++consoleCount; $('#consoleOut').scrollTop = $('#consoleOut').scrollHeight;
-  if (severity === 'error') report(message, stack);
+  if (severity === 'error') { lastErrorSeq++; lastErrorMsg = String(message); report(message, stack); }
 }
 function consoleLines() {
   return [...$('#consoleOut').children].map(row => {
@@ -52,7 +66,142 @@ function report(message, stack = '') {
   const now = Date.now(), key = String(message);
   if (now - (reported.get(key) || 0) < 3000 || reportCount >= 200) return;
   reported.set(key, now); reportCount++;
-  setTimeout(() => { try { fetch('/api/log', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: key, stack: stack || '', details: sessionDetails(), recent: consoleLines().slice(-20) }) }).catch(() => {}); } catch {} });
+  flushActions();
+  setTimeout(() => { try { fetch('/api/log', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: key, stack: stack || '', details: sessionDetails(), recent: consoleLines().slice(-20), actions: uiActions.slice(-25) }) }).catch(() => {}); } catch {} });
+}
+function describeControl(el) {
+  if (!el || !el.tagName || el === document.body || el === document.documentElement) return 'window';
+  let sel = el.tagName.toLowerCase();
+  if (el.id) sel = `#${el.id}`;
+  else {
+    for (const attr of ['data-cmd', 'data-key', 'data-dip', 'data-ltab', 'data-rtab', 'data-camera', 'data-tool', 'data-nav', 'data-starter', 'data-menu', 'data-pmtab', 'data-pm-aspect', 'data-close', 'data-gfx', 'aria-label']) {
+      if (el.hasAttribute?.(attr)) { sel = `[${attr}="${el.getAttribute(attr)}"]`; break; }
+    }
+    if (sel === el.tagName.toLowerCase()) {
+      const tab = el.closest?.('.doc-tab');
+      if (tab?.dataset.file) sel = `.doc-tab(${tab.dataset.file})${el.classList.contains('doc-tab-x') ? '×' : ''}`;
+      else if (el.className && typeof el.className === 'string') sel += '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.');
+    }
+  }
+  const textFallback = ['FORM', 'SELECT'].includes(el.tagName) ? '' : el.textContent;
+  const rawLabel = (el.getAttribute?.('aria-label') || el.getAttribute?.('title') || textFallback || '').replace(/\s+/g, ' ').trim().slice(0, 42);
+  return rawLabel ? `${sel} "${rawLabel}"` : sel;
+}
+function uiSnapshot() {
+  const leftOpen = $('#left') && getComputedStyle($('#left')).display !== 'none';
+  return {
+    view: $('#homeView') && !$('#homeView').classList.contains('hidden') ? 'home' : $('#center')?.classList.contains('photo-mode') ? 'photo' : 'workbench',
+    status: $('#statusPill')?.textContent || '',
+    top: S.sim?.top || $('#topSelect')?.value || 'none',
+    time: fmtTime(S.time),
+    cycles: S.cycles,
+    files: S.sources.map(s => s.name).join(',') || 'none',
+    tab: ide?.active || 'none',
+    editor: $('#sourceDialog')?.open ? 'open' : 'closed',
+    left: !leftOpen ? 'closed' : ($('#ltab-pins')?.classList.contains('active') ? 'pins' : 'library'),
+    waves: $('#app')?.classList.contains('no-waves') ? 'hidden' : 'open',
+    right: $('#right')?.classList.contains('hidden') ? 'closed' : ($$('#right .tab.active')[0]?.dataset.rtab || 'open'),
+    deck: $('#deck')?.classList.contains('hidden') ? 'closed' : 'open',
+    about: $('#aboutDialog')?.open ? 'open' : 'closed',
+    keysDlg: $('#keysDialog')?.open ? 'open' : 'closed',
+    menu: $$('.menu-btn[aria-expanded="true"]')[0]?.dataset.menu || 'closed',
+    theme: document.documentElement.dataset.theme || 'light',
+    power: S.power ? 'on' : 'off',
+    dip: '0x' + S.dip.toString(16),
+    keys: Object.entries(S.keys).filter(([, v]) => v).map(([k]) => k).join(',') || 'none',
+    leds: [0, 1, 2, 3].filter(i => $(`[data-led="${i}"]`)?.classList.contains('on')).map(i => i + 1).join(',') || 'off',
+    cam: $('#camPreset')?.value || 'hero',
+    tool: board?.toolMode || 'interact',
+    nav: board?.navMode || 'orbit',
+    part: board?.selectedPart?.id || 'none',
+    clkHz: S.clkHz,
+    std: $('#standardSelect')?.value || S.standard,
+    truthRows: $('#truthBody')?.children.length || 0,
+    uartLen: $('#uartOut')?.textContent.length || 0,
+    consoleCount,
+    error: S.error,
+    errSeq: lastErrorSeq,
+  };
+}
+function diffSnapshot(before, after) {
+  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tab', 'editor', 'left', 'waves', 'right', 'deck', 'about', 'keysDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen'];
+  const out = [];
+  for (const k of keys) if (before[k] !== after[k]) out.push(`${k}:${before[k]}->${after[k]}`);
+  return out;
+}
+function trackUiAction(kind, el, detail = '') {
+  const id = String(++actionSeq).padStart(4, '0');
+  const target = detail ? `${describeControl(el)} (${detail})` : describeControl(el);
+  const before = uiSnapshot();
+  const t0 = performance.now();
+  const isDisabled = !!(el?.disabled || el?.closest?.('[disabled]'));
+  if (isDisabled) {
+    recordActionLine(`#${id} ${kind.padEnd(8)} ${target} -> BLOCKED (0ms) [reason:control disabled | status:${before.status} | view:${before.view}]`);
+    return;
+  }
+  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnSaveProject|#btnVcd|#btnImport|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeNewProjectBtn|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
+  setTimeout(async () => {
+    await new Promise(r => requestAnimationFrame(r));
+    const waitStart = performance.now();
+    while ((S.building || S.importing || S.exporting || S.busy || S.truthBusy) && performance.now() - waitStart < 12000) {
+      await new Promise(r => setTimeout(r, 30));
+    }
+    const ms = Math.round(performance.now() - t0);
+    const after = uiSnapshot();
+    const changes = diffSnapshot(before, after);
+    let outcome = 'OK';
+    if (after.errSeq > before.errSeq || (!before.error && after.error)) {
+      outcome = 'ERR';
+      changes.push(`err=${JSON.stringify(lastErrorMsg.replace(/\s+/g, ' ').slice(0, 140))}`);
+    } else if (!changes.length) {
+      if (IMPERATIVE.test(target) || el?.tagName === 'SUMMARY' || el?.tagName === 'INPUT' || el?.tagName === 'SELECT' || kind === 'CHANGE') {
+        changes.push('executed');
+      } else if (after.consoleCount > before.consoleCount) {
+        changes.push(`console:${before.consoleCount}->${after.consoleCount}`);
+      } else {
+        outcome = 'NOOP';
+        changes.push(`no state change | status:${after.status} | view:${after.view}`);
+      }
+    }
+    recordActionLine(`#${id} ${kind.padEnd(8)} ${target} -> ${outcome} (${ms}ms) [${changes.join(' | ')}]`);
+  }, 0);
+}
+function wireActionLogger() {
+  document.addEventListener('pointerdown', e => {
+    const keyBtn = e.target.closest?.('.key-btn');
+    if (keyBtn) trackUiAction('PRESS', keyBtn);
+  }, true);
+  document.addEventListener('click', e => {
+    if (e.target.closest?.('.key-btn')) return;
+    const ctrl = e.target.closest?.('button, a, summary, [role="tab"], [role="button"]');
+    if (ctrl) trackUiAction('CLICK', ctrl);
+  }, true);
+  document.addEventListener('change', e => {
+    const el = e.target;
+    if (!el || el.id === 'sourceEditor' || el.classList?.contains('ce-input')) return;
+    if (el.matches?.('select, input')) {
+      const val = el.type === 'checkbox' ? (el.checked ? 'checked' : 'unchecked') : el.type === 'file' ? `${el.files?.length || 0} files` : String(el.value).slice(0, 32);
+      trackUiAction('CHANGE', el, `val=${val}`);
+    }
+  }, true);
+  document.addEventListener('submit', e => {
+    if (e.target?.tagName === 'FORM') trackUiAction('SUBMIT', e.target);
+  }, true);
+  window.addEventListener('keydown', e => {
+    if (e.repeat) return;
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.altKey && ['b', 's', 'e', 'o'].includes(e.key.toLowerCase())) {
+      trackUiAction('SHORTCUT', document.activeElement, `Ctrl+${e.key.toUpperCase()}`);
+      return;
+    }
+    if (e.target.closest?.('input,select,textarea,dialog:modal')) return;
+    if (e.altKey && ['1', '2', '3', '4'].includes(e.key)) { trackUiAction('SHORTCUT', document.activeElement, `Alt+${e.key}`); return; }
+    if (!mod && !e.altKey && ['1', '2', '3', '4', 'r', 'f', 'v', 'p', 'h', '.', 'escape'].includes(e.key.toLowerCase())) {
+      trackUiAction('SHORTCUT', document.activeElement, e.key.length === 1 ? e.key.toUpperCase() : e.key);
+    } else if (!mod && !e.altKey && e.code === 'Space' && e.target.tagName !== 'BUTTON') {
+      trackUiAction('SHORTCUT', document.activeElement, 'Space');
+    }
+  }, true);
 }
 async function copyConsole() {
   const lines = consoleLines(), details = sessionDetails();
@@ -922,7 +1071,7 @@ function wire() {
   $('#consoleClear').onclick = () => { $('#consoleOut').replaceChildren(); $('#consoleCount').textContent = consoleCount = 0; };
   $('#consoleCopy').onclick = copyConsole;
   $('#uartClear').onclick = () => $('#uartOut').replaceChildren(); $('#btnTruth').onclick = runTruth;
-  window.addEventListener('pagehide', () => { if (S.sim?.id) navigator.sendBeacon(`/api/sim/${S.sim.id}/close`, ''); });
+  window.addEventListener('pagehide', () => { flushActions(); if (S.sim?.id) navigator.sendBeacon(`/api/sim/${S.sim.id}/close`, ''); });
 }
 function frame(now) {
   requestAnimationFrame(frame); const dt = Math.max(0, Math.min(.1, (now - lastFrame) / 1000)); lastFrame = now;
@@ -934,13 +1083,14 @@ async function boot() {
   matchMedia('(max-width: 1000px)').addEventListener('change', syncNavigation);
   syncNavigation();
   audio.setMuted(true);
-  fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; }).catch(() => {});
+  fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
   try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed), onDip: index => toggleDip(index), onSelect: part => renderInspector(part), onPower: on => { $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.4); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames')); applyTheme(document.documentElement.dataset.theme); wire();
   ide = createIde({ S, toast, markDirty, build, renderSources, openTools, syncNavigation, projectData, restoreProject, loadFiles });
+  wireActionLogger();
   fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);
-  window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, get ide() { return ide; }, build, advance, loadFiles, toggleDip };
+  window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, get ide() { return ide; }, get actions() { return [...uiActions]; }, flushActions, build, advance, loadFiles, toggleDip };
   try { const saved = localStorage.getItem('trace.project.v1'); if (saved) { const parsed = JSON.parse(saved); if (Array.isArray(parsed?.sources) && parsed.sources.length) restoreProject(parsed); } } catch (e) { importError(new Error(`Saved project could not be restored: ${e.message}`)); S.sources = []; renderSources(); setStatus(); return; }
   ide.openFirst();
   ide.showHome(true);

@@ -13,6 +13,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 const within = (root, full) => { const rel = path.relative(root, full); return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)); };
 const LOG_DIR = path.resolve(process.env.TRACE_LOG_DIR || path.join(ROOT, 'logs'));
 const LOG_FILE = path.join(LOG_DIR, 'latest.log');
+const ACTION_LOG_FILE = path.join(LOG_DIR, 'actions.log');
 let logQueue = Promise.resolve(true), ownsLog = false, stopping = false;
 
 const clip = (value, max) => String(value ?? '').replace(/\r\n?/g, '\n').slice(0, max);
@@ -21,10 +22,11 @@ function stamp(date = new Date()) {
   const p = n => String(n).padStart(2, '0'), offset = -date.getTimezoneOffset();
   return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}.${String(date.getMilliseconds()).padStart(3, '0')} UTC${offset < 0 ? '-' : '+'}${p(Math.floor(Math.abs(offset) / 60))}:${p(Math.abs(offset) % 60)}`;
 }
-function formatEntry({ source, message, stack = '', details = {}, recent = [] }) {
+function formatEntry({ source, message, stack = '', details = {}, recent = [], actions = [] }) {
   const lines = [`==== ${stamp()} | ${source} error ====`, 'Message:', indent(message)];
   for (const [key, value] of Object.entries(details)) if (value) lines.push(`${key}: ${value}`);
   if (stack) lines.push('Stack:', indent(stack));
+  if (actions.length) lines.push('Recent UI actions (oldest first):', indent(actions.join('\n')));
   if (recent.length) lines.push('Recent console (oldest first):', indent(recent.join('\n')));
   return lines.join('\n') + '\n\n';
 }
@@ -34,6 +36,12 @@ function appendLog(entry) {
     await fs.mkdir(LOG_DIR, { recursive: true });
     await fs.appendFile(LOG_FILE, text, 'utf8'); return true;
   }).catch(e => { console.error(`Cannot write ${LOG_FILE}: ${e.message}`); return false; });
+}
+function appendActionLog(text) {
+  return logQueue = logQueue.then(async () => {
+    await fs.mkdir(LOG_DIR, { recursive: true });
+    await fs.appendFile(ACTION_LOG_FILE, text, 'utf8'); return true;
+  }).catch(e => { console.error(`Cannot write ${ACTION_LOG_FILE}: ${e.message}`); return false; });
 }
 function appendLogSync(entry) { try { mkdirSync(LOG_DIR, { recursive: true }); appendFileSync(LOG_FILE, formatEntry(entry), 'utf8'); } catch {} }
 function archiveLog() {
@@ -47,6 +55,17 @@ function archiveLog() {
     for (const [date, body] of days) if (body.trim()) appendFileSync(path.join(LOG_DIR, `${date}.log`), body, 'utf8');
     rmSync(LOG_FILE);
   } catch (e) { if (e.code !== 'ENOENT') console.error(`Cannot archive ${LOG_FILE}: ${e.message}`); }
+  try {
+    const text = readFileSync(ACTION_LOG_FILE, 'utf8'), days = new Map();
+    let day = stamp(statSync(ACTION_LOG_FILE).mtime).slice(0, 10);
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      day = line.match(/^\[(\d{4}-\d\d-\d\d) /)?.[1] ?? day;
+      days.set(day, (days.get(day) ?? '') + line + '\n');
+    }
+    for (const [date, body] of days) if (body.trim()) appendFileSync(path.join(LOG_DIR, `${date}-actions.log`), body, 'utf8');
+    rmSync(ACTION_LOG_FILE);
+  } catch (e) { if (e.code !== 'ENOENT') console.error(`Cannot archive ${ACTION_LOG_FILE}: ${e.message}`); }
 }
 function claimLog() { ownsLog = true; archiveLog(); }
 function clientReport(body) {
@@ -56,7 +75,14 @@ function clientReport(body) {
     if (/^[A-Za-z][A-Za-z ]{0,31}$/.test(key) && typeof value === 'string') details[key] = clip(value, 400).replace(/\n/g, ' ');
   }
   const recent = Array.isArray(body.recent) ? body.recent.slice(-40).filter(line => typeof line === 'string').map(line => clip(line, 800)) : [];
-  return { source: 'client', message: clip(body.message, 4000).trimEnd(), stack: typeof body.stack === 'string' ? clip(body.stack, 8000).trimEnd() : '', details, recent };
+  const actions = Array.isArray(body.actions) ? body.actions.slice(-30).filter(line => typeof line === 'string').map(line => clip(line, 600)) : [];
+  return { source: 'client', message: clip(body.message, 4000).trimEnd(), stack: typeof body.stack === 'string' ? clip(body.stack, 8000).trimEnd() : '', details, recent, actions };
+}
+function actionReport(body) {
+  if (!body || typeof body !== 'object' || !Array.isArray(body.lines) || !body.lines.length) throw new Error('Action log entries need lines.');
+  const lines = body.lines.slice(0, 50).filter(l => typeof l === 'string' && l.trim()).map(l => `[${stamp()}] ${clip(l, 600).replace(/\n/g, ' ').trim()}`);
+  if (!lines.length) throw new Error('Action log entries need non-empty lines.');
+  return lines.join('\n') + '\n';
 }
 
 function send(res, code, body, type = 'application/json; charset=utf-8') {
@@ -92,11 +118,15 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
     if (url.pathname === '/api/health') {
       const cfg = await configuration().catch(e => ({ version: null, error: e.message }));
-      return send(res, 200, { ok: !!cfg.version, app: 'trace-workbench', hdlRoot: HDL_ROOT, backend: cfg.version, error: cfg.error, sessions: sessions.size, logFile: LOG_FILE });
+      return send(res, 200, { ok: !!cfg.version, app: 'trace-workbench', hdlRoot: HDL_ROOT, backend: cfg.version, error: cfg.error, sessions: sessions.size, logFile: LOG_FILE, actionLogFile: ACTION_LOG_FILE });
     }
     if (url.pathname === '/api/log' && req.method === 'POST') {
       const written = await appendLog(clientReport(await json(req, 64 * 1024)));
       return send(res, written ? 200 : 500, written ? { ok: true, file: LOG_FILE } : { error: `Cannot write ${LOG_FILE}.` });
+    }
+    if (url.pathname === '/api/log/action' && req.method === 'POST') {
+      const written = await appendActionLog(actionReport(await json(req, 64 * 1024)));
+      return send(res, written ? 200 : 500, written ? { ok: true, file: ACTION_LOG_FILE } : { error: `Cannot write ${ACTION_LOG_FILE}.` });
     }
     if (url.pathname === '/api/hdl/tree') return send(res, 200, { root: HDL_ROOT, groups: await hdlTree() });
     if (url.pathname === '/api/hdl/file') {
