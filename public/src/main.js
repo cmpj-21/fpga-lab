@@ -118,13 +118,16 @@ function uiSnapshot() {
     std: $('#standardSelect')?.value || S.standard,
     truthRows: $('#truthBody')?.children.length || 0,
     uartLen: $('#uartOut')?.textContent.length || 0,
+    recents: $('#homeRecentList')?.querySelectorAll('.home-recent-item').length || 0,
+    problems: ide?.problems?.length || 0,
+    newFile: $('#newFileRow')?.classList.contains('hidden') ? 'closed' : 'open',
     consoleCount,
     error: S.error,
     errSeq: lastErrorSeq,
   };
 }
 function diffSnapshot(before, after) {
-  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tab', 'editor', 'left', 'waves', 'right', 'deck', 'about', 'keysDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen'];
+  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tab', 'editor', 'left', 'waves', 'right', 'deck', 'about', 'keysDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
   const out = [];
   for (const k of keys) if (before[k] !== after[k]) out.push(`${k}:${before[k]}->${after[k]}`);
   return out;

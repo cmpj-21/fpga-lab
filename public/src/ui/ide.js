@@ -572,11 +572,8 @@ export function createIde(api) {
   function renderHome() {
     const box = $('#homeRecentList');
     if (!box) return;
-    let recents = loadRecents();
-    if (!recents.length && S.sources.length) {
-      recordRecentProject();
-      recents = loadRecents();
-    }
+    const recents = loadRecents();
+    if ($('#homeClearRecents')) $('#homeClearRecents').disabled = !recents.length;
     box.replaceChildren();
     if (!recents.length) {
       const empty = document.createElement('p');
