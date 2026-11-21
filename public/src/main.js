@@ -1,5 +1,5 @@
 import { createBoard3D } from './board/board3d.js';
-import { NET_PIN, LED_NETS, KEY_NETS, SEG_NETS, DIGIT_NETS } from './board/boardDef.js';
+import { NET_PIN, PIN_NET, LED_NETS, KEY_NETS, SEG_NETS, DIGIT_NETS, BOARD_PINOUT_GROUPS } from './board/boardDef.js';
 import { parseQsf } from './sim/qsf.js';
 import { parseGenerics } from './sim/generics.js';
 import { UartReceiver } from './sim/uart.js';
@@ -13,7 +13,7 @@ import * as audio from './ui/audio.js';
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
-const S = { sources: [], sim: null, flashed: false, running: false, power: true, building: false, busy: false, clkHz: 1000, speed: 55, time: 0, inputs: {}, assignments: new Map(), compiledAssignments: new Map(), discoveredPorts: [], bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0 };
+const S = { sources: [], sim: null, flashed: false, projectDir: null, projectName: '', running: false, power: true, building: false, busy: false, clkHz: 1000, speed: 55, time: 0, inputs: {}, assignments: new Map(), compiledAssignments: new Map(), discoveredPorts: [], bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0 };
 let board, waves, ide, toastTimer, sourceIndex, consoleCount = 0, logFile = '', actionLogFile = '', reportCount = 0;
 let lastFrame = performance.now(), accumulator = 0, lastDraw = 0;
 let actionSeq = 0, lastErrorSeq = 0, lastErrorMsg = '', actionFlushTimer = 0, eventFlushTimer = 0;
@@ -155,7 +155,7 @@ function trackUiAction(kind, el, detail = '') {
     recordActionLine(`#${id} ${kind.padEnd(8)} ${target} -> BLOCKED (0ms) [reason:control disabled | status:${before.status} | view:${before.view}]`);
     return;
   }
-  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnSaveProject|#btnVcd|#btnImport|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
+  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnSaveProject|#btnVcd|#btnImport|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
   setTimeout(async () => {
     await new Promise(r => requestAnimationFrame(r));
     const waitStart = performance.now();
@@ -265,15 +265,92 @@ function setStatus() {
 function pause() { S.running = false; accumulator = 0; audio.stopBuzzer(); setStatus(); }
 function fail(e) { S.error = true; S.pending = []; pause(); log(e.message, 'error'); toast(e.message, 'err'); ide?.reportBuildFailure(e.message); openTools('console'); }
 function markDirty() { S.dirty = true; S.flashed = false; S.error = false; S.pending = []; S.bindings = {}; ++S.generation; board?.clearOutputs(); sampleOutputs(); pause(); saveProject(); }
-function projectData() { ide?.commitAll(); return { format: 'trace-project', version: 1, sources: S.sources, assignments: [...S.assignments], top: $('#topSelect').value, topLibrary: $('#topLibrary').value, standard: $('#standardSelect').value, generics: $('#genericInput').value, sdf: S.sdf ? { ...S.sdf, instance: $('#sdfInstance').value, corner: $('#sdfCorner').value } : null }; }
-function saveProject() { try { localStorage.setItem('trace.project.v1', JSON.stringify(projectData())); } catch { toast('Browser storage is full or unavailable. Use Save project to keep your files.', 'err'); } }
+function projectData() { ide?.commitAll(); return { format: 'trace-project', version: 1, sources: S.sources, assignments: [...S.assignments], top: $('#topSelect').value, topLibrary: $('#topLibrary').value, standard: $('#standardSelect').value, generics: $('#genericInput').value, sdf: S.sdf ? { ...S.sdf, instance: $('#sdfInstance').value, corner: $('#sdfCorner').value } : null, projectDir: S.projectDir || null, projectName: S.projectName || '' }; }
+function syncProjectSaveUI() {
+  const saved = !!S.projectDir;
+  if ($('#btnSaveProject')) $('#btnSaveProject').textContent = saved ? 'Save Project' : 'Save Project As…';
+  if ($('#menuSaveProjectLabel')) $('#menuSaveProjectLabel').textContent = saved ? 'Save Project' : 'Save Project As…';
+  if ($('#menuSaveProjectAs')) $('#menuSaveProjectAs').classList.toggle('hidden', !saved);
+  if ($('#saveProjectHint')) {
+    const folderName = saved ? S.projectDir.split(/[\\/]/).filter(Boolean).pop() : '';
+    $('#saveProjectHint').textContent = saved ? `${folderName} · .qpf/.qsf` : 'Not saved to disk';
+    $('#saveProjectHint').title = saved ? S.projectDir : 'Choose a project folder to save .qpf, .qsf and .vhd files';
+  }
+}
+async function saveProjectToDisk({ saveAs = false, quiet = false } = {}) {
+  if (!S.sources.length) { toast('Add VHDL source files before saving.', 'err'); return false; }
+  if (ide && !ide.validateLibraries()) return false;
+  ide?.commitAll();
+  renderSources();
+  let dir = saveAs ? null : S.projectDir;
+  if (!dir) {
+    try {
+      const picked = await api('/api/project/pick-folder', { initialDir: S.projectDir || '' });
+      if (picked.cancelled || !picked.dir) return false;
+      dir = picked.dir;
+    } catch (e) {
+      toast(e.message, 'err');
+      return false;
+    }
+  }
+  const name = S.projectName || ide?.currentProjectTitle?.() || $('#topSelect').value || S.sources[0]?.name.replace(/\.[^.]+$/, '') || 'fpga_project';
+  try {
+    const result = await api('/api/project/save', { dir, projectName: name, project: projectData() });
+    S.projectDir = result.dir;
+    S.projectName = result.projectName;
+    saveProject();
+    ide?.recordRecentProject(S.projectName, S.projectDir, result.qpf);
+    ide?.captureBaseline(S.projectName);
+    syncProjectSaveUI();
+    fetchTree();
+    if (!quiet) toast(`Saved ${result.qpf}, ${result.qsf} & ${S.sources.length} source(s) to ${result.dir}.`, 'ok');
+    return true;
+  } catch (e) {
+    toast(e.message, 'err');
+    log(`Save project failed: ${e.message}`, 'error');
+    return false;
+  }
+}
+async function openProjectFromDiskPath(targetPath = '') {
+  try {
+    let chosen = targetPath;
+    if (!chosen) {
+      const picked = await api('/api/project/pick-open', { initialDir: S.projectDir || '' });
+      if (picked.cancelled || !picked.file) return false;
+      chosen = picked.file;
+    }
+    const result = await api('/api/project/open', { path: chosen });
+    for (const tabName of [...(ide?.tabs || [])]) ide?.closeTab(tabName, true);
+    S.discoveredPorts = [];
+    restoreProject(result.project);
+    S.projectDir = result.dir;
+    S.projectName = result.projectName;
+    saveProject();
+    ide?.openFirst();
+    ide?.recordRecentProject(result.projectName, result.dir, result.qpf);
+    ide?.captureBaseline(result.projectName);
+    ide?.showHome(false);
+    markDirty();
+    syncProjectSaveUI();
+    toast(`Opened ${result.projectName} (${result.project.sources.length} file${result.project.sources.length === 1 ? '' : 's'}). Click Build & Compile when ready.`, 'ok');
+    return true;
+  } catch (e) {
+    toast(e.message, 'err');
+    log(`Open project failed: ${e.message}`, 'error');
+    return false;
+  }
+}
+function saveProject() { try { localStorage.setItem('trace.project.v1', JSON.stringify(projectData())); } catch { toast('Browser storage is full or unavailable. Use Save Project As… to keep your files.', 'err'); } }
 function restoreProject(project) {
   if (!project || project.format !== 'trace-project' || project.version !== 1 || !Array.isArray(project.sources) || project.sources.length > 100 || !project.sources.every(s => s && typeof s.name === 'string' && typeof s.text === 'string' && /^[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i.test(s.name) && (!s.library || /^[a-z][a-z0-9_]*$/i.test(s.library))) || !['93','02','08'].includes(project.standard) || !/^[a-z][a-z0-9_]*$/i.test(project.topLibrary || 'work') || typeof project.generics !== 'string' || !Array.isArray(project.assignments) || !project.assignments.every(p => Array.isArray(p) && p.length === 2 && Number.isInteger(p[0]) && p[0] >= 1 && p[0] <= 144 && typeof p[1] === 'string') || (project.sdf && (typeof project.sdf.text !== 'string' || typeof project.sdf.instance !== 'string' || !['min','typ','max'].includes(project.sdf.corner)))) throw new Error('Invalid Trace project file.');
   S.sources = project.sources; S.assignments = new Map(project.assignments); S.sdf = project.sdf || null;
+  S.projectDir = typeof project.projectDir === 'string' && project.projectDir ? project.projectDir : null;
+  S.projectName = typeof project.projectName === 'string' ? project.projectName : '';
+  S.discoveredPorts = [];
   $('#standardSelect').value = project.standard; $('#genericInput').value = project.generics; $('#topLibrary').value = project.topLibrary || 'work';
-  renderSources(); $('#topSelect').value = project.top || ''; renderSdf(); renderPins();
+  renderSources(); $('#topSelect').value = project.top || ''; renderSdf(); renderPins(); syncProjectSaveUI();
   const topName = project.top || allEntities()[0] || S.sources[0]?.name || 'No design';
-  $('#designTitle').textContent = topName === DEMO_TOP ? 'Counter demo' : topName;
+  $('#designTitle').textContent = S.projectName || (topName === DEMO_TOP ? 'Counter demo' : topName);
   $('#designSubtitle').textContent = `Build needed · VHDL-${project.standard === '08' ? '2008' : project.standard === '93' ? '1993' : '2002'}`;
 }
 function download(text, name, type = 'text/plain') { const url = URL.createObjectURL(new Blob([text], { type })); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
@@ -351,6 +428,7 @@ async function build(top = $('#topSelect').value) {
   if (S.sdf) { S.sdf.instance = $('#sdfInstance').value.trim(); S.sdf.corner = $('#sdfCorner').value; if (!S.sdf.instance) return toast('Enter / for the top level, or a child instance path such as /u1.', 'err'); }
   try { S.generics = parseGenerics($('#genericInput').value); } catch (e) { return toast(e.message, 'err'); }
   pause(); S.building = true; S.error = false; const generation = ++S.generation; setStatus(); saveProject();
+  if (S.projectDir) api('/api/project/save', { dir: S.projectDir, projectName: S.projectName || ide?.currentProjectTitle?.() || '', project: projectData() }).catch(() => {});
   S.pending = []; await closeSession(S.sim); S.sim = null; S.vcd = null;
   board?.clearOutputs(); sampleOutputs();
   try {
@@ -359,14 +437,18 @@ async function build(top = $('#topSelect').value) {
     S.sim = result; S.dirty = false; S.flashed = false; S.time = 0; S.cycles = 0; S.inputs = {}; S.values.clear();
     S.compiledAssignments = new Map(S.assignments);
     $('#replayControls').classList.add('hidden');
+    const dirLabel = d => d === 1 ? 'IN' : d === 2 ? 'OUT' : d === 3 ? 'INOUT' : 'SIG';
     const discovered = [];
     for (const signal of result.signals) {
       signal.short = signal.name.startsWith(result.top + '.') ? signal.name.slice(result.top.length + 1) : signal.name;
-      if (signal.name.startsWith(result.top + '.') && !signal.short.includes('.')) {
-        if (signal.width === 1) discovered.push(signal.short);
+      if (signal.name.startsWith(result.top + '.') && !signal.short.includes('.') && [1, 2, 3].includes(signal.direction)) {
+        const dir = dirLabel(signal.direction);
+        if (signal.width === 1) discovered.push({ name: signal.short.toLowerCase(), label: signal.short, dir, base: signal.short.toLowerCase(), bit: null });
         else if (Number.isInteger(signal.left) && Number.isInteger(signal.right)) {
           const step = signal.left <= signal.right ? 1 : -1;
-          for (let b = signal.left; b !== signal.right + step; b += step) discovered.push(`${signal.short}[${b}]`);
+          for (let b = signal.left; b !== signal.right + step; b += step) {
+            discovered.push({ name: `${signal.short.toLowerCase()}[${b}]`, label: `${signal.short}[${b}]`, dir, base: signal.short.toLowerCase(), bit: b });
+          }
         }
       }
     }
@@ -661,44 +743,181 @@ function renderSignalChips() {
     $('#sigChips').append(button);
   });
 }
+function parsePinInput(raw) {
+  const clean = String(raw || '').trim();
+  if (!clean) return null;
+  const m = clean.match(/^(?:pin_|p)?(\d+)$/i);
+  if (!m) return NaN;
+  const num = Number(m[1]);
+  return Number.isInteger(num) && num >= 1 && num <= 144 ? num : NaN;
+}
+function findPinForPort(portName) {
+  const target = String(portName || '').toLowerCase();
+  for (const [pin, assigned] of S.assignments.entries()) {
+    if (String(assigned || '').trim().toLowerCase() === target) return pin;
+  }
+  return null;
+}
+function renderPinoutRef() {
+  const body = $('#pinoutRefBody');
+  if (!body) return;
+  const q = ($('#pinoutSearch')?.value || '').trim().toLowerCase();
+  body.replaceChildren();
+  for (const grp of BOARD_PINOUT_GROUPS) {
+    const matched = grp.pins.filter(p => !q || `${grp.group} pin_${p.pin} ${p.pin} ${p.net} ${p.polarity} ${p.note} ${S.assignments.get(p.pin) || ''}`.toLowerCase().includes(q));
+    if (!matched.length) continue;
+    const head = document.createElement('tr');
+    head.className = 'po-group';
+    const td = document.createElement('td');
+    td.colSpan = 4;
+    td.textContent = grp.group;
+    head.append(td);
+    body.append(head);
+    for (const entry of matched) {
+      const tr = document.createElement('tr');
+      tr.dataset.pin = entry.pin;
+      tr.onclick = () => board?.highlightPin(entry.pin);
+      const pinTd = document.createElement('td');
+      pinTd.className = 'po-pin';
+      pinTd.textContent = `PIN_${entry.pin}`;
+      const netTd = document.createElement('td');
+      netTd.textContent = entry.net;
+      const infoTd = document.createElement('td');
+      const pol = document.createElement('span');
+      pol.className = 'po-pol';
+      pol.textContent = entry.polarity;
+      infoTd.append(pol, document.createTextNode(entry.note));
+      const assignedTd = document.createElement('td');
+      const assignedPort = (S.assignments.get(entry.pin) || '').trim();
+      assignedTd.textContent = assignedPort || '—';
+      if (assignedPort) assignedTd.className = 'po-assigned';
+      tr.append(pinTd, netTd, infoTd, assignedTd);
+      body.append(tr);
+    }
+  }
+}
 function renderPins() {
   $('#pinBody').replaceChildren();
-  const datalist = $('#pinPortList');
-  if (datalist) datalist.replaceChildren(...(S.discoveredPorts || []).map(p => new Option(p, p)));
+  const datalist = $('#boardPinList');
+  if (datalist && !datalist.children.length) {
+    for (const grp of BOARD_PINOUT_GROUPS) {
+      for (const p of grp.pins) {
+        const opt = document.createElement('option');
+        opt.value = `PIN_${p.pin}`;
+        opt.label = `${p.net} · ${p.polarity} (${p.note})`;
+        datalist.append(opt);
+      }
+    }
+  }
   const hint = $('#pinStepHint');
   if (hint) {
-    hint.textContent = !S.sim
-      ? 'Step 2 required: Build & Compile your VHDL code first to discover entity ports for pin assignment.'
-      : S.dirty
-        ? 'Step 4 required: Pin assignments changed — click Build & Compile again before flashing to the board.'
-        : !S.flashed
-          ? `Step 5 ready: ${S.discoveredPorts.length} port target${S.discoveredPorts.length === 1 ? '' : 's'} discovered. Assign pins below (then Build & Compile) or click Flash.`
-          : `Flashed to board (${Object.keys(S.bindings).length} pin${Object.keys(S.bindings).length === 1 ? '' : 's'} connected). Editing a pin requires Build & Compile then Flash.`;
+    hint.textContent = S.vcd
+      ? 'Recorded waveform replay: enter a board pin number for each signal, or inspect the Board Pinout reference.'
+      : !S.discoveredPorts.length
+        ? 'Step 2 required: Click Build & Compile first so Trace can detect your entity ports, then type devboard pin numbers here.'
+        : S.dirty
+          ? 'Step 4 required: Pin assignments changed — click Build & Compile again before flashing to the board.'
+          : !S.flashed
+            ? `Step 3/5: ${S.discoveredPorts.length} design port${S.discoveredPorts.length === 1 ? '' : 's'} detected. Enter pin numbers (e.g. 88 or PIN_88), then Build & Compile → Flash.`
+            : `Flashed to board (${Object.keys(S.bindings).length} pin${Object.keys(S.bindings).length === 1 ? '' : 's'} connected). Editing a pin requires Build & Compile then Flash.`;
   }
   const activeNets = board?.selectedPart?.nets || [];
-  for (const [net, pin] of Object.entries(NET_PIN)) {
-    const tr = document.createElement('tr'); tr.dataset.net = net; tr.dataset.pin = pin;
-    if (activeNets.includes(net)) tr.classList.add('selected-pin');
-    tr.onclick = e => { if (e.target.tagName !== 'INPUT') board?.highlightPin(pin); };
-    const netCell = document.createElement('td'); netCell.textContent = net;
-    const port = document.createElement('td'), assigned = (S.assignments.get(pin) ?? '').trim(), bound = S.bindings[net], input = document.createElement('input');
-    input.value = assigned;
-    input.placeholder = 'Unassigned';
-    input.setAttribute('list', 'pinPortList');
-    input.setAttribute('aria-label', `${net} design port`);
-    input.title = bound ? 'Flashed & connected on board' : assigned ? 'Assigned · Build & Compile then Flash to connect' : 'Unassigned · pin is disconnected on the 3D board';
-    input.className = bound ? 'mapped' : assigned ? 'assigned' : 'unmapped';
+  const rows = [];
+  const seenPorts = new Set();
+  if (S.vcd && S.sim) {
+    for (const s of S.sim.signals.filter(sig => sig.scope === S.vcd.scope && !['real', 'realtime'].includes(sig.kind))) {
+      const base = s.localName.toLowerCase();
+      if (s.width === 1) { rows.push({ name: base, label: s.localName, dir: 'VCD' }); seenPorts.add(base); }
+      else if (Number.isInteger(s.left) && Number.isInteger(s.right)) {
+        const step = s.left <= s.right ? 1 : -1;
+        for (let b = s.left; b !== s.right + step; b += step) {
+          rows.push({ name: `${base}[${b}]`, label: `${s.localName}[${b}]`, dir: 'VCD' });
+          seenPorts.add(`${base}[${b}]`);
+        }
+      }
+    }
+  } else {
+    for (const p of S.discoveredPorts || []) {
+      rows.push(p);
+      seenPorts.add(p.name);
+    }
+    for (const [, assigned] of S.assignments.entries()) {
+      const clean = String(assigned || '').trim().toLowerCase();
+      if (clean && !seenPorts.has(clean)) {
+        rows.push({ name: clean, label: clean, dir: 'QSF' });
+        seenPorts.add(clean);
+      }
+    }
+  }
+  if (!rows.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 4;
+    td.className = 'empty';
+    td.textContent = 'No design ports detected yet. Click Build & Compile to discover entity ports.';
+    tr.append(td);
+    $('#pinBody').append(tr);
+  }
+  for (const port of rows) {
+    const currentPin = findPinForPort(port.name);
+    const boardNet = currentPin ? (PIN_NET[currentPin] || '') : '';
+    const bound = boardNet ? S.bindings[boardNet] : null;
+    const tr = document.createElement('tr');
+    tr.dataset.port = port.name;
+    if (boardNet) tr.dataset.net = boardNet;
+    if (currentPin) tr.dataset.pin = currentPin;
+    if (boardNet && activeNets.includes(boardNet)) tr.classList.add('selected-pin');
+    tr.onclick = e => { if (e.target.tagName !== 'INPUT' && currentPin) board?.highlightPin(currentPin); };
+    const nameCell = document.createElement('td');
+    nameCell.textContent = port.label;
+    const dirCell = document.createElement('td');
+    const dirBadge = document.createElement('span');
+    dirBadge.className = `pin-dir ${port.dir.toLowerCase()}`;
+    dirBadge.textContent = port.dir;
+    dirCell.append(dirBadge);
+    const locCell = document.createElement('td');
+    const input = document.createElement('input');
+    input.value = currentPin ? `PIN_${currentPin}` : '';
+    input.placeholder = 'PIN_...';
+    input.setAttribute('list', 'boardPinList');
+    input.setAttribute('aria-label', `${port.label} pin location`);
+    input.title = currentPin ? `Assigned to PIN_${currentPin}${boardNet ? ` (${boardNet})` : ''}` : 'Enter devboard pin number (1–144), e.g. 88 or PIN_88';
+    input.className = bound ? 'mapped' : currentPin ? 'assigned' : 'unmapped';
     input.disabled = S.building || S.importing;
     input.onchange = () => {
-      const val = input.value.trim().toLowerCase();
-      if (val) S.assignments.set(pin, val); else S.assignments.delete(pin);
+      const parsed = parsePinInput(input.value);
+      if (Number.isNaN(parsed)) {
+        toast('Enter a valid EP4CE6 pin number from 1 to 144 (e.g. 88 or PIN_88).', 'err');
+        input.value = currentPin ? `PIN_${currentPin}` : '';
+        return;
+      }
+      if (parsed !== null) {
+        const existingOwner = (S.assignments.get(parsed) || '').trim().toLowerCase();
+        if (existingOwner && existingOwner !== port.name) {
+          toast(`PIN_${parsed} is already assigned to ${existingOwner}. Clear or change it first.`, 'err');
+          input.value = currentPin ? `PIN_${currentPin}` : '';
+          return;
+        }
+      }
+      if (currentPin !== null) S.assignments.delete(currentPin);
+      if (parsed !== null) {
+        S.assignments.set(parsed, port.name);
+        board?.highlightPin(parsed);
+      }
       saveProject();
       if (S.vcd) { buildBindings(); renderPins(); board?.clearOutputs(); sampleOutputs(); }
-      else { markDirty(); renderPins(); toast('Pin assignment updated. Click Build & Compile before flashing.'); }
+      else { markDirty(); renderPins(); toast(parsed ? `Assigned ${port.label} → PIN_${parsed}${PIN_NET[parsed] ? ` (${PIN_NET[parsed]})` : ''}. Click Build & Compile before flashing.` : `Unassigned ${port.label}. Click Build & Compile before flashing.`); }
     };
-    port.append(input);
-    const td = document.createElement('td'); td.textContent = pin; tr.append(netCell, port, td); $('#pinBody').append(tr);
+    locCell.append(input);
+    const netCell = document.createElement('td');
+    const netSpan = document.createElement('span');
+    netSpan.className = `pin-net-tag${boardNet ? '' : ' empty'}`;
+    netSpan.textContent = boardNet || (currentPin ? 'GPIO' : '—');
+    netCell.append(netSpan);
+    tr.append(nameCell, dirCell, locCell, netCell);
+    $('#pinBody').append(tr);
   }
+  renderPinoutRef();
   if (board?.selectedPart) renderInspector(board.selectedPart);
 }
 function renderInspector(part) {
@@ -843,7 +1062,14 @@ async function fetchTree() {
       for (const file of group.files) {
         const button = document.createElement('button'); button.className = 'hdl-file'; button.dataset.name = `${group.dir}/${file.name}`.toLowerCase();
         const kind = document.createElement('span'); kind.className = 'fk'; kind.textContent = file.kind.toUpperCase(); button.append(kind, document.createTextNode(file.name));
-        button.onclick = async () => { try { const response = await fetch('/api/hdl/file?path=' + encodeURIComponent(file.rel)); if (!response.ok) throw new Error('File could not be read.'); await loadFiles([new File([await response.blob()], file.name)]); } catch (e) { toast(e.message, 'err'); } };
+        button.onclick = async () => {
+          try {
+            if (file.kind === 'qpf') { await openProjectFromDiskPath(file.rel); return; }
+            const response = await fetch('/api/hdl/file?path=' + encodeURIComponent(file.rel));
+            if (!response.ok) throw new Error('File could not be read.');
+            await loadFiles([new File([await response.blob()], file.name)]);
+          } catch (e) { toast(e.message, 'err'); }
+        };
         list.append(button);
       }
       wrap.append(heading, list); $('#hdlTree').append(wrap);
@@ -969,8 +1195,10 @@ function wire() {
   $('#clkHz').onchange = e => { S.clkHz = Number(e.target.value); accumulator = 0; log(`Ideal clock: ${S.clkHz} Hz. Execution speed is limited by native simulation and display throughput.`); };
   $('#btnMute').onclick = () => { const muted = !audio.isMuted(); audio.setMuted(muted); if (!muted) audio.resume(); $('#btnMute').setAttribute('aria-pressed', String(muted)); $('#muteLabel').textContent = muted ? 'Sound off' : 'Sound on'; };
   $('#btnElab').onclick = () => build(); $('#topSelect').onchange = markDirty;
-  $('#btnDemo').onclick = () => { S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; S.assignments.clear(); S.sdf = null; $('#genericInput').value = ''; $('#topLibrary').value = 'work'; $('#standardSelect').value = '93'; renderSdf(); renderSources(); $('#topSelect').value = DEMO_TOP; $('#designTitle').textContent = 'Counter demo'; $('#designSubtitle').textContent = 'Build needed · VHDL-1993'; renderPins(); markDirty(); toast('Counter demo loaded. Click Build design or Flash to compile.'); };
-  $('#btnSaveProject').onclick = () => { saveProject(); ide?.recordRecentProject(); ide?.captureBaseline(); download(JSON.stringify(projectData(), null, 2), 'trace-project.json', 'application/json'); toast('Project saved, including sources, libraries and pin mappings.'); };
+  $('#btnDemo').onclick = () => { S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; S.assignments.clear(); S.discoveredPorts = []; S.projectDir = null; S.projectName = 'Counter demo'; S.sdf = null; $('#genericInput').value = ''; $('#topLibrary').value = 'work'; $('#standardSelect').value = '93'; renderSdf(); renderSources(); $('#topSelect').value = DEMO_TOP; $('#designTitle').textContent = 'Counter demo'; $('#designSubtitle').textContent = 'Build needed · VHDL-1993'; renderPins(); syncProjectSaveUI(); markDirty(); toast('Counter demo loaded. Click Build & Compile when ready.'); };
+  $('#btnSaveProject').onclick = () => saveProjectToDisk({ saveAs: false });
+  $('#btnOpenPinoutRef')?.addEventListener('click', () => openTools('pinout'));
+  $('#pinoutSearch')?.addEventListener('input', () => renderPinoutRef());
   for (const id of ['standardSelect', 'topLibrary', 'genericInput', 'sdfInstance', 'sdfCorner']) $('#' + id).onchange = markDirty;
   $('#clearSdf').onclick = () => { S.sdf = null; renderSdf(); markDirty(); };
   $('#replayScope').onchange = e => { S.vcd.scope = e.target.value; buildBindings(); renderPins(); board?.clearOutputs(); sampleOutputs(); };
@@ -1016,7 +1244,8 @@ function wire() {
   };
   window.addEventListener('keydown', e => {
     const mod = e.ctrlKey || e.metaKey;
-    if (mod && !e.altKey && e.key.toLowerCase() === 's') { e.preventDefault(); ide?.saveAndCompile(); return; }
+    if (mod && !e.altKey && e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); saveProjectToDisk({ saveAs: false }); return; }
+    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); ide?.saveAndCompile(); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'b') { e.preventDefault(); flashToBoard(); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'e') { e.preventDefault(); ide?.setEditorPaneOpen(!$('#sourceDialog')?.open); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'o') { e.preventDefault(); $('#fileInput').click(); return; }
@@ -1247,14 +1476,15 @@ async function boot() {
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
   try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { if (pressed) trackUiAction('3D', $('#view3d'), `press ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.4); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames')); applyTheme(document.documentElement.dataset.theme); wire();
-  ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, renderSources, openTools, syncNavigation, projectData, saveProject, restoreProject, loadFiles, stopAllSimulations });
+  ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, renderSources, openTools, syncNavigation, projectData, saveProject, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations });
   wireActionLogger();
   fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);
-  window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, get ide() { return ide; }, get actions() { return [...uiActions]; }, flushActions, build, flashToBoard, advance, loadFiles, toggleDip, stopAllSimulations };
+  window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, get ide() { return ide; }, get actions() { return [...uiActions]; }, flushActions, build, flashToBoard, advance, loadFiles, toggleDip, stopAllSimulations, saveProjectToDisk, openProjectFromDiskPath };
   try { const saved = localStorage.getItem('trace.project.v1'); if (saved) { const parsed = JSON.parse(saved); if (Array.isArray(parsed?.sources) && parsed.sources.length) restoreProject(parsed); } } catch (e) { importError(new Error(`Saved project could not be restored: ${e.message}`)); S.sources = []; renderSources(); setStatus(); return; }
   S.dirty = true;
   renderPins();
+  syncProjectSaveUI();
   ide.openFirst();
   ide.captureBaseline();
   ide.showHome(true);

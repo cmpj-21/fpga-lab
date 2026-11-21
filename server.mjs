@@ -125,6 +125,252 @@ async function json(req, limit = 8 * 1024 * 1024) {
   for await (const chunk of req) { size += chunk.length; if (size > limit) throw new Error(`Request exceeds ${limit >= 1024 * 1024 ? `${limit / 1024 / 1024} MB` : `${limit / 1024} KB`}.`); chunks.push(chunk); }
   return JSON.parse(Buffer.concat(chunks).toString());
 }
+async function runPowershell(script) {
+  return new Promise((resolve, reject) => {
+    execFile('powershell.exe', ['-NoProfile', '-STA', '-Command', script], { windowsHide: true, timeout: 180000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) return reject(new Error(stderr?.trim() || err.message));
+      resolve(stdout.trim());
+    });
+  });
+}
+async function pickProjectFolder(initialDir = '') {
+  if (process.platform !== 'win32') throw new Error('Native folder picker is supported on Windows.');
+  let start = HDL_ROOT;
+  if (initialDir && path.isAbsolute(initialDir)) {
+    const exists = await fs.stat(initialDir).then(s => s.isDirectory(), () => false);
+    if (exists) start = initialDir;
+  } else {
+    const exists = await fs.stat(start).then(s => s.isDirectory(), () => false);
+    if (!exists) start = ROOT;
+  }
+  const safeStart = start.replace(/'/g, "''");
+  const ps = [
+    'Add-Type -AssemblyName System.Windows.Forms',
+    '$owner = New-Object System.Windows.Forms.Form',
+    '$owner.TopMost = $true',
+    '$owner.StartPosition = "CenterScreen"',
+    '$dlg = New-Object System.Windows.Forms.FolderBrowserDialog',
+    '$dlg.Description = "Choose FPGA Project Folder (saves .qpf, .qsf & .vhd files)"',
+    '$dlg.UseDescriptionForTitle = $true',
+    '$dlg.ShowNewFolderButton = $true',
+    `$dlg.SelectedPath = '${safeStart}'`,
+    '$res = $dlg.ShowDialog($owner)',
+    '$owner.Dispose()',
+    'if ($res -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dlg.SelectedPath }',
+  ].join('; ');
+  const chosen = await runPowershell(ps);
+  return chosen ? { cancelled: false, dir: path.resolve(chosen) } : { cancelled: true };
+}
+async function pickProjectFile(initialDir = '') {
+  if (process.platform !== 'win32') throw new Error('Native file picker is supported on Windows.');
+  let start = HDL_ROOT;
+  if (initialDir && path.isAbsolute(initialDir)) {
+    const exists = await fs.stat(initialDir).then(s => s.isDirectory(), () => false);
+    if (exists) start = initialDir;
+  } else {
+    const exists = await fs.stat(start).then(s => s.isDirectory(), () => false);
+    if (!exists) start = ROOT;
+  }
+  const safeStart = start.replace(/'/g, "''");
+  const ps = [
+    'Add-Type -AssemblyName System.Windows.Forms',
+    '$owner = New-Object System.Windows.Forms.Form',
+    '$owner.TopMost = $true',
+    '$dlg = New-Object System.Windows.Forms.OpenFileDialog',
+    '$dlg.Title = "Open Trace / Quartus FPGA Project"',
+    `$dlg.InitialDirectory = '${safeStart}'`,
+    '$dlg.Filter = "FPGA Projects (*.qpf;*.qsf;*.json)|*.qpf;*.qsf;*.json|All Files (*.*)|*.*"',
+    '$res = $dlg.ShowDialog($owner)',
+    '$owner.Dispose()',
+    'if ($res -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dlg.FileName }',
+  ].join('; ');
+  const chosen = await runPowershell(ps);
+  return chosen ? { cancelled: false, file: path.resolve(chosen) } : { cancelled: true };
+}
+const SAFE_SRC_NAME = /^[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i;
+function sanitizeProjectSlug(name, fallback = 'fpga_project') {
+  const clean = String(name || '').trim().replace(/[^a-z0-9_-]/gi, '_').replace(/_+/g, '_').replace(/^[_-]+|[_-]+$/g, '');
+  return clean || fallback;
+}
+function formatQsfValue(val) {
+  return /[\s\[\]()]/.test(val) ? `{${val}}` : val;
+}
+async function saveProjectToFolder({ dir, projectName, project }) {
+  if (typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error('Project folder must be an absolute path.');
+  if (!project || !Array.isArray(project.sources) || !project.sources.length || project.sources.length > 100) throw new Error('Project must contain 1–100 source files.');
+  const targetDir = path.resolve(dir);
+  await fs.mkdir(targetDir, { recursive: true });
+  const top = String(project.top || '').trim() || project.sources[0].name.replace(/\.[^.]+$/, '');
+  const slug = sanitizeProjectSlug(projectName || top || path.basename(targetDir));
+  const stdMap = { '93': 'VHDL_1993', '02': 'VHDL_2002', '08': 'VHDL_2008' };
+  const std = ['93', '02', '08'].includes(project.standard) ? project.standard : '08';
+  const writtenFiles = [];
+  for (const src of project.sources) {
+    if (!src || typeof src.name !== 'string' || typeof src.text !== 'string' || !SAFE_SRC_NAME.test(src.name)) throw new Error(`Invalid source filename: ${src?.name}`);
+    await fs.writeFile(path.join(targetDir, src.name), src.text, 'utf8');
+    writtenFiles.push(src.name);
+  }
+  let sdfFile = null;
+  if (project.sdf && typeof project.sdf.text === 'string') {
+    const sdfName = /^[a-z0-9_][a-z0-9_. -]*\.sdf$/i.test(project.sdf.name || '') ? project.sdf.name : `${slug}.sdf`;
+    await fs.writeFile(path.join(targetDir, sdfName), project.sdf.text, 'utf8');
+    writtenFiles.push(sdfName);
+    sdfFile = { name: sdfName, instance: project.sdf.instance || '/', corner: project.sdf.corner || 'typ' };
+  }
+  const qpfName = `${slug}.qpf`;
+  const qsfName = `${slug}.qsf`;
+  const qpfBody = [
+    'QUARTUS_VERSION = "20.1"',
+    `DATE = "${new Date().toISOString()}"`,
+    '',
+    '# Revisions',
+    `PROJECT_REVISION = "${slug}"`,
+    '',
+  ].join('\n');
+  const qsfLines = [
+    '# Trace FPGA Workbench — Quartus Settings File',
+    '# Target: RZ-EasyFPGA A2.2 (Intel Cyclone IV EP4CE6E22C8N)',
+    'set_global_assignment -name FAMILY "Cyclone IV E"',
+    'set_global_assignment -name DEVICE EP4CE6E22C8N',
+    `set_global_assignment -name TOP_LEVEL_ENTITY ${formatQsfValue(top)}`,
+    `set_global_assignment -name VHDL_INPUT_VERSION ${stdMap[std]}`,
+  ];
+  for (const src of project.sources) {
+    if (/\.(vhd|vhdl|vho)$/i.test(src.name)) {
+      const lib = src.library && src.library !== 'work' && /^[a-z][a-z0-9_]*$/i.test(src.library) ? ` -library ${src.library}` : '';
+      qsfLines.push(`set_global_assignment -name VHDL_FILE ${formatQsfValue(src.name)}${lib}`);
+    }
+  }
+  const assignments = Array.isArray(project.assignments) ? project.assignments : [];
+  const validPins = assignments.filter(p => Array.isArray(p) && p.length === 2 && Number.isInteger(p[0]) && p[0] >= 1 && p[0] <= 144 && typeof p[1] === 'string' && p[1].trim());
+  if (validPins.length) {
+    qsfLines.push('');
+    qsfLines.push('# Pin & Location Assignments');
+    for (const [pin, port] of validPins.sort((a, b) => a[0] - b[0])) {
+      qsfLines.push(`set_location_assignment PIN_${pin} -to ${formatQsfValue(port.trim())}`);
+    }
+  }
+  const meta = {
+    version: 1,
+    projectName: String(projectName || slug),
+    topLibrary: project.topLibrary || 'work',
+    generics: project.generics || '',
+    sdf: sdfFile,
+    extraFiles: project.sources.filter(s => !/\.(vhd|vhdl|vho)$/i.test(s.name)).map(s => s.name),
+  };
+  qsfLines.push('', `# TRACE_META: ${JSON.stringify(meta)}`, '');
+  await fs.writeFile(path.join(targetDir, qpfName), qpfBody, 'utf8');
+  await fs.writeFile(path.join(targetDir, qsfName), qsfLines.join('\n'), 'utf8');
+  writtenFiles.push(qpfName, qsfName);
+  appendLogLine('info', 'app', `Saved project "${meta.projectName}" to ${targetDir} (${qpfName}, ${qsfName}, ${project.sources.length} source(s), ${validPins.length} pin(s))`);
+  return { ok: true, dir: targetDir, projectName: meta.projectName, qpf: qpfName, qsf: qsfName, files: writtenFiles };
+}
+function parseQsfText(text) {
+  const pins = [], files = [];
+  let top = '', standard = '08', meta = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const metaMatch = raw.match(/^\s*#\s*TRACE_META:\s*(\{.*\})\s*$/);
+    if (metaMatch) { try { meta = JSON.parse(metaMatch[1]); } catch {} continue; }
+    const line = raw.replace(/#.*$/, '').trim();
+    if (!line) continue;
+    const unq = s => s.replace(/^["'{]|["'}]$/g, '').trim();
+    const tok = line.match(/"[^"]*"|'[^']*'|\{[^}]*\}|\S+/g)?.map(unq) || [];
+    if (tok[0] === 'set_location_assignment') {
+      const pinTok = tok.find(t => /^PIN_\d+$/i.test(t));
+      const toIdx = tok.indexOf('-to');
+      if (pinTok && toIdx >= 0 && tok[toIdx + 1]) {
+        const pin = Number(pinTok.slice(4));
+        if (pin >= 1 && pin <= 144) pins.push([pin, tok[toIdx + 1].toLowerCase()]);
+      }
+    } else if (tok[0] === 'set_global_assignment') {
+      const nameIdx = tok.indexOf('-name');
+      const key = nameIdx >= 0 ? tok[nameIdx + 1]?.toUpperCase() : '';
+      const val = nameIdx >= 0 ? tok[nameIdx + 2] : '';
+      if (key === 'TOP_LEVEL_ENTITY' && val) top = val.toLowerCase();
+      else if (key === 'VHDL_INPUT_VERSION' && val) {
+        if (/1993|93/i.test(val)) standard = '93';
+        else if (/2002|02/i.test(val)) standard = '02';
+        else if (/2008|08/i.test(val)) standard = '08';
+      } else if (key === 'VHDL_FILE' && val) {
+        const libIdx = tok.indexOf('-library');
+        const library = libIdx >= 0 && tok[libIdx + 1] ? tok[libIdx + 1].toLowerCase() : 'work';
+        files.push({ name: path.basename(val.replaceAll('\\', '/')), rel: val, library });
+      }
+    }
+  }
+  return { top, standard, pins, files, meta };
+}
+async function openProjectFromDisk(inputPath) {
+  if (typeof inputPath !== 'string' || !inputPath.trim()) throw new Error('Specify a project file or folder path.');
+  const resolved = path.isAbsolute(inputPath) ? path.resolve(inputPath) : path.resolve(HDL_ROOT, inputPath);
+  const st = await fs.stat(resolved).catch(() => null);
+  if (!st) throw new Error(`Project path not found: ${resolved}`);
+  if (st.isFile() && /\.json$/i.test(resolved)) {
+    const parsed = JSON.parse(await fs.readFile(resolved, 'utf8'));
+    const dir = path.dirname(resolved);
+    appendLogLine('info', 'app', `Opened JSON project from ${resolved}`);
+    return { ok: true, dir, projectName: parsed.top || path.basename(resolved, '.json'), qpf: null, qsf: null, project: parsed };
+  }
+  const dir = st.isDirectory() ? resolved : path.dirname(resolved);
+  let qpfName = st.isFile() && /\.qpf$/i.test(resolved) ? path.basename(resolved) : null;
+  let qsfName = st.isFile() && /\.qsf$/i.test(resolved) ? path.basename(resolved) : null;
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  if (!qpfName) qpfName = entries.find(e => e.isFile() && /\.qpf$/i.test(e.name))?.name || null;
+  if (!qsfName && qpfName) {
+    const qpfText = await fs.readFile(path.join(dir, qpfName), 'utf8').catch(() => '');
+    const rev = qpfText.match(/PROJECT_REVISION\s*=\s*"([^"]+)"/i)?.[1];
+    if (rev && entries.some(e => e.isFile() && e.name.toLowerCase() === `${rev}.qsf`.toLowerCase())) {
+      qsfName = entries.find(e => e.isFile() && e.name.toLowerCase() === `${rev}.qsf`.toLowerCase()).name;
+    }
+  }
+  if (!qsfName) qsfName = entries.find(e => e.isFile() && /\.qsf$/i.test(e.name))?.name || null;
+  if (!qsfName) throw new Error(`No .qsf project file found in ${dir}`);
+  const qsfText = await fs.readFile(path.join(dir, qsfName), 'utf8');
+  const parsed = parseQsfText(qsfText);
+  const sources = [];
+  const seen = new Set();
+  for (const ref of parsed.files) {
+    const candidate = await fs.stat(path.resolve(dir, ref.rel)).then(() => path.resolve(dir, ref.rel), () => path.join(dir, ref.name));
+    const text = await fs.readFile(candidate, 'utf8').catch(() => null);
+    if (text !== null && SAFE_SRC_NAME.test(ref.name) && !seen.has(ref.name.toLowerCase())) {
+      seen.add(ref.name.toLowerCase());
+      sources.push({ name: ref.name, text, library: ref.library || 'work' });
+    }
+  }
+  for (const extra of parsed.meta?.extraFiles || []) {
+    if (SAFE_SRC_NAME.test(extra) && !seen.has(extra.toLowerCase())) {
+      const text = await fs.readFile(path.join(dir, extra), 'utf8').catch(() => null);
+      if (text !== null) { seen.add(extra.toLowerCase()); sources.push({ name: extra, text, library: 'work' }); }
+    }
+  }
+  if (!sources.length) {
+    for (const e of entries) {
+      if (e.isFile() && /\.(vhd|vhdl|vho)$/i.test(e.name) && SAFE_SRC_NAME.test(e.name)) {
+        sources.push({ name: e.name, text: await fs.readFile(path.join(dir, e.name), 'utf8'), library: 'work' });
+      }
+    }
+  }
+  if (!sources.length) throw new Error(`No readable VHDL source files found for ${qsfName} in ${dir}`);
+  let sdf = null;
+  if (parsed.meta?.sdf?.name) {
+    const sdfText = await fs.readFile(path.join(dir, parsed.meta.sdf.name), 'utf8').catch(() => null);
+    if (sdfText !== null) sdf = { name: parsed.meta.sdf.name, text: sdfText, instance: parsed.meta.sdf.instance || '/', corner: parsed.meta.sdf.corner || 'typ' };
+  }
+  const project = {
+    format: 'trace-project',
+    version: 1,
+    sources,
+    assignments: parsed.pins,
+    top: parsed.top || '',
+    topLibrary: parsed.meta?.topLibrary || 'work',
+    standard: parsed.standard || '08',
+    generics: parsed.meta?.generics || '',
+    sdf,
+  };
+  const projectName = parsed.meta?.projectName || path.basename(qsfName, '.qsf');
+  appendLogLine('info', 'app', `Opened project "${projectName}" from ${dir} (${sources.length} source(s), ${parsed.pins.length} pin(s))`);
+  return { ok: true, dir, projectName, qpf: qpfName, qsf: qsfName, project };
+}
 async function hdlTree() {
   const groups = [];
   async function walk(dir, rel, depth) {
@@ -134,7 +380,7 @@ async function hdlTree() {
       if (e.name.startsWith('.') || ['work', 'greybox_tmp'].includes(e.name)) continue;
       const full = path.join(dir, e.name), r = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory() && depth < 4) await walk(full, r, depth + 1);
-      else if (e.isFile() && /\.(vhd|vhdl|qsf|sof|pof|vo|vho|vcd|cf|sdf|hex|mif|mem|txt|dat)$/i.test(e.name)) files.push({ name: e.name, rel: r, size: (await fs.stat(full)).size, kind: path.extname(e.name).slice(1).toLowerCase() });
+      else if (e.isFile() && /\.(vhd|vhdl|qpf|qsf|sof|pof|vo|vho|vcd|cf|sdf|hex|mif|mem|txt|dat)$/i.test(e.name)) files.push({ name: e.name, rel: r, size: (await fs.stat(full)).size, kind: path.extname(e.name).slice(1).toLowerCase() });
     }
     if (files.length) groups.push({ dir: rel || '.', files: files.sort((a, b) => a.name.localeCompare(b.name)) });
   }
@@ -168,6 +414,21 @@ const server = http.createServer(async (req, res) => {
       return send(res, written ? 200 : 500, written ? { ok: true, file: ACTION_LOG_FILE } : { error: `Cannot write ${ACTION_LOG_FILE}.` });
     }
     if (url.pathname === '/api/hdl/tree') return send(res, 200, { root: HDL_ROOT, groups: await hdlTree() });
+    if (url.pathname === '/api/project/pick-folder' && req.method === 'POST') {
+      const body = await json(req, 32 * 1024).catch(() => ({}));
+      return send(res, 200, await pickProjectFolder(body?.initialDir));
+    }
+    if (url.pathname === '/api/project/pick-open' && req.method === 'POST') {
+      const body = await json(req, 32 * 1024).catch(() => ({}));
+      return send(res, 200, await pickProjectFile(body?.initialDir));
+    }
+    if (url.pathname === '/api/project/save' && req.method === 'POST') {
+      return send(res, 200, await saveProjectToFolder(await json(req, 12 * 1024 * 1024)));
+    }
+    if (url.pathname === '/api/project/open' && req.method === 'POST') {
+      const body = await json(req, 32 * 1024);
+      return send(res, 200, await openProjectFromDisk(body?.path));
+    }
     if (url.pathname === '/api/hdl/file') {
       const full = await fs.realpath(path.resolve(HDL_ROOT, url.searchParams.get('path') || ''));
       if (!within(await fs.realpath(HDL_ROOT), full)) return send(res, 403, { error: 'Path outside HDL root.' });

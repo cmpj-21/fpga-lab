@@ -24,6 +24,79 @@ export const DIGIT_NETS = ['dtube1', 'dtube2', 'dtube3', 'dtube4'];
 export const LED_NETS = ['led1', 'led2', 'led3', 'led4'];
 export const KEY_NETS = ['s1', 's2', 's3', 's4'];
 
+export const BOARD_PINOUT_GROUPS = [
+  {
+    group: 'Clock & Reset',
+    pins: [
+      { pin: 23, net: 'clk', polarity: '50 MHz', note: 'Onboard crystal oscillator' },
+      { pin: 25, net: 'reset_btn', polarity: 'Active-Low', note: 'Reset push button (0 = pressed)' },
+    ],
+  },
+  {
+    group: 'Tactile Keys & DIP Switches (Parallel)',
+    pins: [
+      { pin: 88, net: 's1', polarity: 'Active-Low', note: 'Key S1 + DIP 1 (0 = pressed / ON)' },
+      { pin: 89, net: 's2', polarity: 'Active-Low', note: 'Key S2 + DIP 2 (0 = pressed / ON)' },
+      { pin: 90, net: 's3', polarity: 'Active-Low', note: 'Key S3 + DIP 3 (0 = pressed / ON)' },
+      { pin: 91, net: 's4', polarity: 'Active-Low', note: 'Key S4 + DIP 4 (0 = pressed / ON)' },
+    ],
+  },
+  {
+    group: 'User LEDs',
+    pins: [
+      { pin: 87, net: 'led1', polarity: 'Active-Low', note: 'LED1 (0 = lit, 1 = dark)' },
+      { pin: 86, net: 'led2', polarity: 'Active-Low', note: 'LED2 (0 = lit, 1 = dark)' },
+      { pin: 85, net: 'led3', polarity: 'Active-Low', note: 'LED3 (0 = lit, 1 = dark)' },
+      { pin: 84, net: 'led4', polarity: 'Active-Low', note: 'LED4 (0 = lit, 1 = dark)' },
+    ],
+  },
+  {
+    group: '7-Segment Display Digits',
+    pins: [
+      { pin: 133, net: 'dtube1', polarity: 'Active-Low', note: 'Digit 1 anode select (0 = enabled)' },
+      { pin: 135, net: 'dtube2', polarity: 'Active-Low', note: 'Digit 2 anode select (0 = enabled)' },
+      { pin: 136, net: 'dtube3', polarity: 'Active-Low', note: 'Digit 3 anode select (0 = enabled)' },
+      { pin: 137, net: 'dtube4', polarity: 'Active-Low', note: 'Digit 4 anode select (0 = enabled)' },
+    ],
+  },
+  {
+    group: '7-Segment Display Segments',
+    pins: [
+      { pin: 128, net: 'seg_a', polarity: 'Active-Low', note: 'Segment A (0 = lit)' },
+      { pin: 121, net: 'seg_b', polarity: 'Active-Low', note: 'Segment B (0 = lit)' },
+      { pin: 125, net: 'seg_c', polarity: 'Active-Low', note: 'Segment C (0 = lit)' },
+      { pin: 129, net: 'seg_d', polarity: 'Active-Low', note: 'Segment D (0 = lit)' },
+      { pin: 132, net: 'seg_e', polarity: 'Active-Low', note: 'Segment E (0 = lit)' },
+      { pin: 126, net: 'seg_f', polarity: 'Active-Low', note: 'Segment F (0 = lit)' },
+      { pin: 124, net: 'seg_g', polarity: 'Active-Low', note: 'Segment G (0 = lit)' },
+      { pin: 127, net: 'seg_dp', polarity: 'Active-Low', note: 'Decimal point DP (0 = lit)' },
+    ],
+  },
+  {
+    group: 'Buzzer & UART Serial',
+    pins: [
+      { pin: 110, net: 'beep', polarity: 'Active-High', note: 'Piezo buzzer (1 = sound on)' },
+      { pin: 114, net: 'uart_txd', polarity: '3.3V TTL', note: 'UART transmit (DB9 / MAX232)' },
+      { pin: 115, net: 'uart_rxd', polarity: '3.3V TTL', note: 'UART receive (DB9 / MAX232)' },
+    ],
+  },
+  {
+    group: 'VGA, PS/2, I²C & IR',
+    pins: [
+      { pin: 101, net: 'vga_hs', polarity: 'VGA DB15', note: 'Horizontal sync' },
+      { pin: 103, net: 'vga_vs', polarity: 'VGA DB15', note: 'Vertical sync' },
+      { pin: 106, net: 'vga_r', polarity: 'VGA DB15', note: 'Red 1-bit channel' },
+      { pin: 105, net: 'vga_g', polarity: 'VGA DB15', note: 'Green 1-bit channel' },
+      { pin: 104, net: 'vga_b', polarity: 'VGA DB15', note: 'Blue 1-bit channel' },
+      { pin: 119, net: 'ps2_clk', polarity: 'PS/2', note: 'PS/2 clock' },
+      { pin: 120, net: 'ps2_data', polarity: 'PS/2', note: 'PS/2 data' },
+      { pin: 112, net: 'i2c_scl', polarity: 'I²C', note: 'AT24C02 EEPROM / LM75 clock' },
+      { pin: 113, net: 'i2c_sda', polarity: 'I²C', note: 'AT24C02 EEPROM / LM75 data' },
+      { pin: 100, net: 'ir_rx', polarity: 'Active-Low', note: '38 kHz IR receiver' },
+    ],
+  },
+];
+
 export const COMPONENTS = [
   { id: 'key1', net: 's1' },
   { id: 'key2', net: 's2' },

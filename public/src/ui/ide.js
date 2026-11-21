@@ -586,12 +586,13 @@ export function createIde(api) {
       ? `Detected ${changes.join(', ')}. Saving updates your workspace and Recent Projects list; discarding reverts these changes. All active simulations will be cancelled and stopped.`
       : 'Saving updates your workspace and Recent Projects list; discarding reverts any changes from this session. Returning to the Home menu will cancel and stop all active simulations.';
   }
-  function recordRecentProject(customTitle = '') {
+  function recordRecentProject(customTitle = '', customDir = null, customQpf = null) {
     if (!S.sources.length || !api.projectData) return;
     const project = api.projectData();
     const topName = project.top || S.sim?.top || project.sources[0]?.name.replace(/\.[^.]+$/, '') || 'fpga_project';
-    const title = customTitle || projectTitle || (topName === DEMO_TOP ? 'Counter demo' : topName);
-    const key = `${title.toLowerCase()}::${project.sources.map(s => s.name).join(',')}`;
+    const title = customTitle || S.projectName || projectTitle || (topName === DEMO_TOP ? 'Counter demo' : topName);
+    const dir = customDir !== null ? customDir : (S.projectDir || null);
+    const key = dir ? `dir::${dir.toLowerCase()}` : `${title.toLowerCase()}::${project.sources.map(s => s.name).join(',')}`;
     const list = loadRecents().filter(item => item.key !== key);
     list.unshift({
       key,
@@ -599,6 +600,8 @@ export function createIde(api) {
       top: topName,
       standard: project.standard || S.standard || '93',
       files: project.sources.map(s => s.name),
+      dir,
+      qpf: customQpf || null,
       updatedAt: Date.now(),
       project,
     });
@@ -643,10 +646,14 @@ export function createIde(api) {
       titleRow.append(strong, badge, time);
       const filesRow = document.createElement('div');
       filesRow.className = 'hr-files mono';
-      filesRow.textContent = `${item.files?.join(', ') || 'No files'} · Top: ${item.top || 'auto'}`;
+      filesRow.textContent = item.dir ? `${item.dir} · ${item.files?.join(', ') || ''}` : `${item.files?.join(', ') || 'No files'} · Top: ${item.top || 'auto'}`;
       openBtn.append(titleRow, filesRow);
-      openBtn.onclick = () => {
+      openBtn.onclick = async () => {
         try {
+          if (item.dir && api.openProjectFromDiskPath) {
+            const opened = await api.openProjectFromDiskPath(item.dir);
+            if (opened) return;
+          }
           const prevRecents = loadRecents();
           let prevStorage = null;
           try { prevStorage = localStorage.getItem('trace.project.v1'); } catch {}
@@ -656,7 +663,7 @@ export function createIde(api) {
           captureBaseline(item.title, { prevRecents, prevStorage });
           showHome(false);
           api.markDirty();
-          api.toast(`Opened ${item.title}. Click Build design or Flash to compile.`);
+          api.toast(`Opened ${item.title}. Click Build & Compile when ready.`);
         } catch (err) {
           api.toast(err.message, 'err');
         }
@@ -709,15 +716,21 @@ export function createIde(api) {
     }
     if ($('#homeConfirmProject')) $('#homeConfirmProject').textContent = currentProjectTitle();
     if ($('#homeConfirmDetail')) $('#homeConfirmDetail').textContent = describeRecentChanges();
+    if ($('#homeConfirmSave')) $('#homeConfirmSave').textContent = S.projectDir ? 'Save & Return Home' : 'Save Project As… & Return';
     if (!dlg.open) dlg.showModal();
   }
   async function confirmSaveAndReturnHome() {
     if (!validateLibraries()) return;
     commitAll();
     api.renderSources();
-    api.saveProject?.();
-    recordRecentProject(projectTitle);
-    captureBaseline(projectTitle);
+    if (api.saveProjectToDisk) {
+      const ok = await api.saveProjectToDisk({ saveAs: !S.projectDir });
+      if (!ok) return;
+    } else {
+      api.saveProject?.();
+      recordRecentProject(projectTitle);
+      captureBaseline(projectTitle);
+    }
     $('#homeConfirmDialog')?.close();
     await api.stopAllSimulations?.();
     showHome(true);
@@ -725,8 +738,7 @@ export function createIde(api) {
       pendingFocusWizard = false;
       openNewProjectWizard();
     }
-    api.toast('Saved project changes. All simulations stopped.');
-    api.logEvent?.('info', `Returned to Home: saved changes to ${currentProjectTitle()} and stopped all simulations`);
+    api.logEvent?.('info', `Returned to Home: saved changes to ${currentProjectTitle()} (${S.projectDir || 'local'}) and stopped all simulations`);
   }
   async function confirmDiscardAndReturnHome() {
     const discardedTitle = currentProjectTitle();
@@ -785,12 +797,15 @@ export function createIde(api) {
       standard,
       generics: '',
       sdf: null,
+      projectDir: null,
+      projectName: name || cleanEntity,
     };
     $('#newProjectDialog')?.close();
     api.restoreProject(project);
     for (const src of sources) openFile(src.name, { focus: false });
     openFile(fileName);
     captureBaseline(name || cleanEntity, { prevRecents, prevStorage });
+    api.syncProjectSaveUI?.();
     showHome(false);
     api.markDirty();
     api.toast(`Created ${name || cleanEntity} (${sources.length} file${sources.length === 1 ? '' : 's'}). Click Build & Compile when ready.`);
@@ -819,6 +834,10 @@ export function createIde(api) {
         btn.append(kind, pathSpan);
         btn.onclick = async () => {
           try {
+            if (file.kind === 'qpf' && api.openProjectFromDiskPath) {
+              await api.openProjectFromDiskPath(file.rel);
+              return;
+            }
             const prevRecents = loadRecents();
             let prevStorage = null;
             try { prevStorage = localStorage.getItem('trace.project.v1'); } catch {}
@@ -839,9 +858,12 @@ export function createIde(api) {
     home: () => requestReturnHome(),
     newProject: () => requestReturnHome({ focusWizard: true }),
     newFile: showNewFile,
+    openProject: () => api.openProjectFromDiskPath?.(),
     openFiles: () => $('#fileInput').click(),
     save: saveAndCompile,
-    saveProject: () => $('#btnSaveProject').click(),
+    saveProject: () => api.saveProjectToDisk?.({ saveAs: false }),
+    saveProjectAs: () => api.saveProjectToDisk?.({ saveAs: true }),
+    exportJson: () => { api.saveProject?.(); api.download?.(JSON.stringify(api.projectData(), null, 2), 'trace-project.json', 'application/json'); api.toast('Exported project JSON backup.'); },
     loadDemo: () => $('#btnDemo').click(),
     closeTab: () => active && closeTab(active),
     undo: () => { docs.get(active)?.editor.focus(); document.execCommand('undo'); },
@@ -852,6 +874,7 @@ export function createIde(api) {
     panelWaves: () => { if ($('#app').classList.contains('no-waves')) $('#btnSignals').click(); },
     panelProblems: () => api.openTools('problems'),
     panelConsole: () => api.openTools('console'),
+    panelPinout: () => api.openTools('pinout'),
     panelTruth: () => api.openTools('truth'),
     panelUart: () => api.openTools('uart'),
     panelBitstream: () => api.openTools('programmer'),
@@ -931,6 +954,7 @@ export function createIde(api) {
     $('#homeConfirmCancel')?.addEventListener('click', () => { pendingFocusWizard = false; $('#homeConfirmDialog')?.close(); });
     $('#homeThemeBtn')?.addEventListener('click', () => $('#btnTheme')?.click());
     $('#homeAboutBtn')?.addEventListener('click', () => $('#btnAbout')?.click());
+    $('#homeOpenProjectBtn')?.addEventListener('click', () => api.openProjectFromDiskPath?.());
     $('#homeOpenBtn')?.addEventListener('click', () => $('#fileInput')?.click());
     $('#homeDemoBtn')?.addEventListener('click', () => {
       const prevRecents = loadRecents();
@@ -986,7 +1010,7 @@ export function createIde(api) {
   return {
     openFile, closeTab, activate, commitAll, hasUnsaved, validateLibraries, saveAndCompile, saveAndFlash, syncFromSources, openFirst, updateStatus,
     setProblems, reportBuildFailure, resetLayout, setEditorPaneOpen,
-    showHome, requestReturnHome, resumeWorkbench, captureBaseline, renderHome, recordRecentProject, populateHomeHdl,
+    showHome, requestReturnHome, resumeWorkbench, captureBaseline, currentProjectTitle, renderHome, recordRecentProject, populateHomeHdl,
     get active() { return active; },
     get tabs() { return [...tabs]; },
     get problems() { return problems; },

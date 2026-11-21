@@ -99,10 +99,10 @@ Screenshots illustrate the layout; your design, clock, open panels, and signal v
 | Top Step icon | Advance one generated clock cycle; in replay, advance one recorded timestamp |
 | Run / Pause | Start or pause automatic advancement |
 | Open files | Import local source files, artifacts, or a saved Trace project |
-| Files | Sources, top entity, compiler options, project saving, and local HDL library |
-| Pins | Connect board nets to your design's ports or individual vector bits |
+| Files | Sources, top entity, compiler options, Quartus `.qpf`/`.qsf` Save Project / Save Project As…, and local HDL library |
+| Pins | Quartus-style Pin Planner listing detected design ports where you assign board pin numbers (`PIN_xx`); includes a **Board Pinout ↗** button to open the Master Pinout Reference |
 | Signals | Show or hide the logic analyzer |
-| Tools | Console, Truth table, UART, and Bitstream inspection |
+| Tools | Console, Problems, Master Board Pinout Reference, Truth table, UART, and Bitstream inspection |
 | About / Model limits | Explain supported behavior and what is not simulated |
 | Board I/O | S1–S4 tactile keys, 4-position DIP switches, Reset, LED indicators, and virtual Power |
 | Controls below the board | Additional top-level inputs not exclusively represented by board controls |
