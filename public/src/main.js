@@ -1067,7 +1067,12 @@ function renderPins() {
     if (boardNet) tr.dataset.net = boardNet;
     if (currentPin) tr.dataset.pin = currentPin;
     if (boardNet && activeNets.includes(boardNet)) tr.classList.add('selected-pin');
-    tr.onclick = e => { if (e.target.tagName !== 'INPUT' && currentPin) board?.highlightPin(currentPin); };
+    tr.onclick = e => {
+      if (e.target.tagName !== 'INPUT' && currentPin) {
+        if (ide && !ide.boardOpen) ide.setBoardPaneOpen(true);
+        board?.highlightPin(currentPin);
+      }
+    };
     const nameCell = document.createElement('td');
     nameCell.textContent = port.label;
     const dirCell = document.createElement('td');
@@ -1225,7 +1230,8 @@ function exportTruthTable() {
 function renderTruthInputs() {
   $('#truthInputs').replaceChildren(); $('#truthHead').replaceChildren(); $('#truthBody').replaceChildren(); $('#truthSummary').textContent = '';
   syncTruthExportButtons();
-  S.sim.signals.filter(s => s.driveable && s.direction === 1 && s.width === 1 && s.id !== clockId()).slice(0, 12).forEach((signal, i) => {
+  const clkPortName = (S.compiledAssignments.get(23) || S.assignments.get(23) || '').trim().toLowerCase();
+  S.sim.signals.filter(s => s.driveable && s.direction === 1 && s.width === 1 && s.id !== clockId() && s.short.toLowerCase() !== clkPortName).slice(0, 12).forEach((signal, i) => {
     const label = document.createElement('label'); label.className = 'truth-chip'; const input = document.createElement('input'); input.type = 'checkbox'; input.checked = i < 4; input.dataset.truth = signal.short;
     label.append(input, document.createTextNode(signal.short)); $('#truthInputs').append(label);
   });
@@ -1242,8 +1248,13 @@ async function runTruth() {
     const ins = names.map(n => isolated.signals.find(s => s.name === isolated.top + '.' + n));
     const outs = isolated.signals.filter(s => s.direction === 2 && s.name.startsWith(isolated.top + '.') && !s.name.slice(isolated.top.length + 1).includes('.'));
     const header = document.createElement('tr'); [...names, ...outs.map(s => s.name.split('.').pop())].forEach(n => { const th = document.createElement('th'); th.textContent = n; header.append(th); }); $('#truthHead').replaceChildren(header); $('#truthBody').replaceChildren();
+    const activeLowPorts = new Set([25, 88, 89, 90, 91].map(p => (S.compiledAssignments.get(p) || S.assignments.get(p) || '').trim().toLowerCase()).filter(Boolean));
     for (let row = 0; row < 2 ** names.length; row++) {
-      const inputs = isolated.signals.filter(s => s.driveable).map(s => ({ id: s.id, value: (baseInputs.get(s.name) ?? '0'.repeat(s.width)) }));
+      const inputs = isolated.signals.filter(s => s.driveable).map(s => {
+        const shortLow = s.name.startsWith(isolated.top + '.') ? s.name.slice(isolated.top.length + 1).toLowerCase() : s.name.toLowerCase();
+        const fallback = s.width === 1 && activeLowPorts.has(shortLow) ? '1' : '0'.repeat(s.width);
+        return { id: s.id, value: (baseInputs.get(s.name) ?? fallback) };
+      });
       ins.forEach((s, i) => { inputs.find(p => p.id === s.id).value = String((row >> (names.length - i - 1)) & 1); });
       const result = await api(`/api/sim/${isolated.id}/step`, { cycles: 0, inputs });
       if (generation !== S.generation || S.dirty) return;
@@ -1563,6 +1574,14 @@ function wire() {
   };
   window.addEventListener('keydown', e => {
     const mod = e.ctrlKey || e.metaKey;
+    const modalOpen = !!document.querySelector('dialog:modal');
+    const homeOpen = !!($('#homeView') && !$('#homeView').classList.contains('hidden'));
+    if (e.key === 'Escape' && !modalOpen && homeOpen) { if (ide?.hasActiveSession) ide.resumeWorkbench(); return; }
+    if (modalOpen) return;
+    if (homeOpen) {
+      if (mod && !e.altKey && e.key.toLowerCase() === 'o') { e.preventDefault(); $('#fileInput').click(); }
+      return;
+    }
     if (mod && e.altKey && !e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); ide?.saveActiveFileAs(); return; }
     if (mod && e.altKey && !e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); ide?.showNewFile(); return; }
     if (mod && !e.altKey && e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); saveProjectToDisk({ saveAs: false }); return; }
@@ -1572,8 +1591,7 @@ function wire() {
     if (mod && !e.altKey && e.key.toLowerCase() === 'e') { e.preventDefault(); ide?.setEditorPaneOpen(!$('#sourceDialog')?.open); return; }
     if (!mod && e.altKey && e.key.toLowerCase() === 'b') { e.preventDefault(); ide?.setBoardPaneOpen(!ide.boardOpen); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'o') { e.preventDefault(); $('#fileInput').click(); return; }
-    if (e.key === 'Escape' && !document.querySelector('dialog:modal') && $('#homeView') && !$('#homeView').classList.contains('hidden')) { ide?.resumeWorkbench(); return; }
-    if (e.target.closest('input,select,textarea,dialog:modal') || document.querySelector('dialog:modal') || ($('#homeView') && !$('#homeView').classList.contains('hidden')) || e.repeat) return;
+    if (e.target.closest('input,select,textarea') || e.repeat) return;
     if (e.altKey && ['1', '2', '3', '4'].includes(e.key)) { e.preventDefault(); toggleDip(Number(e.key) - 1); return; }
     if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); centerSelection(); return; }
     if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'v') { e.preventDefault(); setTool(board?.toolMode === 'select' ? 'interact' : 'select'); return; }
@@ -1582,9 +1600,15 @@ function wire() {
     if (keys[e.key.toLowerCase()]) { e.preventDefault(); keyInput(keys[e.key.toLowerCase()], true); }
     if (e.code === 'Space' && e.target.tagName !== 'BUTTON') { e.preventDefault(); $('#btnRun').click(); }
     if (e.key === '.') $('#btnStep').click();
-    if (e.key === 'Escape') { if ($('#center').classList.contains('photo-mode')) togglePhotoMode(false); $('#right').classList.add('hidden'); $('#deck').classList.add('hidden'); $('#app').classList.remove('mobile-library'); board?.selectPart(null); syncNavigation(); }
+    if (e.key === 'Escape') {
+      if ($('#center').classList.contains('photo-mode')) { togglePhotoMode(false); return; }
+      $('#right').classList.add('hidden'); $('#deck').classList.add('hidden'); $('#app').classList.remove('mobile-library'); board?.selectPart(null); syncNavigation();
+    }
   });
-  window.addEventListener('keyup', e => { if (keys[e.key.toLowerCase()]) keyInput(keys[e.key.toLowerCase()], false); });
+  window.addEventListener('keyup', e => {
+    const net = keys[e.key.toLowerCase()];
+    if (net && S.keys[net]) keyInput(net, false);
+  });
   window.addEventListener('blur', releaseKeys);
   document.addEventListener('visibilitychange', () => { if (document.hidden) { releaseKeys(); pause(); } });
   $('#pwrToggle').onchange = e => { S.power = e.target.checked; pause(); board?.setPower(S.power); recordLogEvent('info', `Board power switched ${S.power ? 'ON' : 'OFF'}`); if (!S.power) { releaseKeys(); board?.clearOutputs(); sampleOutputs(); } else { if (S.flashed) KEY_NETS.forEach(updateNetInput); sampleOutputs(); } syncKeys(); setStatus(); };
@@ -1697,6 +1721,7 @@ function wire() {
       $('#pmTheaterBtn').textContent = 'Maximize';
       $('#photoStudio').classList.remove('hud-hidden');
       $('#pmHideHudBtn').classList.remove('active');
+      $('#pmHideHudBtn').textContent = 'Hide HUD';
       board?.setPhotoFocusMode(false);
       $('#pmFocusPickBtn')?.classList.remove('active');
       if (board?.stagePose?.enabled) {
@@ -1798,14 +1823,15 @@ function wire() {
       await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
       toast(`Copied ${shot.width}×${shot.height} studio photo to clipboard.`);
     } catch {
-      const a = document.createElement('a'); a.href = shot.dataUrl; a.download = `trace-photo.${shot.format}`; a.click();
+      const ext = shot.format === 'jpeg' ? 'jpg' : shot.format;
+      const a = document.createElement('a'); a.href = shot.dataUrl; a.download = `trace-photo.${ext}`; a.click();
       toast(`Clipboard image copy unavailable; downloaded ${shot.width}×${shot.height} image instead.`);
     }
   };
   $('#btnVcd').onclick = exportVcd; $('#waveZoomIn').onclick = () => { $('#waveFollow').checked = false; waves.zoom(1 / 1.4); }; $('#waveZoomOut').onclick = () => { $('#waveFollow').checked = false; waves.zoom(1.4); }; $('#waveFit').onclick = () => { $('#waveFollow').checked = false; waves.fit(); };
   $('#waveFollow').onchange = () => { if ($('#waveFollow').checked && S.time > 0) { waves.follow(S.time, waveFollowSpan()); waves.draw(); } };
   if ($('#waveTimeUnit')) $('#waveTimeUnit').onchange = e => waves.setTimeUnit(e.target.value);
-  waves.onCursor = time => $('#waveCursor').textContent = `Cursor ${fmtTime(time, waves.timeUnit)}`; waves.onNavigate = () => $('#waveFollow').checked = false;
+  waves.onCursor = time => $('#waveCursor').textContent = time === null ? 'Cursor —' : `Cursor ${fmtTime(time, waves.timeUnit)}`; waves.onNavigate = () => $('#waveFollow').checked = false;
   $('#btnLibrary').onclick = () => toggleLeft('library');
   if ($('#btnChangeHdlRoot')) $('#btnChangeHdlRoot').onclick = changeHdlRoot;
   if ($('#homeChangeHdlRoot')) $('#homeChangeHdlRoot').onclick = changeHdlRoot;

@@ -35,11 +35,12 @@ const INDENT_AFTER = /(\b(is|begin|then|else|loop|generate|record|units)|\(|\b(p
 export class CodeEditor {
   constructor(host, callbacks = {}) {
     this.callbacks = callbacks;
+    this.language = callbacks.language || 'vhdl';
     this.markers = [];
     this.root = document.createElement('div');
     this.root.className = 'ce';
     this.root.innerHTML = '<div class="ce-gutter" aria-hidden="true"><div class="ce-gutter-in"><pre class="ce-nums"></pre></div></div>' +
-      '<div class="ce-view"><textarea class="ce-input ce-text" spellcheck="false" wrap="off" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="VHDL source code"></textarea>' +
+      '<div class="ce-view"><textarea class="ce-input ce-text" spellcheck="false" wrap="off" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="Source code editor"></textarea>' +
       '<div class="ce-layer" aria-hidden="true"><div class="ce-lines"></div><pre class="ce-hl ce-text"></pre></div></div>';
     host.append(this.root);
     this.gutter = this.root.querySelector('.ce-gutter');
@@ -64,9 +65,10 @@ export class CodeEditor {
   show(visible) { this.root.classList.toggle('active', visible); if (visible) { this.syncScroll(); this.reportCursor(); } }
   focus() { this.input.focus({ preventScroll: true }); }
   schedule() { if (this.frame) return; this.frame = requestAnimationFrame(() => { this.frame = 0; this.renderNow(); this.reportCursor(); }); }
+  setLanguage(lang = 'vhdl') { this.language = lang; this.renderNow(); }
   renderNow() {
     const text = this.input.value;
-    this.pre.innerHTML = highlightVhdl(text) + '\n';
+    this.pre.innerHTML = (this.language === 'vhdl' ? highlightVhdl(text) : esc(text)) + '\n';
     const count = text.split('\n').length;
     if (count !== this.lineCount) {
       this.lineCount = count;
@@ -141,7 +143,7 @@ export class CodeEditor {
   replaceBlock(from, to, text) { this.insert(text, from, to); this.input.setSelectionRange(from, from + text.length); this.reportCursor(); }
   onKeyDown(event) {
     const mod = event.ctrlKey || event.metaKey, key = event.key;
-    if (mod && !event.shiftKey && !event.altKey && key.toLowerCase() === 's') { event.preventDefault(); this.callbacks.onSave?.(); return; }
+    if (mod && !event.shiftKey && !event.altKey && key.toLowerCase() === 's') { event.preventDefault(); event.stopPropagation(); this.callbacks.onSave?.(); return; }
     if (mod && key === '/') { event.preventDefault(); this.toggleComment(); return; }
     if (key === 'Tab' && !mod && !event.altKey) { event.preventDefault(); if (event.shiftKey) this.outdent(); else this.indent(); return; }
     if (key === 'Enter' && !mod && !event.shiftKey && !event.altKey) { event.preventDefault(); this.newline(); return; }
@@ -163,14 +165,17 @@ export class CodeEditor {
     if (text !== block.text) this.replaceBlock(block.from, block.to, text);
   }
   toggleComment() {
+    const prefix = this.language === 'vhdl' ? '--' : '#';
+    const reTest = this.language === 'vhdl' ? /^\s*--/ : /^\s*#/;
+    const reStrip = this.language === 'vhdl' ? /^(\s*)-- ?/ : /^(\s*)# ?/;
     const block = this.blockRange(), rows = block.text.split('\n');
     const code = rows.filter(row => row.trim());
-    const allCommented = code.length > 0 && code.every(row => /^\s*--/.test(row));
+    const allCommented = code.length > 0 && code.every(row => reTest.test(row));
     const indent = Math.min(...code.map(row => row.match(/^\s*/)[0].length), Infinity);
     const next = rows.map(row => {
       if (!row.trim()) return row;
-      if (allCommented) return row.replace(/^(\s*)-- ?/, '$1');
-      return row.slice(0, indent) + '-- ' + row.slice(indent);
+      if (allCommented) return row.replace(reStrip, '$1');
+      return row.slice(0, indent) + prefix + ' ' + row.slice(indent);
     });
     this.replaceBlock(block.from, block.to, next.join('\n'));
   }
@@ -179,7 +184,7 @@ export class CodeEditor {
     const lineStart = value.lastIndexOf('\n', start - 1) + 1, before = value.slice(lineStart, start);
     const indent = before.match(/^[ \t]*/)[0];
     const code = before.replace(/--.*$/, '').trim();
-    const extra = INDENT_AFTER.test(code) && !/^end\b/i.test(code) ? '  ' : '';
+    const extra = this.language === 'vhdl' && INDENT_AFTER.test(code) && !/^end\b/i.test(code) ? '  ' : '';
     this.insert('\n' + indent + extra);
   }
   moveLines(direction) {

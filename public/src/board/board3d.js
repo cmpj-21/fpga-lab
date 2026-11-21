@@ -247,7 +247,8 @@ export async function createBoard3D(canvas, opts = {}) {
     const w = canvas.parentElement.clientWidth, h = canvas.parentElement.clientHeight;
     if (!w || !h) return;
     renderer.setSize(w, h, false); camera.aspect = w / h;
-    camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(19)) * (camera.aspect < 1 ? 1.18 : 1) / Math.min(1, camera.aspect)));
+    const baseHalfFov = (studio?.gfx.fov ?? 38) * 0.5;
+    camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(baseHalfFov)) * (camera.aspect < 1 ? 1.18 : 1) / Math.min(1, camera.aspect)));
     camera.updateProjectionMatrix();
   }
   function setQuality(quality) {
@@ -298,7 +299,7 @@ export async function createBoard3D(canvas, opts = {}) {
   canvas.addEventListener('pointerdown', event => {
     if (event.button !== 0) return;
     const target = pick(event);
-    if (state.toolMode === 'interact' && target?.type === 'key') {
+    if (!state.photoFocusPick && state.toolMode === 'interact' && target?.type === 'key') {
       activeKey = target.id; controls.enabled = false;
       opts.onKey?.(target.id, true); canvas.setPointerCapture(event.pointerId);
       return;
@@ -428,7 +429,7 @@ export async function createBoard3D(canvas, opts = {}) {
     if (!canvas.clientWidth || !canvas.clientHeight) { previous = now; return; }
     if (studio?.gfx.fpsCap > 0 && now - lastRender < (1000 / studio.gfx.fpsCap) * 0.92) return;
     lastRender = now;
-    const dt = Math.min(.05, (now - previous) / 1000); previous = now;
+    const dt = Math.max(0, Math.min(.05, (now - previous) / 1000)); previous = now;
     fps += (1 / Math.max(dt, .0001) - fps) * .04;
     update(now, dt);
     if (studio) studio.renderFrame(now);

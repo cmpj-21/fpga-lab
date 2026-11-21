@@ -244,6 +244,7 @@ export function createIde(api) {
   const find = name => S.sources.find(source => source.name === name) || S.sources.find(source => source.name.toLowerCase() === String(name || '').toLowerCase());
   const findByDiagFile = file => find(file) || S.sources.find(source => baseNameOf(source.name).toLowerCase() === baseNameOf(file).toLowerCase());
   const libraryOf = source => source?.library || 'work';
+  const languageFor = name => /\.(vhd|vhdl|vho)$/i.test(name || '') ? 'vhdl' : /\.(qsf|qpf)$/i.test(name || '') ? 'qsf' : 'plain';
   const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
 
   const fallbackTextarea = document.createElement('textarea');
@@ -297,15 +298,15 @@ export function createIde(api) {
     root.setProperty('--editor-frac', `${layout.editorFrac}%`);
     root.setProperty('--panel-h', `${layout.panelH}px`);
   }
-  function drag(handle, onMove) {
+  function drag(handle, onMove, cls = 'resizing') {
     if (!handle) return;
     handle.addEventListener('pointerdown', event => {
       if (event.button !== 0) return;
       event.preventDefault();
       handle.setPointerCapture(event.pointerId);
-      handle.classList.add('dragging'); document.body.classList.add('resizing');
+      handle.classList.add('dragging'); document.body.classList.add(cls);
       const stop = () => {
-        handle.classList.remove('dragging'); document.body.classList.remove('resizing');
+        handle.classList.remove('dragging'); document.body.classList.remove(cls);
         handle.removeEventListener('pointermove', onMove); handle.removeEventListener('pointerup', stop); handle.removeEventListener('pointercancel', stop);
         saveLayout();
       };
@@ -321,7 +322,7 @@ export function createIde(api) {
       const rect = $('#workbench').getBoundingClientRect();
       const maxPanelH = Math.max(130, Math.floor(rect.height - computeMinTopHeight()));
       layout.panelH = clamp(Math.round(rect.bottom - event.clientY), 130, maxPanelH); applyLayout();
-    });
+    }, 'resizing-h');
     drag($('#lSplit'), event => {
       layout.leftW = clamp(Math.round(event.clientX - $('#rail').getBoundingClientRect().right), 200, 480); applyLayout();
     });
@@ -512,6 +513,7 @@ export function createIde(api) {
     let doc = docs.get(name);
     if (!doc) {
       const editor = new CodeEditor($('#editorHost'), {
+        language: languageFor(name),
         onChange: () => {
           const current = docs.get(name);
           if (!current) return;
@@ -565,10 +567,9 @@ export function createIde(api) {
       return false;
     }
   }
-  function closeTab(name, force = false) {
+  function closeTabNow(name) {
     const doc = docs.get(name);
     if (!doc) return;
-    if (!force && isDirty(name) && !confirm(`Discard unsaved changes to ${name}?`)) return;
     doc.editor.dispose(); docs.delete(name);
     const index = tabs.indexOf(name); if (index >= 0) tabs.splice(index, 1);
     if (active === name) {
@@ -584,6 +585,23 @@ export function createIde(api) {
         cursor = null; renderTabs(); updateStatus();
       }
     } else renderTabs();
+  }
+  function closeTab(name, force = false) {
+    const doc = docs.get(name);
+    if (!doc) return;
+    if (force || !isDirty(name)) {
+      closeTabNow(name);
+      return;
+    }
+    openExplorerDialog({
+      eyebrow: 'UNSAVED CHANGES',
+      title: `Close ${baseNameOf(name)}?`,
+      text: `Discard unsaved changes to "${name}"?`,
+      confirmText: 'Discard & Close',
+      danger: true,
+    }).then(confirmed => {
+      if (confirmed !== null) closeTabNow(name);
+    });
   }
   function hasUnsaved() {
     if (active && docs.has(active) && $('#sourceLibrary') && !docs.get(active).diskOnly) {
@@ -632,18 +650,17 @@ export function createIde(api) {
     }
     doc.editor.renderNow();
     const text = doc.editor.value;
-    let sourceChanged = false;
-    if (!doc.diskOnly) {
-      const source = find(name);
-      if (source) {
-        sourceChanged = source.text !== text || libraryOf(source) !== doc.library;
-        source.text = text;
-        source.library = doc.library;
-      }
-    }
+    const source = !doc.diskOnly ? find(name) : null;
+    const sourceChanged = !!(source && (source.text !== text || libraryOf(source) !== doc.library));
     if (!S.projectDir) {
       const savedAs = await saveActiveFileAs(name);
-      if (savedAs && sourceChanged) { api.saveProject?.(); api.markDirty?.(); }
+      if (savedAs) {
+        if (source) {
+          source.text = text;
+          source.library = doc.library;
+        }
+        if (sourceChanged) { api.saveProject?.(); api.markDirty?.(); }
+      }
       return savedAs;
     }
     try {
@@ -654,7 +671,12 @@ export function createIde(api) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Could not save file.');
+      if (source) {
+        source.text = text;
+        source.library = doc.library;
+      }
       doc.saved = text;
+      if (/\.qsf$/i.test(name)) api.reloadQsfText?.(text, name);
       if (sourceChanged) { api.saveProject?.(); api.markDirty?.(); }
       renderTabs();
       refreshProjectTree();
@@ -687,23 +709,26 @@ export function createIde(api) {
       });
       const picked = await pickRes.json();
       if (!pickRes.ok) throw new Error(picked.error || 'Save dialog failed.');
-      if (picked.cancelled || !picked.filePath) return false;
+      const targetPath = picked.filePath || picked.file;
+      if (picked.cancelled || !targetPath) return false;
       const writeRes = await fetch('/api/project/write-path', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: picked.filePath, text }),
+        body: JSON.stringify({ filePath: targetPath, text, saveToken: picked.saveToken }),
       });
       const written = await writeRes.json();
       if (!writeRes.ok) throw new Error(written.error || 'Could not write file.');
+      const savedPath = written.filePath || written.file || targetPath;
       if (doc) {
         doc.saved = text;
         if (!doc.diskOnly && find(name)) { find(name).text = text; find(name).library = doc.library; }
       }
       renderTabs();
       refreshProjectTree();
-      const shortName = written.filePath.split(/[\\/]/).filter(Boolean).pop() || baseNameOf(name);
-      api.toast(`Saved ${shortName} to ${written.filePath}.`, 'ok');
-      api.logEvent?.('info', `Saved file as: ${written.filePath}`);
+      const shortName = savedPath.split(/[\\/]/).filter(Boolean).pop() || baseNameOf(name);
+      if (/\.qsf$/i.test(savedPath)) api.reloadQsfText?.(text, shortName);
+      api.toast(`Saved ${shortName} to ${savedPath}.`, 'ok');
+      api.logEvent?.('info', `Saved file as: ${savedPath}`);
       return true;
     } catch (e) {
       api.toast(e.message, 'err');
@@ -1051,6 +1076,14 @@ export function createIde(api) {
       const updated = replacePrefix(src.name);
       if (updated !== src.name) { src.name = updated; sourcesChanged = true; }
     }
+    if (node.type === 'file') {
+      const wasCompilable = NAME_PATTERN.test(oldRel);
+      const isCompilable = NAME_PATTERN.test(newRel);
+      if (wasCompilable && !isCompilable) {
+        const idx = S.sources.findIndex(s => s.name === newRel);
+        if (idx >= 0) { S.sources.splice(idx, 1); sourcesChanged = true; }
+      }
+    }
     for (const dir of [...virtualDirs]) {
       const updated = replacePrefix(dir);
       if (updated !== dir) { virtualDirs.delete(dir); virtualDirs.add(updated); }
@@ -1065,6 +1098,18 @@ export function createIde(api) {
         const doc = docs.get(key);
         docs.delete(key);
         docs.set(updated, doc);
+        doc.editor.setLanguage?.(languageFor(updated));
+        if (node.type === 'file' && updated === newRel) {
+          if (NAME_PATTERN.test(oldRel) && !NAME_PATTERN.test(newRel)) {
+            doc.diskOnly = true;
+          } else if (!NAME_PATTERN.test(oldRel) && NAME_PATTERN.test(newRel)) {
+            doc.diskOnly = false;
+            if (!find(newRel)) {
+              S.sources.push({ name: newRel, text: doc.editor.value, library: 'work' });
+              sourcesChanged = true;
+            }
+          }
+        }
         const idx = tabs.indexOf(key);
         if (idx >= 0) tabs[idx] = updated;
         if (active === key) active = updated;
@@ -1403,9 +1448,18 @@ export function createIde(api) {
     }
     if (!dlg.open) dlg.showModal();
   }
+  let entityTouched = false;
+  function syncWizardPreview() {
+    const ent = ($('#npEntity')?.value || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '_') || 'fpga_lab';
+    const extras = ($('#npExtraFiles')?.value || '').split(',').map(s => s.trim()).filter(Boolean).map(s => /\.[a-z0-9]+$/i.test(s) ? s : `${s}.vhd`);
+    if ($('#npFilePreview')) $('#npFilePreview').textContent = [`${ent}.vhd`, ...extras].join(', ');
+  }
   function openNewProjectWizard() {
     const dlg = $('#newProjectDialog');
     if (!dlg) return;
+    entityTouched = false;
+    $('#homeWizardForm')?.reset();
+    syncWizardPreview();
     if (!dlg.open) dlg.showModal();
     requestAnimationFrame(() => { $('#npName')?.focus(); $('#npName')?.select(); });
   }
@@ -1700,7 +1754,14 @@ export function createIde(api) {
     if ($('#saveFileBtn')) $('#saveFileBtn').onclick = () => saveActiveFile();
     $('#saveSource').onclick = saveAndCompile;
     if ($('#btnFlash')) $('#btnFlash').onclick = () => api.flashToBoard?.();
-    $('#sourceLibrary').oninput = event => { const doc = docs.get(active); if (doc) { doc.library = event.target.value.trim(); renderTabs(); } };
+    $('#sourceLibrary').oninput = event => {
+      const doc = docs.get(active);
+      if (doc) {
+        doc.library = event.target.value.trim();
+        if (!doc.diskOnly && !S.dirty) api.markDirty();
+        renderTabs();
+      }
+    };
     $('#sourceDialog')?.addEventListener('close', () => {
       if ($('#sourceDialog').contains(document.activeElement)) document.activeElement.blur();
       syncEditorVisibility();
@@ -1770,12 +1831,6 @@ export function createIde(api) {
     });
     $('#homeNewProjectBtn')?.addEventListener('click', () => openNewProjectWizard());
     $('#homeClearRecents')?.addEventListener('click', () => { saveRecents([]); renderHome(); });
-    let entityTouched = false;
-    const syncWizardPreview = () => {
-      const ent = ($('#npEntity')?.value || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '_') || 'fpga_lab';
-      const extras = ($('#npExtraFiles')?.value || '').split(',').map(s => s.trim()).filter(Boolean).map(s => /\.[a-z0-9]+$/i.test(s) ? s : `${s}.vhd`);
-      if ($('#npFilePreview')) $('#npFilePreview').textContent = [`${ent}.vhd`, ...extras].join(', ');
-    };
     $('#npEntity')?.addEventListener('input', () => {
       entityTouched = true;
       syncWizardPreview();

@@ -18,7 +18,13 @@ export class WaveViewer {
     canvas.addEventListener('pointermove', e => {
       const rect = canvas.getBoundingClientRect(); const fraction = (e.clientX - rect.left) / rect.width;
       this.cursorT = Math.max(0, this.tStart + fraction * (this.tEnd - this.tStart));
-      if (this.drag) { const span = this.drag.end - this.drag.start; const dt = (this.drag.x - e.clientX) / rect.width * span; this.tStart = Math.max(0, this.drag.start + dt); this.tEnd = this.tStart + span; }
+      if (this.drag) {
+        const span = this.drag.end - this.drag.start;
+        const dt = (this.drag.x - e.clientX) / rect.width * span;
+        const maxStart = Math.max(0, Math.max(this.lastTime, 1e6) - span * 0.25);
+        this.tStart = Math.max(0, Math.min(maxStart, this.drag.start + dt));
+        this.tEnd = this.tStart + span;
+      }
       this.draw(); this.onCursor?.(this.cursorT);
     });
     for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) canvas.addEventListener(event, () => this.drag = null);
@@ -58,7 +64,7 @@ export class WaveViewer {
       track.addEventListener('keydown', e => {
         const { span, scrollable } = this.scrollMetrics();
         if (e.key === 'ArrowLeft') { e.preventDefault(); this.onNavigate?.(); this.tStart = Math.max(0, this.tStart - span * 0.2); this.tEnd = this.tStart + span; this.draw(); }
-        else if (e.key === 'ArrowRight') { e.preventDefault(); this.onNavigate?.(); this.tStart = Math.min(Math.max(scrollable, this.tStart + span * 0.2), this.tStart + span * 0.2); this.tEnd = this.tStart + span; this.draw(); }
+        else if (e.key === 'ArrowRight') { e.preventDefault(); this.onNavigate?.(); this.tStart = Math.min(scrollable, this.tStart + span * 0.2); this.tEnd = this.tStart + span; this.draw(); }
         else if (e.key === 'Home') { e.preventDefault(); this.onNavigate?.(); this.tStart = 0; this.tEnd = span; this.draw(); }
         else if (e.key === 'End') { e.preventDefault(); this.onNavigate?.(); this.tStart = Math.max(0, this.lastTime - span); this.tEnd = this.tStart + span; this.draw(); }
       });
@@ -85,7 +91,8 @@ export class WaveViewer {
         const dy = e.deltaY * lineFactor, dx = e.deltaX * lineFactor;
         const deltaPixels = e.shiftKey ? (Math.abs(dx) > 0 ? dx : dy) : dx;
         const timeDelta = (deltaPixels / rect.width) * span;
-        this.tStart = Math.max(0, this.tStart + timeDelta);
+        const maxStart = Math.max(0, Math.max(this.lastTime, 1e6) - span * 0.25);
+        this.tStart = Math.max(0, Math.min(maxStart, this.tStart + timeDelta));
         this.tEnd = this.tStart + span;
         this.draw();
         return;
@@ -117,6 +124,7 @@ export class WaveViewer {
   setSignals(list) {
     this.signals = list.map((s, i) => ({ ...s, width: s.width || 1, visible: s.visible !== false, color: this.colors[i % this.colors.length], samples: [], last: null }));
     this.tStart = 0; this.tEnd = 1e9; this.cursorT = 0; this.lastTime = 0; this.renderNames(); this.resize();
+    if (!this.signals.length) this.onCursor?.(null);
   }
   toggle(name) { const signal = this.signals.find(s => s.name === name); if (!signal) return false; signal.visible = !signal.visible; this.renderNames(); this.resize(); return signal.visible; }
   renderNames() {
@@ -147,7 +155,7 @@ export class WaveViewer {
     const first = Math.min(...this.signals.filter(s => s.samples.length).map(s => s.samples[0].t));
     this.tStart = Number.isFinite(first) ? first : 0; this.tEnd = Math.max(this.lastTime, this.tStart + 1e6); this.tEnd += (this.tEnd - this.tStart) * .03; this.draw();
   }
-  follow(time, span) { this.tStart = Math.max(0, time - span); this.tEnd = Math.max(time + span * .04, span); this.cursorT = time; }
+  follow(time, span) { this.tStart = Math.max(0, time - span); this.tEnd = Math.max(time + span * .04, span); this.cursorT = time; this.onCursor?.(this.cursorT); }
   zoom(factor, center = (this.tStart + this.tEnd) / 2) {
     const span = Math.max(1, Math.min(9e15, (this.tEnd - this.tStart) * factor));
     const fraction = (center - this.tStart) / (this.tEnd - this.tStart); this.tStart = Math.max(0, center - span * fraction); this.tEnd = this.tStart + span; this.draw();
