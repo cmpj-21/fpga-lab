@@ -38,8 +38,9 @@ try {
   const logged = await post('/api/log', { message: 'First line\nsecond line', stack: 'Error: probe\n    at test', details: { Design: 'gate.vhd', 'Bad\nKey': 'dropped', Status: 'Error\nforged header' }, recent: ['[00:00:00] [0 fs] ERROR probe'] });
   const text = await fs.readFile(logFile, 'utf8');
   const expected = ['Message:', '  First line', '  second line', 'Design: gate.vhd', 'Status: Error forged header', 'Stack:', '  Error: probe', '      at test', 'Recent console (oldest first):', '  [00:00:00] [0 fs] ERROR probe', '', ''].join('\n');
-  const [header, ...body] = text.split('\n');
-  check(logged.ok && /^==== \d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} UTC[+-]\d\d:\d\d \| client error ====$/.test(header) && body.join('\n') === expected, `error log appends exactly one readable, sanitized entry and ignores rejected writes: ${JSON.stringify(text)}`);
+  const errIdx = text.indexOf('==== ');
+  const [header, ...body] = (errIdx >= 0 ? text.slice(errIdx) : '').split('\n');
+  check(text.includes('[SERVER/INFO] Trace workbench started at ') && logged.ok && /^==== \d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} UTC[+-]\d\d:\d\d \| client error ====$/.test(header) && body.join('\n') === expected, `session log records startup info and appends sanitized error entries: ${JSON.stringify(text)}`);
   check(path.basename(logFile) === 'latest.log' && path.basename(path.dirname(logFile)) === 'logs', 'the running session logs to logs/latest.log');
   const duplicate = spawn(process.execPath, [path.join(root, 'server.mjs')], { cwd: root, env: { ...process.env, PORT: new URL(base).port, TRACE_LOG_DIR: server.logDir, OPEN_BROWSER: '0' }, windowsHide: true, stdio: 'ignore' });
   const [duplicateCode] = await once(duplicate, 'exit');
@@ -50,7 +51,7 @@ try {
   try {
     const read = name => fs.readFile(path.join(leftover.logDir, name), 'utf8').catch(() => null);
     const [latest, day15, day16] = await Promise.all(['latest.log', '2026-11-15.log', '2026-11-16.log'].map(read));
-    check(latest === null && day15 === entry('2026-11-15', 'crash A') && day16 === entry('2026-11-16', 'earlier session') + entry('2026-11-16', 'crash B'), `a leftover latest.log is archived by entry date on the next launch, appending to same-day logs: ${JSON.stringify([latest, day15, day16])}`);
+    check(latest && latest.includes('[SERVER/INFO] Trace workbench started at ') && day15 === entry('2026-11-15', 'crash A') && day16 === entry('2026-11-16', 'earlier session') + entry('2026-11-16', 'crash B'), `a leftover latest.log is archived by entry date on the next launch and a fresh session log starts immediately: ${JSON.stringify([latest, day15, day16])}`);
   } finally { await leftover.stop(); }
 
   const blocker = http.createServer((req, res) => res.end('busy')).listen(8047, '127.0.0.1');

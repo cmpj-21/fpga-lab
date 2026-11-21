@@ -30,6 +30,20 @@ function formatEntry({ source, message, stack = '', details = {}, recent = [], a
   if (recent.length) lines.push('Recent console (oldest first):', indent(recent.join('\n')));
   return lines.join('\n') + '\n\n';
 }
+function appendLogLine(level, source, message) {
+  const clean = clip(message, 2000).replace(/\n/g, '\n    ').trimEnd();
+  if (!clean) return Promise.resolve(true);
+  const line = `[${stamp()}] [${source.toUpperCase()}/${level.toUpperCase()}] ${clean}\n`;
+  return logQueue = logQueue.then(async () => {
+    await fs.mkdir(LOG_DIR, { recursive: true });
+    await fs.appendFile(LOG_FILE, line, 'utf8'); return true;
+  }).catch(e => { console.error(`Cannot write ${LOG_FILE}: ${e.message}`); return false; });
+}
+function appendLogLineSync(level, source, message) {
+  const clean = clip(message, 2000).replace(/\n/g, '\n    ').trimEnd();
+  if (!clean) return;
+  try { mkdirSync(LOG_DIR, { recursive: true }); appendFileSync(LOG_FILE, `[${stamp()}] [${source.toUpperCase()}/${level.toUpperCase()}] ${clean}\n`, 'utf8'); } catch {}
+}
 function appendLog(entry) {
   const text = formatEntry(entry);
   return logQueue = logQueue.then(async () => {
@@ -48,8 +62,8 @@ function archiveLog() {
   try {
     const text = readFileSync(LOG_FILE, 'utf8'), days = new Map();
     let day = stamp(statSync(LOG_FILE).mtime).slice(0, 10);
-    for (const chunk of text.split(/^(?===== \d{4}-\d\d-\d\d )/m)) {
-      day = chunk.match(/^==== (\d{4}-\d\d-\d\d) /)?.[1] ?? day;
+    for (const chunk of text.split(/^(?=(?:==== |\[)\d{4}-\d\d-\d\d )/m)) {
+      day = chunk.match(/^(?:==== |\[)(\d{4}-\d\d-\d\d) /)?.[1] ?? day;
       days.set(day, (days.get(day) ?? '') + chunk);
     }
     for (const [date, body] of days) if (body.trim()) appendFileSync(path.join(LOG_DIR, `${date}.log`), body, 'utf8');
@@ -67,7 +81,23 @@ function archiveLog() {
     rmSync(ACTION_LOG_FILE);
   } catch (e) { if (e.code !== 'ENOENT') console.error(`Cannot archive ${ACTION_LOG_FILE}: ${e.message}`); }
 }
-function claimLog() { ownsLog = true; archiveLog(); }
+function claimLog(startupNote = '') {
+  ownsLog = true;
+  archiveLog();
+  if (startupNote) appendLogLineSync('info', 'server', startupNote);
+}
+function eventReport(body) {
+  if (!body || typeof body !== 'object' || !Array.isArray(body.events) || !body.events.length) throw new Error('Event log entries need events.');
+  const lines = body.events.slice(0, 50)
+    .filter(ev => ev && typeof ev.message === 'string' && ev.message.trim())
+    .map(ev => {
+      const level = ['info', 'warning', 'warn', 'error'].includes(String(ev.level || '').toLowerCase()) ? String(ev.level).toUpperCase().replace('WARNING', 'WARN') : 'INFO';
+      const simTime = typeof ev.simTime === 'string' && ev.simTime.trim() ? `[${clip(ev.simTime, 32).replace(/\n/g, ' ')}] ` : '';
+      return `[${stamp()}] [CLIENT/${level}] ${simTime}${clip(ev.message, 1200).replace(/\n/g, '\n    ').trimEnd()}`;
+    });
+  if (!lines.length) throw new Error('Event log entries need non-empty messages.');
+  return lines.join('\n') + '\n';
+}
 function clientReport(body) {
   if (!body || typeof body !== 'object' || typeof body.message !== 'string' || !body.message.trim()) throw new Error('Log entries need a message.');
   const details = {};
@@ -124,6 +154,14 @@ const server = http.createServer(async (req, res) => {
       const written = await appendLog(clientReport(await json(req, 64 * 1024)));
       return send(res, written ? 200 : 500, written ? { ok: true, file: LOG_FILE } : { error: `Cannot write ${LOG_FILE}.` });
     }
+    if (url.pathname === '/api/log/event' && req.method === 'POST') {
+      const text = eventReport(await json(req, 64 * 1024));
+      const written = await (logQueue = logQueue.then(async () => {
+        await fs.mkdir(LOG_DIR, { recursive: true });
+        await fs.appendFile(LOG_FILE, text, 'utf8'); return true;
+      }).catch(e => { console.error(`Cannot write ${LOG_FILE}: ${e.message}`); return false; }));
+      return send(res, written ? 200 : 500, written ? { ok: true, file: LOG_FILE } : { error: `Cannot write ${LOG_FILE}.` });
+    }
     if (url.pathname === '/api/log/action' && req.method === 'POST') {
       const written = await appendActionLog(actionReport(await json(req, 64 * 1024)));
       return send(res, written ? 200 : 500, written ? { ok: true, file: ACTION_LOG_FILE } : { error: `Cannot write ${ACTION_LOG_FILE}.` });
@@ -136,18 +174,33 @@ const server = http.createServer(async (req, res) => {
       if ((await fs.stat(full)).size > 32 * 1024 * 1024) return send(res, 413, { error: 'Artifact exceeds 32 MB.' });
       return send(res, 200, await fs.readFile(full), 'application/octet-stream');
     }
-    if (url.pathname === '/api/sim/compile' && req.method === 'POST') return send(res, 200, await compileDesign(await json(req)));
+    if (url.pathname === '/api/sim/compile' && req.method === 'POST') {
+      const payload = await json(req);
+      const compiled = await compileDesign(payload);
+      appendLogLine('info', 'server', `Compiled ${compiled.top} (VHDL-${compiled.standard}, ${payload.sources?.length || 0} source(s), ${compiled.signals?.length || 0} signals, session ${compiled.id.slice(0, 8)})`);
+      return send(res, 200, compiled);
+    }
     if (url.pathname === '/api/sim/close-all' && (req.method === 'POST' || req.method === 'DELETE')) {
+      const openCount = sessions.size;
       await closeAllSessions();
+      if (openCount > 0) appendLogLine('info', 'server', `Stopped and closed ${openCount} active simulation session(s)`);
       return send(res, 200, { ok: true });
     }
     const match = url.pathname.match(/^\/api\/sim\/([a-f0-9-]+)(?:\/(step|vcd|close))?$/);
     if (match) {
       const session = sessions.get(match[1]);
       if (!session) return send(res, 404, { error: 'Simulation session ended. Build the design again.' });
-      if (req.method === 'DELETE' || (match[2] === 'close' && req.method === 'POST')) { await session.close(); return send(res, 200, { ok: true }); }
+      if (req.method === 'DELETE' || (match[2] === 'close' && req.method === 'POST')) {
+        await session.close();
+        appendLogLine('info', 'server', `Closed simulation session ${match[1].slice(0, 8)}`);
+        return send(res, 200, { ok: true });
+      }
       if (match[2] === 'step' && req.method === 'POST') return send(res, 200, await session.step(await json(req)));
-      if (match[2] === 'vcd' && req.method === 'POST') return send(res, 200, await session.exportVcd(), 'text/plain; charset=utf-8');
+      if (match[2] === 'vcd' && req.method === 'POST') {
+        const vcd = await session.exportVcd();
+        appendLogLine('info', 'server', `Exported VCD for session ${match[1].slice(0, 8)} (${vcd.length} bytes)`);
+        return send(res, 200, vcd, 'text/plain; charset=utf-8');
+      }
     }
     if (req.method !== 'GET') return send(res, 405, { error: 'Method not allowed.' });
     const full = path.resolve(PUBLIC, '.' + decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname));
@@ -161,7 +214,7 @@ const address = `http://127.0.0.1:${PORT}`;
 function openBrowser() {
   if (process.env.OPEN_BROWSER === '1' && process.platform === 'win32') execFile('cmd.exe', ['/d', '/c', 'start', '', address], { windowsHide: true }, error => { if (error) console.error(`Open ${address} in your browser.`); });
 }
-server.listen(PORT, '127.0.0.1', () => { claimLog(); console.log(`Trace workbench: ${address}`); openBrowser(); });
+server.listen(PORT, '127.0.0.1', () => { claimLog(`Trace workbench started at ${address} (Node ${process.version}, HDL root: ${HDL_ROOT})`); console.log(`Trace workbench: ${address}`); openBrowser(); });
 server.on('error', async error => {
   if (error.code === 'EADDRINUSE') {
     const existing = await fetch(address + '/api/health', { signal: AbortSignal.timeout(3000) }).then(r => r.json()).catch(() => null);
@@ -176,6 +229,7 @@ process.on('exit', () => { if (ownsLog) archiveLog(); });
 async function shutdown() {
   if (stopping) return;
   stopping = true;
+  if (ownsLog) appendLogLine('info', 'server', 'Trace workbench shutting down');
   server.close();
   await Promise.race([Promise.all([...sessions.values()].map(s => s.close().catch(() => {}))), new Promise(r => setTimeout(r, 2000))]);
   await logQueue;

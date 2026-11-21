@@ -16,11 +16,21 @@ const $$ = s => [...document.querySelectorAll(s)];
 const S = { sources: [], sim: null, flashed: false, running: false, power: true, building: false, busy: false, clkHz: 1000, speed: 55, time: 0, inputs: {}, assignments: new Map(), compiledAssignments: new Map(), discoveredPorts: [], bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0 };
 let board, waves, ide, toastTimer, sourceIndex, consoleCount = 0, logFile = '', actionLogFile = '', reportCount = 0;
 let lastFrame = performance.now(), accumulator = 0, lastDraw = 0;
-let actionSeq = 0, lastErrorSeq = 0, lastErrorMsg = '', actionFlushTimer = 0;
+let actionSeq = 0, lastErrorSeq = 0, lastErrorMsg = '', actionFlushTimer = 0, eventFlushTimer = 0;
 const uart = new UartReceiver();
 const reported = new Map();
-const uiActions = [], pendingActions = [];
+const uiActions = [], pendingActions = [], pendingEvents = [];
 
+function flushEvents() {
+  if (!pendingEvents.length) return;
+  const events = pendingEvents.splice(0, 50);
+  try { fetch('/api/log/event', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events }) }).catch(() => {}); } catch {}
+}
+function recordLogEvent(level, message) {
+  pendingEvents.push({ level, message: String(message), simTime: fmtTime(S.time) });
+  clearTimeout(eventFlushTimer);
+  eventFlushTimer = setTimeout(flushEvents, 180);
+}
 function flushActions() {
   if (!pendingActions.length) return;
   const lines = pendingActions.splice(0, 50);
@@ -41,6 +51,7 @@ function log(message, severity = 'info', stack = '') {
   $('#consoleOut').append(row); while ($('#consoleOut').children.length > 500) $('#consoleOut').firstChild.remove();
   $('#consoleCount').textContent = ++consoleCount; $('#consoleOut').scrollTop = $('#consoleOut').scrollHeight;
   if (severity === 'error') { lastErrorSeq++; lastErrorMsg = String(message); report(message, stack); }
+  else recordLogEvent(severity, message);
 }
 function consoleLines() {
   return [...$('#consoleOut').children].map(row => {
@@ -1208,7 +1219,7 @@ function wire() {
   $('#consoleClear').onclick = () => { $('#consoleOut').replaceChildren(); $('#consoleCount').textContent = consoleCount = 0; };
   $('#consoleCopy').onclick = copyConsole;
   $('#uartClear').onclick = () => $('#uartOut').replaceChildren(); $('#btnTruth').onclick = runTruth;
-  window.addEventListener('pagehide', () => { flushActions(); navigator.sendBeacon('/api/sim/close-all', ''); });
+  window.addEventListener('pagehide', () => { flushActions(); flushEvents(); navigator.sendBeacon('/api/sim/close-all', ''); });
 }
 function frame(now) {
   requestAnimationFrame(frame); const dt = Math.max(0, Math.min(.1, (now - lastFrame) / 1000)); lastFrame = now;
@@ -1235,6 +1246,7 @@ async function boot() {
   ide.captureBaseline();
   ide.showHome(true);
   setStatus();
+  recordLogEvent('info', `Workbench session initialized (${innerWidth}x${innerHeight}, theme=${document.documentElement.dataset.theme})`);
   await fetch('/api/sim/close-all', { method: 'POST' }).catch(() => {});
 }
 boot();
