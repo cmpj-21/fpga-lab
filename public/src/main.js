@@ -85,7 +85,7 @@ function describeControl(el) {
   let sel = el.tagName.toLowerCase();
   if (el.id) sel = `#${el.id}`;
   else {
-    for (const attr of ['data-cmd', 'data-key', 'data-dip', 'data-ltab', 'data-rtab', 'data-camera', 'data-tool', 'data-nav', 'data-starter', 'data-menu', 'data-pmtab', 'data-pm-aspect', 'data-close', 'data-gfx', 'aria-label']) {
+    for (const attr of ['data-cmd', 'data-key', 'data-dip', 'data-ltab', 'data-rtab', 'data-docktab', 'data-camera', 'data-tool', 'data-nav', 'data-starter', 'data-menu', 'data-pmtab', 'data-pm-aspect', 'data-close', 'data-gfx', 'aria-label']) {
       if (el.hasAttribute?.(attr)) { sel = `[${attr}="${el.getAttribute(attr)}"]`; break; }
     }
     if (sel === el.tagName.toLowerCase()) {
@@ -115,13 +115,14 @@ function uiSnapshot() {
     hdlOpen: $$('#hdlTree .hdl-group.open').length,
     hdlRoot: currentHdlRoot || 'none',
     waves: $('#app')?.classList.contains('no-waves') ? 'hidden' : 'open',
-    right: $('#right')?.classList.contains('hidden') ? 'closed' : ($$('#right .tab.active')[0]?.dataset.rtab || 'open'),
+    right: $('#right')?.classList.contains('hidden') ? 'closed' : ($$('.dock-tab.active')[0]?.dataset.docktab || 'open'),
     deck: $('#deck')?.classList.contains('hidden') ? 'closed' : 'open',
     about: $('#aboutDialog')?.open ? 'open' : 'closed',
     keysDlg: $('#keysDialog')?.open ? 'open' : 'closed',
     homeDlg: $('#homeConfirmDialog')?.open ? 'open' : 'closed',
     newProjDlg: $('#newProjectDialog')?.open ? 'open' : 'closed',
     projDlg: $('#projectSettingsDialog')?.open ? 'open' : 'closed',
+    switchDlg: $('#projectSwitchDialog')?.open ? 'open' : 'closed',
     menu: $$('.menu-btn[aria-expanded="true"]')[0]?.dataset.menu || 'closed',
     theme: document.documentElement.dataset.theme || 'light',
     power: S.power ? 'on' : 'off',
@@ -145,7 +146,7 @@ function uiSnapshot() {
   };
 }
 function diffSnapshot(before, after) {
-  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tabs', 'tab', 'editor', 'board', 'left', 'hdlOpen', 'hdlRoot', 'waves', 'right', 'deck', 'about', 'keysDlg', 'homeDlg', 'newProjDlg', 'projDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
+  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tabs', 'tab', 'editor', 'board', 'left', 'hdlOpen', 'hdlRoot', 'waves', 'right', 'deck', 'about', 'keysDlg', 'homeDlg', 'newProjDlg', 'projDlg', 'switchDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
   const out = [];
   for (const k of keys) if (before[k] !== after[k]) out.push(`${k}:${before[k]}->${after[k]}`);
   return out;
@@ -319,13 +320,22 @@ async function saveProjectToDisk({ saveAs = false, quiet = false } = {}) {
     return false;
   }
 }
-async function openProjectFromDiskPath(targetPath = '') {
+async function openProjectFromDiskPath(targetPath = '', { promptIfInWorkbench = false } = {}) {
   try {
     let chosen = targetPath;
     if (!chosen) {
       const picked = await api('/api/project/pick-open', { initialDir: S.projectDir || '' });
       if (picked.cancelled || !picked.file) return false;
       chosen = picked.file;
+    }
+    if (promptIfInWorkbench && ide?.requestProjectSwitch && $('#homeView')?.classList.contains('hidden')) {
+      const label = chosen.split(/[\\/]/).filter(Boolean).pop() || chosen;
+      ide.requestProjectSwitch({
+        label,
+        newWindowUrl: `/?openProject=${encodeURIComponent(chosen)}`,
+        onSwitchHere: () => openProjectFromDiskPath(chosen, { promptIfInWorkbench: false }),
+      });
+      return true;
     }
     const result = await api('/api/project/open', { path: chosen });
     for (const tabName of [...(ide?.tabs || [])]) ide?.closeTab(tabName, true);
@@ -416,10 +426,7 @@ async function stopAllSimulations() {
   renderSignalChips();
   renderPins();
   setStatus();
-  await Promise.all([
-    closeSession(prevSim),
-    fetch('/api/sim/close-all', { method: 'POST' }).catch(() => {}),
-  ]);
+  await closeSession(prevSim);
 }
 async function build(top = $('#topSelect').value) {
   if (S.building || S.exporting) return;
@@ -743,7 +750,7 @@ function buildWaves() {
   renderSignalChips();
 }
 function renderSignalChips() {
-  $('#sigChips').replaceChildren(); $('#signalCount').textContent = `${waves.signals.length} signals`;
+  $('#sigChips').replaceChildren(); $('#signalCount').textContent = String(waves.signals.length);
   waves.signals.forEach(signal => {
     const button = document.createElement('button'); button.className = `sig-chip ${signal.visible ? 'on' : 'off'}`;
     const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = signal.color;
@@ -1110,7 +1117,7 @@ function renderHdlTree(result) {
       const kind = document.createElement('span'); kind.className = 'fk'; kind.textContent = file.kind.toUpperCase(); button.append(kind, document.createTextNode(file.name));
       button.onclick = async () => {
         try {
-          if (file.kind === 'qpf') { await openProjectFromDiskPath(file.rel); return; }
+          if (file.kind === 'qpf') { await openProjectFromDiskPath(file.rel, { promptIfInWorkbench: true }); return; }
           const response = await fetch('/api/hdl/file?path=' + encodeURIComponent(file.rel));
           if (!response.ok) throw new Error('File could not be read.');
           await loadFiles([new File([await response.blob()], file.name)]);
@@ -1209,11 +1216,29 @@ function toggleLeft(name) {
   if (innerWidth <= 1000) app.classList.toggle('mobile-library', !close); else app.classList.toggle('no-library', close);
   leftTab(name);
 }
-function openTools(name = 'console') {
-  $('#right').classList.remove('hidden');
-  $$('#right .tab').forEach(t => { const active = t.dataset.rtab === name; t.classList.toggle('active', active); t.setAttribute('aria-selected', String(active)); });
-  $$('.rtab').forEach(t => t.classList.toggle('active', t.id === 'rtab-' + name));
+let lastToolTab = 'console';
+function openBottomTab(tab = 'console') {
+  if (tab === 'waves') {
+    $('#app').classList.remove('no-waves');
+    $('#right').classList.add('hidden');
+    $$('.dock-tab').forEach(t => { const active = t.dataset.docktab === 'waves'; t.classList.toggle('active', active); t.setAttribute('aria-selected', String(active)); });
+    requestAnimationFrame(() => waves?.resize());
+  } else {
+    lastToolTab = tab || 'console';
+    $('#app').classList.add('no-waves');
+    $('#right').classList.remove('hidden');
+    $$('.dock-tab').forEach(t => { const active = t.dataset.docktab === lastToolTab; t.classList.toggle('active', active); t.setAttribute('aria-selected', String(active)); });
+    $$('.rtab').forEach(t => t.classList.toggle('active', t.id === 'rtab-' + lastToolTab));
+  }
   syncNavigation();
+}
+function closeBottomDock() {
+  $('#app').classList.add('no-waves');
+  $('#right').classList.add('hidden');
+  syncNavigation();
+}
+function openTools(name = lastToolTab) {
+  openBottomTab(name || 'console');
 }
 function applyTheme(theme) {
   const dark = theme === 'dark';
@@ -1545,16 +1570,16 @@ function wire() {
   if ($('#btnChangeHdlRoot')) $('#btnChangeHdlRoot').onclick = changeHdlRoot;
   if ($('#homeChangeHdlRoot')) $('#homeChangeHdlRoot').onclick = changeHdlRoot;
   $('#btnPins').onclick = () => toggleLeft('pins'); $('#closeLeft').onclick = () => { $('#app').classList.remove('mobile-library'); $('#app').classList.add('no-library'); syncNavigation(); };
-  $('#btnSignals').onclick = () => { $('#app').classList.toggle('no-waves'); syncNavigation(); };
-  $('#btnTools').onclick = () => $('#right').classList.contains('hidden') ? openTools() : $('#closeRight').click();
-  $('#closeRight').onclick = () => { $('#right').classList.add('hidden'); syncNavigation(); };
-  $$('[data-ltab]').forEach(b => b.onclick = () => leftTab(b.dataset.ltab)); $$('[data-rtab]').forEach(b => b.onclick = () => openTools(b.dataset.rtab));
+  $('#btnSignals').onclick = () => !$('#app').classList.contains('no-waves') ? closeBottomDock() : openBottomTab('waves');
+  $('#btnTools').onclick = () => !$('#right').classList.contains('hidden') ? closeBottomDock() : openBottomTab(lastToolTab);
+  $('#closeRight').onclick = closeBottomDock;
+  $$('[data-ltab]').forEach(b => b.onclick = () => leftTab(b.dataset.ltab)); $$('[data-docktab]').forEach(b => b.onclick = () => openBottomTab(b.dataset.docktab));
   for (const id of ['btnAbout', 'btnLimits']) $('#' + id).onclick = () => $('#aboutDialog').showModal();
   $$('[data-close]').forEach(b => b.onclick = () => $('#' + b.dataset.close).close());
   $('#consoleClear').onclick = () => { $('#consoleOut').replaceChildren(); $('#consoleCount').textContent = consoleCount = 0; };
   $('#consoleCopy').onclick = copyConsole;
   $('#uartClear').onclick = () => $('#uartOut').replaceChildren(); $('#btnTruth').onclick = runTruth;
-  window.addEventListener('pagehide', () => { flushActions(); flushEvents(); navigator.sendBeacon('/api/sim/close-all', ''); });
+  window.addEventListener('pagehide', () => { flushActions(); flushEvents(); if (S.sim?.id) navigator.sendBeacon(`/api/sim/${S.sim.id}/close`, ''); });
 }
 function frame(now) {
   requestAnimationFrame(frame); const dt = Math.max(0, Math.min(.1, (now - lastFrame) / 1000)); lastFrame = now;
@@ -1569,11 +1594,34 @@ async function boot() {
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
   try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { if (pressed) trackUiAction('3D', $('#view3d'), `press ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.65); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames'), $('#waveScrollTrack'), $('#waveScrollThumb')); applyTheme(document.documentElement.dataset.theme); wire();
-  ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, renderSources, openTools, syncNavigation, projectData, saveProject, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations });
+  ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, renderSources, openTools, openBottomTab, syncNavigation, projectData, saveProject, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations });
   wireActionLogger();
   fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);
   window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, get ide() { return ide; }, get actions() { return [...uiActions]; }, flushActions, build, flashToBoard, advance, loadFiles, toggleDip, stopAllSimulations, saveProjectToDisk, openProjectFromDiskPath };
+  const launchParams = new URLSearchParams(location.search);
+  const openProjectParam = launchParams.get('openProject');
+  const newProjectParam = launchParams.get('newProject') === '1';
+  const demoParam = launchParams.get('demo') === '1';
+  if (openProjectParam || newProjectParam || demoParam) {
+    try { history.replaceState(null, '', '/'); } catch {}
+  }
+  recordLogEvent('info', `Workbench session initialized (${innerWidth}x${innerHeight}, theme=${document.documentElement.dataset.theme})`);
+  if (openProjectParam) {
+    await openProjectFromDiskPath(openProjectParam, { promptIfInWorkbench: false });
+    return;
+  }
+  if (demoParam) {
+    ide.showHome(false);
+    $('#btnDemo')?.click();
+    ide.captureBaseline('Counter demo');
+    return;
+  }
+  if (newProjectParam) {
+    ide.showHome(true);
+    ide.openNewProjectWizard();
+    return;
+  }
   try { const saved = localStorage.getItem('trace.project.v1'); if (saved) { const parsed = JSON.parse(saved); if (Array.isArray(parsed?.sources) && parsed.sources.length) restoreProject(parsed); } } catch (e) { importError(new Error(`Saved project could not be restored: ${e.message}`)); S.sources = []; renderSources(); setStatus(); return; }
   S.dirty = true;
   renderPins();
@@ -1582,7 +1630,5 @@ async function boot() {
   ide.captureBaseline();
   ide.showHome(true);
   setStatus();
-  recordLogEvent('info', `Workbench session initialized (${innerWidth}x${innerHeight}, theme=${document.documentElement.dataset.theme})`);
-  await fetch('/api/sim/close-all', { method: 'POST' }).catch(() => {});
 }
 boot();

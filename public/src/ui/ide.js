@@ -626,7 +626,7 @@ export function createIde(api) {
       baselineRecents = prevRecents !== null ? prevRecents : loadRecents();
     }
   }
-  function describeRecentChanges() {
+  function detectProjectChanges() {
     const dirtyTabs = [...docs.keys()].filter(isDirty);
     const changes = [];
     if (dirtyTabs.length) changes.push(`unsaved editor edits in ${dirtyTabs.join(', ')}`);
@@ -645,6 +645,10 @@ export function createIde(api) {
       if (JSON.stringify([...S.assignments]) !== JSON.stringify(baselineProject.assignments || [])) changes.push('pin mappings');
       if (($('#standardSelect')?.value || S.standard) !== baselineProject.standard || ($('#genericInput')?.value || '') !== (baselineProject.generics || '')) changes.push('compiler options');
     }
+    return changes;
+  }
+  function describeRecentChanges() {
+    const changes = detectProjectChanges();
     return changes.length
       ? `Detected ${changes.join(', ')}. Saving updates your workspace and Recent Projects list; discarding reverts these changes. All active simulations will be cancelled and stopped.`
       : 'Saving updates your workspace and Recent Projects list; discarding reverts any changes from this session. Returning to the Home menu will cancel and stop all active simulations.';
@@ -756,6 +760,34 @@ export function createIde(api) {
   function resumeWorkbench() {
     captureBaseline(projectTitle);
     showHome(false);
+  }
+  let pendingSwitch = null;
+  function requestProjectSwitch({ label = 'this project', newWindowUrl = '/?newProject=1', onSwitchHere } = {}) {
+    const view = $('#homeView');
+    if (view && !view.classList.contains('hidden')) {
+      onSwitchHere?.();
+      return;
+    }
+    const dlg = $('#projectSwitchDialog');
+    if (!dlg) {
+      onSwitchHere?.();
+      return;
+    }
+    const changes = detectProjectChanges();
+    const hasChanges = changes.length > 0 || !S.projectDir;
+    pendingSwitch = { label, newWindowUrl, onSwitchHere, hasChanges };
+    if ($('#psTitle')) $('#psTitle').textContent = `Open ${label}?`;
+    if ($('#psCurrentProject')) $('#psCurrentProject').textContent = currentProjectTitle();
+    if ($('#psDetail')) {
+      $('#psDetail').textContent = changes.length
+        ? `Detected ${changes.join(', ')}. Open in a new Trace window to keep both running independently, or save/discard changes and switch here.`
+        : 'Open in a new Trace window to keep both projects running independently, or replace the project in this window.';
+    }
+    if ($('#psDiscard')) $('#psDiscard').classList.toggle('hidden', !hasChanges);
+    if ($('#psSave')) {
+      $('#psSave').textContent = !hasChanges ? 'Open in This Window' : (S.projectDir ? 'Save & Open Here' : 'Save As… & Open Here');
+    }
+    if (!dlg.open) dlg.showModal();
   }
   function openNewProjectWizard() {
     const dlg = $('#newProjectDialog');
@@ -919,22 +951,22 @@ export function createIde(api) {
   // ---------- menus ----------
   const commands = {
     home: () => requestReturnHome(),
-    newProject: () => requestReturnHome({ focusWizard: true }),
+    newProject: () => requestProjectSwitch({ label: 'a new project', newWindowUrl: '/?newProject=1', onSwitchHere: () => openNewProjectWizard() }),
     newFile: showNewFile,
-    openProject: () => api.openProjectFromDiskPath?.(),
+    openProject: () => api.openProjectFromDiskPath?.('', { promptIfInWorkbench: true }),
     openFiles: () => $('#fileInput').click(),
     save: saveAndCompile,
     saveProject: () => api.saveProjectToDisk?.({ saveAs: false }),
     saveProjectAs: () => api.saveProjectToDisk?.({ saveAs: true }),
     exportJson: () => { api.saveProject?.(); api.download?.(JSON.stringify(api.projectData(), null, 2), 'trace-project.json', 'application/json'); api.toast('Exported project JSON backup.'); },
-    loadDemo: () => $('#btnDemo').click(),
+    loadDemo: () => requestProjectSwitch({ label: 'Counter Demo', newWindowUrl: '/?demo=1', onSwitchHere: () => { $('#btnDemo').click(); captureBaseline('Counter demo'); } }),
     closeTab: () => active && closeTab(active),
     undo: () => { docs.get(active)?.editor.focus(); document.execCommand('undo'); },
     redo: () => { docs.get(active)?.editor.focus(); document.execCommand('redo'); },
     comment: () => docs.get(active)?.editor.toggleComment(),
     viewExplorer: () => $('#btnLibrary').click(),
     viewPins: () => $('#btnPins').click(),
-    panelWaves: () => { if ($('#app').classList.contains('no-waves')) $('#btnSignals').click(); },
+    panelWaves: () => api.openBottomTab ? api.openBottomTab('waves') : ($('#app').classList.contains('no-waves') && $('#btnSignals').click()),
     panelProblems: () => api.openTools('problems'),
     panelConsole: () => api.openTools('console'),
     panelPinout: () => api.openTools('pinout'),
@@ -1029,6 +1061,41 @@ export function createIde(api) {
     $('#homeConfirmSave')?.addEventListener('click', () => confirmSaveAndReturnHome());
     $('#homeConfirmDiscard')?.addEventListener('click', () => confirmDiscardAndReturnHome());
     $('#homeConfirmCancel')?.addEventListener('click', () => { pendingFocusWizard = false; $('#homeConfirmDialog')?.close(); });
+    $('#psNewWindow')?.addEventListener('click', () => {
+      const sw = pendingSwitch;
+      pendingSwitch = null;
+      $('#projectSwitchDialog')?.close();
+      if (sw?.newWindowUrl) window.open(sw.newWindowUrl, '_blank');
+    });
+    $('#psSave')?.addEventListener('click', async () => {
+      const sw = pendingSwitch;
+      if (!sw) return;
+      if (sw.hasChanges) {
+        if (!validateLibraries()) return;
+        commitAll();
+        api.renderSources();
+        if (api.saveProjectToDisk) {
+          const ok = await api.saveProjectToDisk({ saveAs: !S.projectDir });
+          if (!ok) return;
+        } else {
+          api.saveProject?.();
+          recordRecentProject(projectTitle);
+          captureBaseline(projectTitle);
+        }
+      }
+      pendingSwitch = null;
+      $('#projectSwitchDialog')?.close();
+      await api.stopAllSimulations?.();
+      await sw.onSwitchHere?.();
+    });
+    $('#psDiscard')?.addEventListener('click', async () => {
+      const sw = pendingSwitch;
+      pendingSwitch = null;
+      $('#projectSwitchDialog')?.close();
+      await api.stopAllSimulations?.();
+      await sw?.onSwitchHere?.();
+    });
+    $('#psCancel')?.addEventListener('click', () => { pendingSwitch = null; });
     $('#homeThemeBtn')?.addEventListener('click', () => $('#btnTheme')?.click());
     $('#homeAboutBtn')?.addEventListener('click', () => $('#btnAbout')?.click());
     $('#homeOpenProjectBtn')?.addEventListener('click', () => api.openProjectFromDiskPath?.());
@@ -1087,7 +1154,7 @@ export function createIde(api) {
   return {
     openFile, closeTab, activate, commitAll, hasUnsaved, validateLibraries, saveAndCompile, saveAndFlash, syncFromSources, openFirst, updateStatus,
     setProblems, reportBuildFailure, resetLayout, setEditorPaneOpen, setBoardPaneOpen,
-    showHome, requestReturnHome, resumeWorkbench, captureBaseline, currentProjectTitle, renderHome, recordRecentProject, populateHomeHdl,
+    showHome, requestReturnHome, requestProjectSwitch, openNewProjectWizard, resumeWorkbench, captureBaseline, currentProjectTitle, renderHome, recordRecentProject, populateHomeHdl,
     get active() { return active; },
     get tabs() { return [...tabs]; },
     get problems() { return problems; },
