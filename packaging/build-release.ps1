@@ -124,6 +124,7 @@ New-Item -ItemType Directory -Path (Join-Path $stageDir 'runtime\ghdl\lib') -For
 # Top-level native binaries
 Copy-Item $traceExe (Join-Path $stageDir 'Trace.exe') -Force
 Copy-Item $wv2Dll   (Join-Path $stageDir 'WebView2Loader.dll') -Force
+Set-Content -Path (Join-Path $stageDir 'portable.mode') -Value "Portable data mode enabled (user data stored in TraceData\ beside Trace.exe)." -Encoding ASCII
 
 # App code + all public assets (Three.js, GLB models, CSS, JS)
 Copy-Item (Join-Path $repoRoot 'server.mjs') (Join-Path $stageDir 'app\server.mjs') -Force

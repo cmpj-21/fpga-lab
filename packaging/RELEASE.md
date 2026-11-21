@@ -6,9 +6,9 @@ End users do **not** need Node.js, GHDL, MSYS2, or GCC installed.
 
 ## Outputs Produced in `dist/`
 
-1. **`dist\Trace-FPGA-Workbench-Portable-x64.exe`** — Single-file portable `.exe` (no install or admin rights needed; unpacks once to `%LOCALAPPDATA%\TraceFPGA\portable\<hash>\` on first run, then launches instantly on all subsequent runs).
-2. **`dist\Trace-FPGA-Workbench-Portable-x64.zip`** — Plain portable folder archive (unzip and double-click `Trace.exe`).
-3. **`dist\Trace-FPGA-Workbench-Setup-x64.exe`** — Native Windows installer with Start Menu, Desktop shortcut, `.qpf` file association, and Windows Uninstaller (requires Inno Setup 6).
+1. **`dist\Trace-FPGA-Workbench-Portable-x64.exe`** — Single-file portable `.exe` (stores user data—`trace.config.json`, `logs\`, and `webview2\`—in a `TraceData\` folder right beside the `.exe`; unpacks runtime binaries once into `%LOCALAPPDATA%\TraceFPGA\portable\<hash>\` so subsequent launches start instantly).
+2. **`dist\Trace-FPGA-Workbench-Portable-x64.zip`** — Plain portable folder archive (includes `portable.mode` so unzipping anywhere stores user data in `TraceData\` beside `Trace.exe`).
+3. **`dist\Trace-FPGA-Workbench-Setup-x64.exe`** — Native Windows installer (`Program Files`, Start Menu, Desktop shortcut, `.qpf` file association, Windows Uninstaller; stores user data in `%LOCALAPPDATA%\TraceFPGA\`). Requires Inno Setup 6.
 
 ## Step 1 — One-Time WebView2 SDK Fetch (~2 MB)
 

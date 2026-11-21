@@ -34,7 +34,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "assocqpf"; Description: "Associate .qpf project files with Trace FPGA Workbench"; GroupDescription: "File associations:"
 
 [Files]
-Source: "..\dist\Trace\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\Trace\*"; DestDir: "{app}"; Excludes: "portable.mode"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Trace FPGA Workbench"; Filename: "{app}\Trace.exe"

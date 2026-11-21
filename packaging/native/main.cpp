@@ -97,7 +97,35 @@ static bool FileExists(const std::wstring& path) {
     return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-static std::wstring GetLocalAppDataDir() {
+static bool DirExists(const std::wstring& path) {
+    DWORD attr = GetFileAttributesW(path.c_str());
+    return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+static bool IsDirWritable(const std::wstring& dir) {
+    CreateDirectoryW(dir.c_str(), nullptr);
+    std::wstring probe = dir + L"\\.trace-write-test";
+    HANDLE h = CreateFileW(probe.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    CloseHandle(h);
+    return true;
+}
+
+static std::wstring GetDataDir() {
+    // 1. Explicit TRACE_DATA_DIR (set by single-file portable stub or user)
+    wchar_t envBuf[MAX_PATH * 4] = {};
+    DWORD n = GetEnvironmentVariableW(L"TRACE_DATA_DIR", envBuf, MAX_PATH * 4);
+    if (n > 0 && n < MAX_PATH * 4) {
+        std::wstring d(envBuf, n);
+        CreateDirectoryW(d.c_str(), nullptr);
+        return d;
+    }
+    // 2. Portable folder mode (portable.mode marker or existing TraceData\ beside Trace.exe)
+    std::wstring siblingData = g_app.exeDir + L"\\TraceData";
+    if ((FileExists(g_app.exeDir + L"\\portable.mode") || DirExists(siblingData)) && IsDirWritable(siblingData)) {
+        return siblingData;
+    }
+    // 3. Installed app default (%LOCALAPPDATA%\TraceFPGA)
     PWSTR p = nullptr;
     std::wstring dir;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &p)) && p) {
@@ -343,10 +371,12 @@ static bool StartBackendServer() {
     if (!CreatePipe(&g_app.stdoutRead, &stdoutWrite, &sa, 0)) return false;
     SetHandleInformation(g_app.stdoutRead, HANDLE_FLAG_INHERIT, 0);
 
-    // Set environment variables for packaged mode + ephemeral port
+    // Set environment variables for packaged mode + ephemeral port + resolved user data directory
+    std::wstring dataDir = GetDataDir();
     SetEnvironmentVariableW(L"PORT", L"0");
     SetEnvironmentVariableW(L"OPEN_BROWSER", L"0");
     SetEnvironmentVariableW(L"TRACE_PACKAGED", L"1");
+    SetEnvironmentVariableW(L"TRACE_DATA_DIR", dataDir.c_str());
 
     std::wstring cmd = L"\"" + nodeExe + L"\" \"" + serverMjs + L"\"";
     std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
@@ -408,7 +438,7 @@ static void InitWebView2() {
         L"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
         L"--enable-gpu-rasterization --enable-zero-copy --disable-background-timer-throttling --disable-renderer-backgrounding");
 
-    std::wstring userData = GetLocalAppDataDir() + L"\\webview2";
+    std::wstring userData = GetDataDir() + L"\\webview2";
     CreateDirectoryW(userData.c_str(), nullptr);
 
     auto* handler = new EnvironmentCompletedHandler();

@@ -49,6 +49,15 @@ static void CreateDirsRecursive(const std::wstring& dir) {
     CreateDirectoryW(dir.c_str(), nullptr);
 }
 
+static bool IsDirWritable(const std::wstring& dir) {
+    CreateDirsRecursive(dir);
+    std::wstring probe = dir + L"\\.trace-write-test";
+    HANDLE h = CreateFileW(probe.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    CloseHandle(h);
+    return true;
+}
+
 static std::wstring GetCacheRoot() {
     PWSTR p = nullptr;
     std::wstring base;
@@ -255,6 +264,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR lpCmdLine, int nCmdSho
     }
 
     SetEnvironmentVariableW(L"TRACE_PORTABLE", L"1");
+    // True portable user data: store config, logs & WebView2 profile in TraceData\ beside this .exe
+    size_t selfSlash = selfPath.find_last_of(L"\\/");
+    std::wstring selfDir = (selfSlash != std::wstring::npos) ? selfPath.substr(0, selfSlash) : L".";
+    std::wstring portableDataDir = selfDir + L"\\TraceData";
+    if (IsDirWritable(portableDataDir)) {
+        SetEnvironmentVariableW(L"TRACE_DATA_DIR", portableDataDir.c_str());
+    }
 
     std::wstring cmd = L"\"" + targetExe + L"\"";
     if (lpCmdLine && lpCmdLine[0] != L'\0') {
