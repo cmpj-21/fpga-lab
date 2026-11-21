@@ -1225,11 +1225,15 @@ export function createIde(api) {
     const changes = [];
     if (dirtyTabs.length) changes.push(`unsaved editor edits in ${dirtyTabs.join(', ')}`);
     if (baselineProject) {
-      const baseFiles = new Map((baselineProject.sources || []).map(s => [s.name, s.text]));
-      const curFiles = new Map(S.sources.map(s => [s.name, docs.has(s.name) ? docs.get(s.name).editor.value : s.text]));
+      const baseFiles = new Map((baselineProject.sources || []).map(s => [s.name, { text: s.text, lib: s.library || 'work' }]));
+      const curFiles = new Map(S.sources.map(s => [s.name, {
+        text: docs.has(s.name) ? docs.get(s.name).editor.value : s.text,
+        lib: docs.has(s.name) ? (docs.get(s.name).library || 'work') : (s.library || 'work'),
+      }]));
       const modified = [];
-      for (const [name, text] of curFiles) {
-        if (!baseFiles.has(name) || baseFiles.get(name) !== text) modified.push(name);
+      for (const [name, cur] of curFiles) {
+        const base = baseFiles.get(name);
+        if (!base || base.text !== cur.text || base.lib !== cur.lib) modified.push(name);
       }
       for (const name of baseFiles.keys()) {
         if (!curFiles.has(name)) modified.push(name);
@@ -1237,7 +1241,13 @@ export function createIde(api) {
       const uniqueMod = [...new Set(modified)].filter(n => !dirtyTabs.includes(n));
       if (uniqueMod.length) changes.push(`modified sources (${uniqueMod.join(', ')})`);
       if (JSON.stringify([...S.assignments]) !== JSON.stringify(baselineProject.assignments || [])) changes.push('pin mappings');
-      if (($('#standardSelect')?.value || S.standard) !== baselineProject.standard || ($('#genericInput')?.value || '') !== (baselineProject.generics || '')) changes.push('compiler options');
+      const curTop = $('#topSelect')?.value || '';
+      const curTopLib = $('#topLibrary')?.value || 'work';
+      const curSdf = S.sdf ? `${S.sdf.name}|${$('#sdfInstance')?.value || ''}|${$('#sdfCorner')?.value || ''}` : '';
+      const baseSdf = baselineProject.sdf ? `${baselineProject.sdf.name}|${baselineProject.sdf.instance || ''}|${baselineProject.sdf.corner || ''}` : '';
+      if (($('#standardSelect')?.value || S.standard) !== baselineProject.standard || ($('#genericInput')?.value || '') !== (baselineProject.generics || '') || curTop !== (baselineProject.top || '') || curTopLib !== (baselineProject.topLibrary || 'work') || curSdf !== baseSdf) {
+        changes.push('compiler settings');
+      }
     }
     return changes;
   }
@@ -1318,13 +1328,15 @@ export function createIde(api) {
           const prevRecents = loadRecents();
           let prevStorage = null;
           try { prevStorage = localStorage.getItem('trace.project.v1'); } catch {}
+          await api.stopAllSimulations?.();
           for (const name of [...docs.keys()]) closeTab(name, true);
           api.restoreProject(item.project);
           openFirst();
           captureBaseline(item.title, { prevRecents, prevStorage });
           showHome(false);
-          api.markDirty();
-          api.toast(`Opened ${item.title}. Click Build & Compile when ready.`);
+          const restoredState = await api.restoreSavedCompileState?.();
+          const suffix = restoredState === 'flashed' ? 'Restored compiled & flashed state.' : restoredState === 'compiled' ? 'Restored compiled state — ready to flash.' : 'Click Compile when ready.';
+          api.toast(`Opened ${item.title}. ${suffix}`);
         } catch (err) {
           api.toast(err.message, 'err');
         }
@@ -1344,14 +1356,22 @@ export function createIde(api) {
       box.append(row);
     }
   }
-  function showHome(visible = true) {
+  let hasActiveSession = false;
+  function syncHomeContinue() {
+    $('#homeContinueBtn')?.classList.toggle('hidden', !hasActiveSession || !S.sources.length);
+  }
+  function showHome(visible = true, { clearSession = false } = {}) {
     const view = $('#homeView');
     if (!view) return;
+    if (!visible) hasActiveSession = true;
+    else if (clearSession) hasActiveSession = false;
+    syncHomeContinue();
     if (visible) renderHome();
     view.classList.toggle('hidden', !visible);
     $('#btnHome')?.classList.toggle('active', visible);
   }
   function resumeWorkbench() {
+    if (!hasActiveSession || !S.sources.length) return;
     captureBaseline(projectTitle);
     showHome(false);
   }
@@ -1396,11 +1416,13 @@ export function createIde(api) {
       return;
     }
     pendingFocusWizard = focusWizard;
+    const changes = detectProjectChanges();
+    const hasUnsavedOrSim = changes.length > 0 || !S.projectDir || !!S.sim;
     const dlg = $('#homeConfirmDialog');
-    if (!dlg) {
+    if (!dlg || !hasUnsavedOrSim) {
       api.stopAllSimulations?.();
-      showHome(true);
-      if (focusWizard) openNewProjectWizard();
+      showHome(true, { clearSession: true });
+      if (focusWizard) { pendingFocusWizard = false; openNewProjectWizard(); }
       return;
     }
     if ($('#homeConfirmProject')) $('#homeConfirmProject').textContent = currentProjectTitle();
@@ -1422,7 +1444,7 @@ export function createIde(api) {
     }
     $('#homeConfirmDialog')?.close();
     await api.stopAllSimulations?.();
-    showHome(true);
+    showHome(true, { clearSession: true });
     if (pendingFocusWizard) {
       pendingFocusWizard = false;
       openNewProjectWizard();
@@ -1445,7 +1467,7 @@ export function createIde(api) {
     setProblems([]);
     $('#homeConfirmDialog')?.close();
     await api.stopAllSimulations?.();
-    showHome(true);
+    showHome(true, { clearSession: true });
     if (pendingFocusWizard) {
       pendingFocusWizard = false;
       openNewProjectWizard();
@@ -1789,11 +1811,17 @@ export function createIde(api) {
   }
   wire();
 
+  function closeDiskTabs() {
+    for (const [name, doc] of [...docs.entries()]) {
+      if (doc.diskOnly) closeTab(name, true);
+    }
+  }
   return {
-    openFile, openDiskFile, closeTab, activate, commitAll, hasUnsaved, validateLibraries, saveActiveFile, saveActiveFileAs, saveAndCompile, saveAndFlash, syncFromSources, openFirst, updateStatus,
+    openFile, openDiskFile, closeTab, closeDiskTabs, activate, commitAll, hasUnsaved, validateLibraries, saveActiveFile, saveActiveFileAs, saveAndCompile, saveAndFlash, syncFromSources, openFirst, updateStatus,
     refreshProjectTree, renderProjectTree, showNewFile, showNewFolder, closeExplorerMenu,
     setProblems, reportBuildFailure, resetLayout, setEditorPaneOpen, setBoardPaneOpen,
     showHome, requestReturnHome, requestProjectSwitch, openNewProjectWizard, resumeWorkbench, captureBaseline, currentProjectTitle, renderHome, recordRecentProject, populateHomeHdl,
+    get hasActiveSession() { return hasActiveSession; },
     get active() { return active; },
     get tabs() { return [...tabs]; },
     get problems() { return problems; },

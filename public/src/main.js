@@ -13,7 +13,7 @@ import * as audio from './ui/audio.js';
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
-const S = { sources: [], sim: null, flashed: false, projectDir: null, projectName: '', running: false, power: true, building: false, busy: false, clkHz: 1000, speed: 55, time: 0, inputs: {}, assignments: new Map(), compiledAssignments: new Map(), discoveredPorts: [], bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0 };
+const S = { sources: [], sim: null, flashed: false, compiledHash: '', flashedHash: '', projectDir: null, projectName: '', running: false, power: true, building: false, busy: false, clkHz: 1000, speed: 55, time: 0, inputs: {}, assignments: new Map(), compiledAssignments: new Map(), discoveredPorts: [], bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0 };
 let board, waves, ide, toastTimer, sourceIndex, consoleCount = 0, logFile = '', actionLogFile = '', currentHdlRoot = '', reportCount = 0;
 let lastFrame = performance.now(), accumulator = 0, lastDraw = 0;
 let actionSeq = 0, lastErrorSeq = 0, lastErrorMsg = '', actionFlushTimer = 0, eventFlushTimer = 0;
@@ -172,7 +172,7 @@ function trackUiAction(kind, el, detail = '') {
     recordActionLine(`#${id} ${kind.padEnd(8)} ${target} -> BLOCKED (0ms) [reason:control disabled | status:${before.status} | view:${before.view}]`);
     return;
   }
-  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnTruthCopy|#btnTruthExport|#btnSaveProject|#saveFileBtn|#btnRefreshExplorer|#homeConfirmSave|#psSave|#btnVcd|#btnImport|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#btnChangeHdlRoot|#homeChangeHdlRoot|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#ciPins|#btnOpenPinoutRef|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
+  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnTruthCopy|#btnTruthExport|#saveFileBtn|#btnRefreshExplorer|#homeConfirmSave|#psSave|#btnVcd|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#btnChangeHdlRoot|#homeChangeHdlRoot|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#ciPins|#btnOpenPinoutRef|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
   setTimeout(async () => {
     await new Promise(r => requestAnimationFrame(r));
     const waitStart = performance.now();
@@ -279,7 +279,7 @@ function setStatus() {
   $('#btnReset').disabled = locked || !S.sim || (!S.flashed && !S.vcd) || S.dirty;
   if ($('#btnFlash')) $('#btnFlash').disabled = locked || !S.sim || !!S.vcd || S.dirty || S.error;
   $('#btnVcd').disabled = locked || !S.sim || (!S.flashed && !S.vcd);
-  for (const id of ['btnDemo', 'btnImport', 'dropZone', 'btnQsf', 'topSelect', 'standardSelect', 'topLibrary', 'genericInput', 'pwrToggle', 'btnPinReset', 'clearSdf', 'saveFileBtn', 'saveSource', 'progDrop', 'btnSaveProject', 'replayScope']) {
+  for (const id of ['btnDemo', 'dropZone', 'btnQsf', 'topSelect', 'standardSelect', 'topLibrary', 'genericInput', 'pwrToggle', 'btnPinReset', 'clearSdf', 'saveFileBtn', 'saveSource', 'progDrop', 'replayScope']) {
     const el = $('#' + id);
     if (el) el.disabled = locked;
   }
@@ -292,8 +292,55 @@ function setStatus() {
 }
 function pause() { S.running = false; accumulator = 0; audio.stopBuzzer(); setStatus(); }
 function fail(e) { S.error = true; S.pending = []; pause(); log(e.message, 'error'); toast(e.message, 'err'); ide?.reportBuildFailure(e.message); openTools('console'); }
-function markDirty() { S.dirty = true; S.flashed = false; S.error = false; S.pending = []; S.bindings = {}; ++S.generation; board?.clearOutputs(); sampleOutputs(); pause(); saveProject(); }
-function projectData() { ide?.commitAll(); return { format: 'trace-project', version: 1, sources: S.sources, assignments: [...S.assignments], top: $('#topSelect').value, topLibrary: $('#topLibrary').value, standard: $('#standardSelect').value, generics: $('#genericInput').value, sdf: S.sdf ? { ...S.sdf, instance: $('#sdfInstance').value, corner: $('#sdfCorner').value } : null, projectDir: S.projectDir || null, projectName: S.projectName || '' }; }
+function fnvHash(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+function computeCompileFingerprint() {
+  const srcs = [...S.sources]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(s => `${s.name}\0${s.library || 'work'}\0${s.text}`)
+    .join('\x1e');
+  const top = ($('#topSelect')?.value || '').trim().toLowerCase();
+  const topLib = ($('#topLibrary')?.value || S.topLibrary || 'work').trim().toLowerCase();
+  const std = $('#standardSelect')?.value || S.standard || '93';
+  const gen = ($('#genericInput')?.value || '').trim();
+  const sdfSig = S.sdf ? `${S.sdf.name}|${$('#sdfInstance')?.value || S.sdf.instance || ''}|${$('#sdfCorner')?.value || S.sdf.corner || ''}|${S.sdf.text}` : '';
+  return fnvHash(`${std}\0${topLib}\0${top}\0${gen}\0${sdfSig}\0${srcs}`);
+}
+function computeFlashFingerprint() {
+  const pins = [...S.assignments.entries()]
+    .filter(([, v]) => v && v.trim())
+    .sort((a, b) => a[0] - b[0])
+    .map(([p, v]) => `${p}=${v.trim().toLowerCase()}`)
+    .join(',');
+  return fnvHash(`${computeCompileFingerprint()}\0${pins}`);
+}
+function markDirty() { S.dirty = true; S.flashed = false; S.compiledHash = ''; S.flashedHash = ''; S.error = false; S.pending = []; S.bindings = {}; ++S.generation; board?.clearOutputs(); sampleOutputs(); pause(); saveProject(); }
+function projectData() {
+  ide?.commitAll();
+  return {
+    format: 'trace-project',
+    version: 1,
+    sources: S.sources,
+    assignments: [...S.assignments],
+    top: $('#topSelect').value,
+    topLibrary: $('#topLibrary').value,
+    standard: $('#standardSelect').value,
+    generics: $('#genericInput').value,
+    sdf: S.sdf ? { ...S.sdf, instance: $('#sdfInstance').value, corner: $('#sdfCorner').value } : null,
+    projectDir: S.projectDir || null,
+    projectName: S.projectName || '',
+    compiledHash: S.compiledHash || '',
+    flashedHash: S.flashedHash || '',
+    compiledAssignments: [...S.compiledAssignments],
+    discoveredPorts: S.discoveredPorts || [],
+  };
+}
 function syncProjectSaveUI() {
   const saved = !!S.projectDir;
   if ($('#btnSaveProject')) {
@@ -359,8 +406,8 @@ async function openProjectFromDiskPath(targetPath = '', { promptIfInWorkbench = 
       return true;
     }
     const result = await api('/api/project/open', { path: chosen });
+    await stopAllSimulations();
     for (const tabName of [...(ide?.tabs || [])]) ide?.closeTab(tabName, true);
-    S.discoveredPorts = [];
     restoreProject(result.project);
     S.projectDir = result.dir;
     S.projectName = result.projectName;
@@ -369,10 +416,11 @@ async function openProjectFromDiskPath(targetPath = '', { promptIfInWorkbench = 
     ide?.recordRecentProject(result.projectName, result.dir, result.qpf);
     ide?.captureBaseline(result.projectName);
     ide?.showHome(false);
-    markDirty();
     syncProjectSaveUI();
     await ide?.refreshProjectTree?.();
-    toast(`Opened ${result.projectName} (${result.project.sources.length} file${result.project.sources.length === 1 ? '' : 's'}). Click Build & Compile when ready.`, 'ok');
+    const restoredState = await restoreSavedCompileState();
+    const suffix = restoredState === 'flashed' ? 'Restored compiled & flashed state.' : restoredState === 'compiled' ? 'Restored compiled state — ready to flash.' : 'Click Compile when ready.';
+    toast(`Opened ${result.projectName} (${result.project.sources.length} file${result.project.sources.length === 1 ? '' : 's'}). ${suffix}`, 'ok');
     return true;
   } catch (e) {
     toast(e.message, 'err');
@@ -390,13 +438,33 @@ function restoreProject(project) {
   S.sources = project.sources; S.assignments = new Map(project.assignments); S.sdf = project.sdf || null;
   S.projectDir = typeof project.projectDir === 'string' && project.projectDir ? project.projectDir : null;
   S.projectName = typeof project.projectName === 'string' ? project.projectName : '';
-  S.discoveredPorts = [];
+  S.discoveredPorts = Array.isArray(project.discoveredPorts) ? project.discoveredPorts : [];
+  S.compiledAssignments = Array.isArray(project.compiledAssignments) ? new Map(project.compiledAssignments) : new Map();
+  S.compiledHash = typeof project.compiledHash === 'string' ? project.compiledHash : '';
+  S.flashedHash = typeof project.flashedHash === 'string' ? project.flashedHash : '';
   $('#standardSelect').value = project.standard; $('#genericInput').value = project.generics; $('#topLibrary').value = project.topLibrary || 'work';
   renderSources(); $('#topSelect').value = project.top || ''; renderSdf(); renderPins(); syncProjectSaveUI();
   const topName = project.top || allEntities()[0] || S.sources[0]?.name || 'No design';
   $('#designTitle').textContent = S.projectName || (topName === DEMO_TOP ? 'Counter demo' : topName);
   $('#designSubtitle').textContent = `Build needed · VHDL-${project.standard === '08' ? '2008' : project.standard === '93' ? '1993' : '2002'}`;
   ide?.refreshProjectTree?.();
+}
+async function restoreSavedCompileState() {
+  const wantCompile = S.compiledHash && S.compiledHash === computeCompileFingerprint();
+  const wantFlash = wantCompile && S.flashedHash && S.flashedHash === computeFlashFingerprint();
+  if (!wantCompile) {
+    S.dirty = true;
+    S.flashed = false;
+    setStatus();
+    return 'dirty';
+  }
+  await build($('#topSelect').value, { quiet: true });
+  if (S.error || !S.sim) return 'error';
+  if (wantFlash) {
+    await flashToBoard({ quiet: true, preserveBoardPane: true });
+    if (!S.error && S.flashed) return 'flashed';
+  }
+  return 'compiled';
 }
 function download(text, name, type = 'text/plain') { const url = URL.createObjectURL(new Blob([text], { type })); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function renderSdf() { $('#sdfControls').classList.toggle('hidden', !S.sdf); $('#sdfName').textContent = S.sdf?.name || 'Timing annotation'; $('#sdfInstance').value = S.sdf?.instance || ''; $('#sdfCorner').value = S.sdf?.corner || 'typ'; }
@@ -448,7 +516,7 @@ async function stopAllSimulations() {
   setStatus();
   await closeSession(prevSim);
 }
-async function build(top = $('#topSelect').value) {
+async function build(top = $('#topSelect').value, { quiet = false } = {}) {
   if (S.building || S.exporting) return;
   if (ide?.hasUnsaved()) {
     if (!ide.validateLibraries()) return;
@@ -462,8 +530,7 @@ async function build(top = $('#topSelect').value) {
   if (!/^[a-z][a-z0-9_]*$/i.test(S.topLibrary)) return toast('Enter a valid top library name.', 'err');
   if (S.sdf) { S.sdf.instance = $('#sdfInstance').value.trim(); S.sdf.corner = $('#sdfCorner').value; if (!S.sdf.instance) return toast('Enter / for the top level, or a child instance path such as /u1.', 'err'); }
   try { S.generics = parseGenerics($('#genericInput').value); } catch (e) { return toast(e.message, 'err'); }
-  pause(); S.building = true; S.error = false; const generation = ++S.generation; setStatus(); saveProject();
-  if (S.projectDir) api('/api/project/save', { dir: S.projectDir, projectName: S.projectName || ide?.currentProjectTitle?.() || '', project: projectData() }).catch(() => {});
+  pause(); S.building = true; S.error = false; const generation = ++S.generation; setStatus();
   S.pending = []; await closeSession(S.sim); S.sim = null; S.vcd = null;
   board?.clearOutputs(); sampleOutputs();
   try {
@@ -471,6 +538,8 @@ async function build(top = $('#topSelect').value) {
     if (generation !== S.generation) { await closeSession(result); return; }
     S.sim = result; S.dirty = false; S.flashed = false; S.time = 0; S.cycles = 0; S.inputs = {}; S.values.clear();
     S.compiledAssignments = new Map(S.assignments);
+    S.compiledHash = computeCompileFingerprint();
+    if (S.flashedHash && S.flashedHash !== computeFlashFingerprint()) S.flashedHash = '';
     $('#replayControls').classList.add('hidden');
     const dirLabel = d => d === 1 ? 'IN' : d === 2 ? 'OUT' : d === 3 ? 'INOUT' : 'SIG';
     const discovered = [];
@@ -496,18 +565,21 @@ async function build(top = $('#topSelect').value) {
     board?.clearOutputs(); sampleOutputs();
     $('#roTime').textContent = fmtTime(0);
     syncKeys();
+    saveProject();
     const assignedCount = [...S.compiledAssignments.values()].filter(v => v && v.trim()).length;
     $('#designTitle').textContent = S.projectName || (result.top === DEMO_TOP ? 'Counter demo' : result.top);
     $('#designSubtitle').textContent = `Compiled (${assignedCount} pin${assignedCount === 1 ? '' : 's'} assigned) · Ready to flash`;
     $('#inputHint').textContent = 'Flash compiled design to activate board I/O';
     $('.mode-label').textContent = 'GHDL · compiled (unflashed)';
-    log(`${result.backend}\nCompiled ${result.top} (${result.signals.length} signals, ${assignedCount} board pin${assignedCount === 1 ? '' : 's'} assigned). Click Flash to program the devboard.`);
+    log(`${result.backend}\nCompiled ${result.top}${result.cached ? ' (cached)' : ''} (${result.signals.length} signals, ${assignedCount} board pin${assignedCount === 1 ? '' : 's'} assigned). Click Flash to program the devboard.`);
     result.diagnostics.forEach(d => log(d, 'warning'));
     ide?.setProblems(parseDiagnostics((result.diagnostics || []).join('\n')));
-    toast(assignedCount ? `Compiled ${result.top} (${assignedCount} pin${assignedCount === 1 ? '' : 's'} assigned). Click Flash to program board.` : `Compiled ${result.top} (0 pins assigned). Assign pins in Pin Planner or click Flash.`, 'ok');
+    if (!quiet) {
+      toast(assignedCount ? `Compiled ${result.top} (${assignedCount} pin${assignedCount === 1 ? '' : 's'} assigned). Click Flash to program board.` : `Compiled ${result.top} (0 pins assigned). Assign pins in Pin Planner or click Flash.`, 'ok');
+    }
   } catch (e) {
     if (generation !== S.generation) return;
-    await closeSession(S.sim); S.sim = null; S.flashed = false; S.bindings = {}; S.inputs = {}; S.values.clear(); S.time = 0;
+    await closeSession(S.sim); S.sim = null; S.flashed = false; S.compiledHash = ''; S.flashedHash = ''; S.bindings = {}; S.inputs = {}; S.values.clear(); S.time = 0;
     board?.clearOutputs(); sampleOutputs(); renderPins(); waves.setSignals([]); renderSignalChips();
     $('#virtualInputs').replaceChildren(); $('#virtualInputs').classList.add('hidden');
     for (const id of ['truthInputs', 'truthHead', 'truthBody', 'truthSummary', 'uartOut']) $('#' + id).replaceChildren();
@@ -515,24 +587,23 @@ async function build(top = $('#topSelect').value) {
     fail(e);
   } finally { S.building = false; setStatus(); }
 }
-async function flashToBoard() {
-  if (S.building || S.importing || S.exporting) return;
-  if (ide?.hasUnsaved() || S.dirty || !S.sim || S.error) {
-    return toast('Build & Compile your code and pin assignments first before flashing to the board.', 'err');
+function attachSignalShortNames(result) {
+  for (const signal of result.signals) {
+    signal.short = signal.name.startsWith(result.top + '.') ? signal.name.slice(result.top.length + 1) : signal.name;
   }
-  pause();
-  if (ide && !ide.boardOpen) ide.setBoardPaneOpen(true);
-  if (S.flashed || S.time > 0 || S.cycles > 0 || S.sim.ended) {
-    await build(S.sim.top);
-    if (S.error || !S.sim) return;
-  }
-  S.flashed = true;
+}
+async function applyInitialFlashedState({ preserveWaves = false } = {}) {
+  const prevVis = preserveWaves ? new Map(waves.signals.map(s => [s.name, !!s.visible])) : null;
   S.time = 0; S.cycles = 0; S.inputs = {}; S.values.clear(); S.pending = [];
   if ($('#waveFollow')) $('#waveFollow').checked = true;
-  buildBindings(); buildWaves(); renderPins(); renderTruthInputs();
-  $('#virtualInputs').replaceChildren(); $('#virtualInputs').classList.add('hidden');
+  buildBindings();
+  buildWaves(prevVis);
+  renderVirtualInputs();
+  renderPins();
+  renderTruthInputs();
   uart.reset(); $('#uartOut').replaceChildren();
-  board?.clearOutputs(); consume(S.sim);
+  board?.clearOutputs();
+  consume(S.sim);
   for (const signal of S.sim.signals.filter(s => s.driveable && !S.sim.ended)) {
     const bits = Array(signal.width).fill(signal.direction === 3 ? 'Z' : '0');
     let touched = false;
@@ -556,9 +627,57 @@ async function flashToBoard() {
   } else {
     sampleOutputs();
   }
+  $('#roTime').textContent = fmtTime(0);
+  if ($('#waveCursor')) $('#waveCursor').textContent = 'Cursor —';
   syncKeys();
   setStatus();
   waves.fit();
+}
+async function restartSimulation() {
+  if (!S.sim || S.building || S.importing || S.exporting) return;
+  if (S.vcd) { loadVcd(S.vcd.text, S.sim.top); toast('Waveform replay restarted at 0 ns.'); return; }
+  pause();
+  S.building = true; setStatus();
+  const generation = ++S.generation;
+  try {
+    const restarted = await api(`/api/sim/${S.sim.id}/restart`, {});
+    if (generation !== S.generation) { await closeSession(restarted); return; }
+    attachSignalShortNames(restarted);
+    S.sim = restarted;
+    S.flashed = true;
+    await applyInitialFlashedState({ preserveWaves: true });
+    log(`Restarted simulation (${S.sim.top}) at 0 fs.`);
+    toast('Simulation restarted.');
+  } catch (e) {
+    if (generation !== S.generation) return;
+    fail(e);
+  } finally { S.building = false; setStatus(); }
+}
+async function flashToBoard({ quiet = false, preserveBoardPane = false } = {}) {
+  if (S.building || S.importing || S.exporting) return;
+  if (ide?.hasUnsaved() || S.dirty || !S.sim || S.error) {
+    return toast('Build & Compile your code and pin assignments first before flashing to the board.', 'err');
+  }
+  pause();
+  if (!preserveBoardPane && ide && !ide.boardOpen) ide.setBoardPaneOpen(true);
+  if (S.flashed || S.time > 0 || S.cycles > 0 || S.sim.ended) {
+    S.building = true; setStatus();
+    const generation = ++S.generation;
+    try {
+      const restarted = await api(`/api/sim/${S.sim.id}/restart`, {});
+      if (generation !== S.generation) { await closeSession(restarted); return; }
+      attachSignalShortNames(restarted);
+      S.sim = restarted;
+    } catch (e) {
+      if (generation !== S.generation) return;
+      fail(e);
+      return;
+    } finally { S.building = false; }
+  }
+  S.flashed = true;
+  S.flashedHash = computeFlashFingerprint();
+  await applyInitialFlashedState({ preserveWaves: false });
+  saveProject();
   const boundEntries = Object.entries(S.bindings);
   const boundCount = boundEntries.length;
   $('#designSubtitle').textContent = boundCount
@@ -568,11 +687,11 @@ async function flashToBoard() {
   $('.mode-label').textContent = boundCount ? 'GHDL · flashed to board' : 'GHDL · flashed (unmapped)';
   if (boundCount === 0) {
     log(`Flashed ${S.sim.top} to devboard with 0 connected pins. Because no pins were assigned in Pin Planner before compiling, the devboard will behave as if no code was flashed.`, 'warning');
-    toast(`Flashed ${S.sim.top} with 0 pins mapped (devboard I/O is unconnected).`);
+    if (!quiet) toast(`Flashed ${S.sim.top} with 0 pins mapped (devboard I/O is unconnected).`);
   } else {
     const pinList = boundEntries.map(([net, b]) => `${b.bit === null ? b.signal.short : `${b.signal.short}[${b.bit}]`}->${net}(P${NET_PIN[net]})`).join(', ');
     log(`Flashed ${S.sim.top} onto 3D devboard (${boundCount} pin${boundCount === 1 ? '' : 's'} connected: ${pinList}).`);
-    toast(`Flashed ${S.sim.top} to devboard (${boundCount} pin${boundCount === 1 ? '' : 's'} connected).`, 'ok');
+    if (!quiet) toast(`Flashed ${S.sim.top} to devboard (${boundCount} pin${boundCount === 1 ? '' : 's'} connected).`, 'ok');
   }
 }
 function buildBindings() {
@@ -643,6 +762,15 @@ function consume(result) {
     if (input.type === 'checkbox') input.checked = value === '1'; else input.value = value ?? '';
   }
 }
+function reloadQsfText(text, fileName = 'project.qsf') {
+  try {
+    const parsed = parseQsf(text);
+    S.assignments = new Map(parsed.pins.map(({ pin, target }) => [pin, target.toLowerCase()]));
+    renderPins();
+    markDirty();
+    log(`Reloaded ${parsed.pins.length} pin assignment(s) from ${fileName}.`);
+  } catch {}
+}
 const MAX_SIM_FS = 9007199254740991;
 function remainingSimCycles() {
   if (!S.sim || S.vcd) return Infinity;
@@ -657,8 +785,8 @@ async function advance(cycles = 1) {
     const maxCycles = remainingSimCycles();
     if (maxCycles <= 0) {
       pause();
-      log('Reached 9 s exact femtosecond waveform window (2^53 fs). Click Run or Restart to continue.', 'info');
-      toast('Reached 9 s capture window. Click Run or Restart to continue.');
+      log('Reached 9 s exact femtosecond waveform window (2^53 fs). Click Restart to continue from 0 ns.', 'info');
+      toast('Reached 9 s capture window. Click Restart to continue from 0 ns.');
       return;
     }
     if (cycles > maxCycles) cycles = maxCycles;
@@ -680,8 +808,8 @@ async function advance(cycles = 1) {
     S.cycles += cycles;
     if (S.running && remainingSimCycles() <= 0) {
       pause();
-      log('Reached 9 s exact femtosecond waveform window (2^53 fs). Click Run or Restart to continue.', 'info');
-      toast('Reached 9 s capture window. Click Run or Restart to continue.');
+      log('Reached 9 s exact femtosecond waveform window (2^53 fs). Click Restart to continue from 0 ns.', 'info');
+      toast('Reached 9 s capture window. Click Restart to continue from 0 ns.');
     }
   } catch (e) { if (generation === S.generation) fail(e); } finally { S.busy = false; }
 }
@@ -764,8 +892,8 @@ function renderVirtualInputs() {
   }
   wrap.classList.toggle('hidden', !wrap.children.length);
 }
-function buildWaves() {
-  waves.setSignals(S.sim.signals.map(s => ({ name: s.short, width: s.width, visible: false })));
+function buildWaves(prevVis = null) {
+  waves.setSignals(S.sim.signals.map(s => ({ name: s.short, width: s.width, visible: prevVis ? !!prevVis.get(s.short) : false })));
   renderSignalChips();
 }
 function updateSignalCount() {
@@ -1144,7 +1272,7 @@ async function loadFiles(files) {
     if (['sof','pof'].includes(extensions[0])) return await loadBitstream(await files[0].arrayBuffer(), files[0].name);
     const loaded = await Promise.all(files.map(async (file, i) => ({ name: file.name, text: await file.text(), ext: extensions[i] })));
     if (extensions[0] === 'vcd') return await loadVcd(loaded[0].text, loaded[0].name);
-    if (extensions[0] === 'json') { restoreProject(JSON.parse(loaded[0].text)); S.importing = false; renderPins(); markDirty(); toast('Project loaded. Click Build design or Flash to compile.'); return; }
+    if (extensions[0] === 'json') { await stopAllSimulations(); ide?.closeDiskTabs?.(); restoreProject(JSON.parse(loaded[0].text)); S.importing = false; renderPins(); const st = await restoreSavedCompileState(); toast(st === 'flashed' ? 'Project loaded (restored compiled & flashed state).' : st === 'compiled' ? 'Project loaded (restored compiled state — ready to flash).' : 'Project loaded. Click Compile when ready.'); return; }
     let changed = false, requestedTop;
     let nextSources = S.sources.map(s => ({ ...s }));
     const qsfFiles = loaded.filter(f => f.ext === 'qsf').map(f => ({ ...f, data: parseQsf(f.text) }));
@@ -1173,11 +1301,11 @@ async function loadFiles(files) {
     if (requestedTop) { if (allEntities().includes(requestedTop)) $('#topSelect').value = requestedTop; else log(`QSF top ${requestedTop} is not in the loaded sources.`, 'warning'); }
     for (const file of loaded.filter(f => f.ext === 'sdf')) {
       S.sdf = { name: file.name, text: file.text, instance: '/', corner: 'typ' }; renderSdf(); changed = true;
-      log('SDF loaded. Verify instance path and min/typ/max corner in Compiler options before building.', 'warning');
+      log('SDF loaded. Verify instance path and min/typ/max corner in Project & compiler settings before building.', 'warning');
     }
     S.importing = false;
     if (S.vcd && !loaded.some(f => f.ext !== 'qsf')) { buildBindings(); renderPins(); sampleOutputs(); saveProject(); }
-    else if (changed) { renderPins(); markDirty(); toast('Files loaded. Click Build design or Flash to compile.'); }
+    else if (changed) { renderPins(); markDirty(); toast('Files loaded. Click Compile when ready.'); }
   } finally { S.importing = false; setStatus(); }
 }
 function importError(e) { log(e.message, 'error'); toast(e.message, 'err'); openTools('console'); }
@@ -1345,46 +1473,38 @@ function wire() {
   $('#btnRun').onclick = async () => {
     if (!S.power || S.building || S.importing || S.exporting) return;
     if (S.running) { pause(); recordLogEvent('info', `Simulation paused (${S.sim?.top || 'design'}, ${S.cycles} cycles)`); return; }
-    if (ide?.hasUnsaved()) { markDirty(); return toast('Build design or Flash before running.', 'err'); }
+    if (ide?.hasUnsaved()) { markDirty(); return toast('Compile and flash your design before running.', 'err'); }
     if (!S.sim || S.sim.ended || S.dirty || S.error) return;
     if (!S.vcd && remainingSimCycles() <= 0) {
-      return toast('Reached 9 s capture window. Click Restart or Build design to continue.');
+      return toast('Reached 9 s capture window. Click Restart to continue from 0 ns.');
     }
-    S.running = true; setStatus('Running'); lastFrame = performance.now();
+    S.running = true; setStatus(); lastFrame = performance.now();
     recordLogEvent('info', `Simulation started (${S.sim.top}, clock=${S.clkHz} Hz)`);
   };
   $('#btnStep').onclick = async () => {
     if (!S.power || S.building || S.importing || S.exporting) return;
     pause();
-    if (ide?.hasUnsaved()) { markDirty(); return toast('Build design or Flash before stepping.', 'err'); }
+    if (ide?.hasUnsaved()) { markDirty(); return toast('Compile and flash your design before stepping.', 'err'); }
     advance(1);
   };
-  $('#btnReset').onclick = async () => {
-    if (!S.sim) return;
-    if (S.vcd) loadVcd(S.vcd.text, S.sim.top);
-    else {
-      await build(S.sim.top);
-      if (!S.error && S.sim) await flashToBoard();
-    }
-  };
+  $('#btnReset').onclick = restartSimulation;
   $('#speed').oninput = e => { S.speed = Number(e.target.value); $('#rateLabel').textContent = `${(10 ** ((S.speed - 55) / 25)).toFixed(1).replace('.0', '')}×`; };
   $('#clkHz').onchange = e => { S.clkHz = Number(e.target.value); accumulator = 0; log(`Ideal clock: ${S.clkHz} Hz. Execution speed is limited by native simulation and display throughput.`); };
   $('#btnMute').onclick = () => { const muted = !audio.isMuted(); audio.setMuted(muted); if (!muted) audio.resume(); $('#btnMute').setAttribute('aria-pressed', String(muted)); $('#muteLabel').textContent = muted ? 'Sound off' : 'Sound on'; };
   $('#btnElab').onclick = () => ide ? ide.saveAndCompile() : build(); $('#topSelect').onchange = markDirty;
-  $('#btnDemo').onclick = () => { S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; S.assignments.clear(); S.discoveredPorts = []; S.projectDir = null; S.projectName = 'Counter demo'; S.sdf = null; $('#genericInput').value = ''; $('#topLibrary').value = 'work'; $('#standardSelect').value = '93'; renderSdf(); renderSources(); $('#topSelect').value = DEMO_TOP; $('#designTitle').textContent = 'Counter demo'; $('#designSubtitle').textContent = 'Build needed · VHDL-1993'; renderPins(); syncProjectSaveUI(); ide?.refreshProjectTree?.(); markDirty(); toast('Counter demo loaded. Click Build & Compile when ready.'); };
-  if ($('#btnSaveProject')) $('#btnSaveProject').onclick = () => saveProjectToDisk({ saveAs: false });
+  $('#btnDemo').onclick = async () => { await stopAllSimulations(); ide?.closeDiskTabs?.(); S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; S.assignments.clear(); S.discoveredPorts = []; S.compiledAssignments = new Map(); S.compiledHash = ''; S.flashedHash = ''; S.projectDir = null; S.projectName = 'Counter demo'; S.sdf = null; $('#genericInput').value = ''; $('#topLibrary').value = 'work'; $('#standardSelect').value = '93'; renderSdf(); renderSources(); $('#topSelect').value = DEMO_TOP; $('#designTitle').textContent = 'Counter demo'; $('#designSubtitle').textContent = 'Build needed · VHDL-1993'; renderPins(); syncProjectSaveUI(); ide?.refreshProjectTree?.(); markDirty(); toast('Counter demo loaded. Click Compile when ready.'); };
   $('#btnOpenPinoutRef')?.addEventListener('click', () => openTools('pinout'));
   $('#pinoutSearch')?.addEventListener('input', () => renderPinoutRef());
   for (const id of ['standardSelect', 'topLibrary', 'genericInput', 'sdfInstance', 'sdfCorner']) $('#' + id).onchange = markDirty;
   $('#clearSdf').onclick = () => { S.sdf = null; renderSdf(); markDirty(); };
   $('#replayScope').onchange = e => { S.vcd.scope = e.target.value; buildBindings(); renderPins(); board?.clearOutputs(); sampleOutputs(); };
   $('#btnLedView').onclick = () => camera('leds');
-  for (const id of ['btnImport', 'dropZone', 'btnQsf']) $('#' + id).onclick = () => $('#fileInput').click();
+  for (const id of ['dropZone', 'btnQsf']) { const el = $('#' + id); if (el) el.onclick = () => $('#fileInput').click(); }
   $('#fileInput').onchange = async e => { try { await loadFiles([...e.target.files]); } catch (err) { importError(err); } e.target.value = ''; };
   $('#progDrop').onclick = () => $('#progFile').click(); $('#progFile').onchange = e => loadFiles([...e.target.files]).catch(importError);
   window.addEventListener('dragover', e => e.preventDefault()); window.addEventListener('drop', e => { e.preventDefault(); loadFiles([...e.dataTransfer.files]).catch(importError); });
   $('#libSearch').oninput = e => { const query = e.target.value.toLowerCase(); $$('.hdl-group').forEach(group => { let visible = false; group.querySelectorAll('.hdl-file').forEach(file => { const match = file.dataset.name.includes(query); file.hidden = !match; visible ||= match; }); group.hidden = !visible; if (query) group.classList.add('open'); }); };
-  $('#btnPinReset').onclick = () => { S.assignments.clear(); saveProject(); if (S.vcd) { buildBindings(); renderPins(); sampleOutputs(); } else { markDirty(); renderPins(); toast('Pin map reset. Click Build design or Flash to compile.'); } };
+  $('#btnPinReset').onclick = () => { S.assignments.clear(); saveProject(); if (S.vcd) { buildBindings(); renderPins(); sampleOutputs(); } else { markDirty(); renderPins(); toast('Pin map reset. Click Compile to apply changes.'); } };
   $$('.key-btn').forEach(button => {
     const net = button.dataset.key === 'reset' ? 'reset_btn' : button.dataset.key.replace('key', 's');
     button.onpointerdown = e => { if (button.disabled) return; e.preventDefault(); button.setPointerCapture(e.pointerId); keyInput(net, true); };
@@ -1738,7 +1858,7 @@ async function boot() {
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
   try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { if (pressed) trackUiAction('3D', $('#view3d'), `press ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.65); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames'), $('#waveScrollTrack'), $('#waveScrollThumb')); applyTheme(document.documentElement.dataset.theme); wire();
-  ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, renderSources, openTools, openBottomTab, syncNavigation, projectData, saveProject, persistAppState, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations });
+  ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, restartSimulation, restoreSavedCompileState, renderSources, openTools, openBottomTab, syncNavigation, projectData, saveProject, persistAppState, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations, reloadQsfText });
   wireActionLogger();
   fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);

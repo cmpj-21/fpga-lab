@@ -35,7 +35,7 @@
       <button id="btnStep" class="icon-btn" title="One clock cycle (.)" aria-label="Step one clock cycle"><svg viewBox="0 0 24 24"><path d="m6 5 10 7-10 7zM19 5v14"/></svg></button>
       <button id="btnRun" class="run-btn"><svg viewBox="0 0 24 24" class="ic-play"><path d="m8 5 11 7-11 7z"/></svg><svg viewBox="0 0 24 24" class="ic-pause"><path d="M8 5v14M16 5v14"/></svg><span id="runLabel">Run</span><kbd>Space</kbd></button>
     </div>
-    <div class="header-end"><button id="btnFocusBoard" class="btn active" aria-pressed="true" title="Hide VHDL code editor (Ctrl+E)">Editor</button><button id="btnToggleBoard" class="btn" aria-pressed="false" title="Show 3D Devboard Simulator (Alt+B)">3D Board</button><span class="local-indicator"><i></i>Local workspace</span><button id="btnImport" class="btn dark">Open files <span>↗</span></button></div>
+    <div class="header-end"><button id="btnFocusBoard" class="btn active" aria-pressed="true" title="Hide VHDL code editor (Ctrl+E)">Editor</button><button id="btnToggleBoard" class="btn" aria-pressed="false" title="Show 3D Devboard Simulator (Alt+B)">3D Board</button><span class="local-indicator"><i></i>Local workspace</span></div>
   </header>
   <nav id="rail" aria-label="Workspace panels">
     <button id="btnHome" class="rail-btn" title="Home / Welcome screen" aria-label="Home screen"><svg viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg><span>Home</span></button>
@@ -400,7 +400,7 @@
       <div class="home-top-actions">
         <button id="homeThemeBtn" class="btn" title="Switch between light and dark theme">Theme</button>
         <button id="homeAboutBtn" class="btn" title="Simulation capabilities and limits">About</button>
-        <button id="homeContinueBtn" class="btn dark" title="Return to active IDE workbench (Esc)">Continue to Workbench <span>→</span></button>
+        <button id="homeContinueBtn" class="btn dark hidden" title="Return to active IDE workbench (Esc)">Continue to Workbench <span>→</span></button>
       </div>
     </header>
     <div class="home-body">
