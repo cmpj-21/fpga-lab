@@ -15,7 +15,7 @@ const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const S = { sources: [], sim: null, flashed: false, compiledHash: '', flashedHash: '', projectDir: null, projectName: '', running: false, power: true, building: false, busy: false, clkHz: 50000000, speed: 55, time: 0, inputs: {}, assignments: new Map(), compiledAssignments: new Map(), discoveredPorts: [], bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0 };
 let board, waves, ide, toastTimer, sourceIndex, consoleCount = 0, logFile = '', actionLogFile = '', currentHdlRoot = '', reportCount = 0;
-let lastFrame = performance.now(), accumulator = 0, lastDraw = 0;
+let lastFrame = performance.now(), accumulator = 0, wallTimeAccum = 0, lastDraw = 0;
 let actionSeq = 0, lastErrorSeq = 0, lastErrorMsg = '', actionFlushTimer = 0, eventFlushTimer = 0, stateFlushTimer = 0;
 const uart = new UartReceiver();
 const reported = new Map();
@@ -340,7 +340,7 @@ function setStatus() {
   syncKeys();
 }
 function pause() {
-  S.running = false; accumulator = 0; displayFrameQueue.length = 0; audio.stopBuzzer(); sampleOutputs(); setStatus();
+  S.running = false; accumulator = 0; wallTimeAccum = 0; displayFrameQueue.length = 0; audio.stopBuzzer(); sampleOutputs(); setStatus();
   if (waves && !$('#app')?.classList.contains('no-waves')) {
     if ($('#waveFollow')?.checked && S.time > 0) waves.follow(S.time, waveFollowSpan());
     waves.draw();
@@ -821,9 +821,13 @@ function sampleOutputs() {
   });
 }
 function waveFollowSpan() {
+  const rate = 10 ** ((S.speed - 55) / 25);
+  if (S.running) {
+    return Math.max(1e12, Math.min(2.5e15 * rate, Math.max(S.time, 2e14)));
+  }
   const cycleFs = 1e15 / S.clkHz;
   const maxPerFrame = S.clkHz >= 100000 ? 4096 : 512;
-  const effectiveCyclesPerSec = Math.min(maxPerFrame * 30, S.clkHz * 10 ** ((S.speed - 55) / 25));
+  const effectiveCyclesPerSec = Math.min(maxPerFrame * 30, S.clkHz * rate);
   if (clockId() === -1) {
     return Math.max(cycleFs * 12, effectiveCyclesPerSec * 2.5 * cycleFs);
   }
@@ -884,12 +888,17 @@ function remainingSimCycles() {
   const stepFs = 2 * Number(halfPeriod()) * 10 ** (15 + (S.sim.precision ?? -15));
   return stepFs > 0 ? Math.max(0, Math.floor((MAX_SIM_FS - S.time) / stepFs)) : Infinity;
 }
-async function advance(cycles = 1) {
+async function advance(cycles = 1, wallSec = 0) {
   if (!Number.isInteger(cycles) || cycles < 0) return;
   if (!S.sim || S.sim.ended || S.dirty || S.error || !S.power || S.busy || S.building || S.importing || S.exporting) return;
   if (S.vcd) { stepPlayback(cycles); return; }
+  const ticksPerSec = 10 ** -(S.sim.precision ?? -15);
+  const stepHalfPeriod = (wallSec > 0 && cycles > 0)
+    ? String(Math.max(1, Math.round((0.5 * wallSec * ticksPerSec) / cycles)))
+    : halfPeriod();
+  const stepFs = 2 * Number(stepHalfPeriod) * 10 ** (15 + (S.sim.precision ?? -15));
   if (cycles > 0) {
-    const maxCycles = remainingSimCycles();
+    const maxCycles = stepFs > 0 ? Math.max(0, Math.floor((MAX_SIM_FS - S.time) / stepFs)) : Infinity;
     if (maxCycles <= 0) {
       pause();
       log('Reached 64-bit simulation time ceiling (~5 hours at 1 fs). Click Restart to continue from 0 ns.', 'info');
@@ -913,7 +922,7 @@ async function advance(cycles = 1) {
     for (let i = 0; i < batches.length; i++) {
       const isLast = i === batches.length - 1;
       const batchCycles = isLast ? cycles : 0;
-      const result = await api(`/api/sim/${S.sim.id}/step`, { cycles: batchCycles, stride: batchCycles > 64 ? stride : 1, halfPeriod: halfPeriod(), clock: clockId(), inputs: batches[i] });
+      const result = await api(`/api/sim/${S.sim.id}/step`, { cycles: batchCycles, stride: batchCycles > 64 ? stride : 1, halfPeriod: stepHalfPeriod, clock: clockId(), inputs: batches[i] });
       if (generation !== S.generation) return;
       consume(result);
       if (S.sim.ended) break;
@@ -1987,14 +1996,19 @@ function frame(now) {
   if (now - lastDraw > 250) { $('#roFps').textContent = board ? Math.round(board.fps) : '—'; lastDraw = now; }
   if (S.running) {
     if (displayFrameQueue.length) applyDisplayFrame(displayFrameQueue.shift());
+    const rate = 10 ** ((S.speed - 55) / 25);
     const maxPerFrame = S.clkHz >= 10000 ? adaptiveMaxCycles : 4096;
-    accumulator += S.clkHz * 10 ** ((S.speed - 55) / 25) * dt;
+    const stepWall = dt * rate;
+    wallTimeAccum = Math.min(0.25 * rate, wallTimeAccum + stepWall);
+    accumulator += S.clkHz * stepWall;
     accumulator = Math.min(accumulator, maxPerFrame * 2);
     if (!S.busy) {
       const cycles = Math.min(maxPerFrame, Math.floor(accumulator));
       if (Number.isInteger(cycles) && cycles > 0) {
+        const wallSec = wallTimeAccum;
+        wallTimeAccum = 0;
         accumulator -= cycles;
-        advance(cycles);
+        advance(cycles, wallSec);
       }
     }
   }
