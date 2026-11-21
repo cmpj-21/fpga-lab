@@ -131,6 +131,20 @@ function describeControl(el) {
   const rawLabel = (el.getAttribute?.('aria-label') || el.getAttribute?.('title') || textFallback || '').replace(/\s+/g, ' ').trim().slice(0, 42);
   return rawLabel ? `${sel} "${rawLabel}"` : sel;
 }
+const SEG_GLYPHS = { 0x3f: '0', 0x06: '1', 0x5b: '2', 0x4f: '3', 0x66: '4', 0x6d: '5', 0x7d: '6', 0x07: '7', 0x7f: '8', 0x6f: '9', 0x77: 'A', 0x7c: 'b', 0x39: 'C', 0x5e: 'd', 0x79: 'E', 0x71: 'F', 0x40: '-' };
+function currentDisplayText() {
+  if (!S.power || !board?.displayState) return 'off';
+  let anyLit = false;
+  const out = board.displayState.map(d => {
+    if (!d.enabled && !d.retained) return '_';
+    const segs = d.enabled ? d.segs : d.latched;
+    const mask = segs & 0x7f;
+    if (!mask && !(segs & 0x80)) return '_';
+    anyLit = true;
+    return (SEG_GLYPHS[mask] || (mask ? '?' : '_')) + ((segs & 0x80) ? '.' : '');
+  }).join('');
+  return anyLit ? out : 'off';
+}
 function uiSnapshot() {
   const leftOpen = $('#left') && getComputedStyle($('#left')).display !== 'none';
   return {
@@ -139,6 +153,7 @@ function uiSnapshot() {
     top: S.sim?.top || $('#topSelect')?.value || 'none',
     time: fmtTime(S.time),
     cycles: S.cycles,
+    timeCap: (!S.vcd && S.sim && S.flashed && !S.sim.ended && remainingSimCycles() <= 0) ? '9s-limit' : 'ok',
     files: S.sources.map(s => s.name).join(',') || 'none',
     tabs: ide?.tabs?.join(',') || 'none',
     tab: ide?.active || 'none',
@@ -161,7 +176,9 @@ function uiSnapshot() {
     power: S.power ? 'on' : 'off',
     dip: '0x' + S.dip.toString(16),
     keys: Object.entries(S.keys).filter(([, v]) => v).map(([k]) => k).join(',') || 'none',
+    downKeys: $$('.key-btn.down').map(b => b.dataset.key).join(',') || 'none',
     leds: [0, 1, 2, 3].filter(i => $(`[data-led="${i}"]`)?.classList.contains('on')).map(i => i + 1).join(',') || 'off',
+    seg: currentDisplayText(),
     cam: $('#camPreset')?.value || 'hero',
     tool: board?.toolMode || 'interact',
     nav: board?.navMode || 'orbit',
@@ -179,7 +196,7 @@ function uiSnapshot() {
   };
 }
 function diffSnapshot(before, after) {
-  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tabs', 'tab', 'editor', 'board', 'left', 'hdlOpen', 'hdlRoot', 'waves', 'right', 'deck', 'about', 'keysDlg', 'homeDlg', 'newProjDlg', 'projDlg', 'switchDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
+  const keys = ['view', 'status', 'top', 'time', 'cycles', 'timeCap', 'files', 'tabs', 'tab', 'editor', 'board', 'left', 'hdlOpen', 'hdlRoot', 'waves', 'right', 'deck', 'about', 'keysDlg', 'homeDlg', 'newProjDlg', 'projDlg', 'switchDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'downKeys', 'leds', 'seg', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
   const out = [];
   for (const k of keys) if (before[k] !== after[k]) out.push(`${k}:${before[k]}->${after[k]}`);
   return out;
@@ -226,6 +243,14 @@ function wireActionLogger() {
     const keyBtn = e.target.closest?.('.key-btn');
     if (keyBtn) trackUiAction('PRESS', keyBtn);
   }, true);
+  for (const ev of ['pointerup', 'pointercancel']) {
+    document.addEventListener(ev, e => {
+      const keyBtn = e.target.closest?.('.key-btn');
+      if (!keyBtn) return;
+      const net = keyBtn.dataset.key === 'reset' ? 'reset_btn' : keyBtn.dataset.key.replace('key', 's');
+      if (S.keys[net]) trackUiAction('RELEASE', keyBtn);
+    }, true);
+  }
   let dispatchingClick = false;
   document.addEventListener('click', e => {
     if (!e.isTrusted || dispatchingClick || e.target.closest?.('.key-btn')) return;
@@ -290,8 +315,10 @@ async function api(url, body, method = 'POST') {
   const result = await response.json(); if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`); return result;
 }
 function setStatus() {
-  const name = S.building ? 'Compiling' : S.error ? 'Error' : !S.power ? 'Power off' : S.dirty ? 'Build needed' : S.sim && !S.flashed && !S.vcd ? 'Ready to flash' : S.sim?.ended ? 'Complete' : S.running ? 'Running' : S.sim && (S.flashed || S.vcd) ? 'Paused' : 'No design';
+  const atTimeLimit = !S.vcd && S.sim && S.flashed && !S.sim.ended && !S.dirty && !S.error && remainingSimCycles() <= 0;
+  const name = S.building ? 'Compiling' : S.error ? 'Error' : !S.power ? 'Power off' : S.dirty ? 'Build needed' : S.sim && !S.flashed && !S.vcd ? 'Ready to flash' : S.sim?.ended ? 'Complete' : atTimeLimit ? 'Time limit' : S.running ? 'Running' : S.sim && (S.flashed || S.vcd) ? 'Paused' : 'No design';
   $('#statusPill').className = `status-pill ${name.toLowerCase().replaceAll(' ', '-')}`; $('#statusPill').textContent = name;
+  if (atTimeLimit && $('#inputHint')) $('#inputHint').textContent = 'Clock stopped at 9 s limit — click Restart (↻) or use 50 MHz clock';
   $('#btnRun').classList.toggle('running', S.running); $('#runLabel').textContent = S.running ? 'Pause' : 'Run';
   $('#btnRun').setAttribute('aria-label', S.running ? 'Pause simulation' : 'Run simulation');
   const locked = S.building || S.importing || S.exporting;
@@ -740,6 +767,11 @@ function boardValue(net) {
   const value = S.values.get(bound.signal.short) ?? 'U';
   return value[bound.offset] ?? 'U';
 }
+function sampleDisplayOnly() {
+  const active = S.power;
+  let byte = 0; SEG_NETS.forEach((net, b) => { if (/[0L]/.test(boardValue(net))) byte |= 1 << b; });
+  DIGIT_NETS.forEach((net, i) => board?.setSegDigit(i, byte, active && /[0L]/.test(boardValue(net))));
+}
 function sampleOutputs() {
   const active = S.power;
   LED_NETS.forEach((net, i) => {
@@ -748,8 +780,7 @@ function sampleOutputs() {
     indicator.title = `${net.toUpperCase()}: ${!active ? 'power off' : value + (on ? ' · on' : ' · off/unknown')}`;
     indicator.setAttribute('aria-label', indicator.title);
   });
-  let byte = 0; SEG_NETS.forEach((net, b) => { if (/[0L]/.test(boardValue(net))) byte |= 1 << b; });
-  DIGIT_NETS.forEach((net, i) => board?.setSegDigit(i, byte, active && /[0L]/.test(boardValue(net))));
+  sampleDisplayOnly();
   const beep = active && /[1H]/.test(boardValue('beep')); board?.setBuzzer(beep);
   if (beep && S.running) audio.startBuzzer(); else audio.stopBuzzer();
   $$('#ciNets [data-ci-net]').forEach(el => {
@@ -760,7 +791,8 @@ function sampleOutputs() {
 }
 function waveFollowSpan() {
   const cycleFs = 1e15 / S.clkHz;
-  const effectiveCyclesPerSec = Math.min(512 * 30, S.clkHz * 10 ** ((S.speed - 55) / 25));
+  const maxPerFrame = S.clkHz >= 100000 ? 4096 : 512;
+  const effectiveCyclesPerSec = Math.min(maxPerFrame * 30, S.clkHz * 10 ** ((S.speed - 55) / 25));
   if (clockId() === -1) {
     return Math.max(cycleFs * 12, effectiveCyclesPerSec * 2.5 * cycleFs);
   }
@@ -768,10 +800,15 @@ function waveFollowSpan() {
 }
 function consume(result) {
   result.logs?.forEach(m => log(m, /warning/i.test(m) ? 'warning' : 'info'));
-  for (const sample of result.samples || []) {
+  const list = result.samples || [];
+  for (let idx = 0; idx < list.length; idx++) {
+    const sample = list[idx];
     S.time = Number(sample.time) * 10 ** (15 + (S.sim?.precision ?? -15));
     S.sim.signals.forEach((signal, i) => S.values.set(signal.short, sample.values[i]));
-    waves.push(S.time, S.values); sampleOutputs(); uartSample();
+    waves.push(S.time, S.values);
+    if (idx === list.length - 1) sampleOutputs();
+    else sampleDisplayOnly();
+    uartSample();
   }
   if (result.ended) { S.sim.ended = true; S.pending = []; pause(); log('Testbench completed normally. Its final waveform is ready to export.'); }
   $('#roTime').textContent = fmtTime(S.time);
@@ -873,6 +910,7 @@ function syncKeys() {
     const isDown = !!S.keys[net];
     const isNetLow = S.power && S.flashed && bound && S.inputs[bound.signal.id]?.[bound.offset] === '0';
     button.classList.toggle('down', isDown || isNetLow);
+    button.classList.toggle('unmapped', !!(S.flashed && !bound));
     button.setAttribute('aria-pressed', String(isDown || isNetLow));
     button.disabled = false;
     board?.setKeyVisual(button.dataset.key, isDown);
@@ -1541,9 +1579,9 @@ function wire() {
   $$('.key-btn').forEach(button => {
     const net = button.dataset.key === 'reset' ? 'reset_btn' : button.dataset.key.replace('key', 's');
     button.onpointerdown = e => { if (button.disabled) return; e.preventDefault(); button.setPointerCapture(e.pointerId); keyInput(net, true); };
-    button.onpointerup = button.onpointercancel = button.onlostpointercapture = () => keyInput(net, false);
-    button.onkeydown = e => { if (['Enter', ' '].includes(e.key)) { e.preventDefault(); e.stopPropagation(); keyInput(net, true); } };
-    button.onkeyup = e => { if (['Enter', ' '].includes(e.key)) { e.preventDefault(); e.stopPropagation(); keyInput(net, false); } };
+    button.onpointerup = button.onpointercancel = button.onlostpointercapture = () => { if (S.keys[net]) keyInput(net, false); };
+    button.onkeydown = e => { if (['Enter', ' '].includes(e.key) && !e.repeat) { e.preventDefault(); e.stopPropagation(); keyInput(net, true); } };
+    button.onkeyup = e => { if (['Enter', ' '].includes(e.key) && S.keys[net]) { e.preventDefault(); e.stopPropagation(); keyInput(net, false); } };
   });
   $$('.dip-btn').forEach(button => {
     button.onclick = () => toggleDip(Number(button.dataset.dip));
@@ -1873,7 +1911,16 @@ function wire() {
 function frame(now) {
   requestAnimationFrame(frame); const dt = Math.max(0, Math.min(.1, (now - lastFrame) / 1000)); lastFrame = now;
   if (now - lastDraw > 250) { $('#roFps').textContent = board ? Math.round(board.fps) : '—'; lastDraw = now; }
-  if (S.running && !S.busy) { accumulator += S.clkHz * 10 ** ((S.speed - 55) / 25) * dt; const cycles = Math.min(512, Math.floor(accumulator)); if (Number.isInteger(cycles) && cycles > 0) { accumulator -= cycles; accumulator = Math.max(0, Math.min(accumulator, 512)); advance(cycles); } }
+  if (S.running && !S.busy) {
+    const maxPerFrame = S.clkHz >= 100000 ? 4096 : 512;
+    accumulator += S.clkHz * 10 ** ((S.speed - 55) / 25) * dt;
+    const cycles = Math.min(maxPerFrame, Math.floor(accumulator));
+    if (Number.isInteger(cycles) && cycles > 0) {
+      accumulator -= cycles;
+      accumulator = Math.max(0, Math.min(accumulator, maxPerFrame));
+      advance(cycles);
+    }
+  }
   else if (!S.running && S.pending.length && !S.busy && !S.building) advance(0);
 }
 async function hydrateDiskState() {
@@ -1904,7 +1951,7 @@ async function boot() {
   syncNavigation();
   audio.setMuted(true);
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
-  try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { if (pressed) trackUiAction('3D', $('#view3d'), `press ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.65); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
+  try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { trackUiAction('3D', $('#view3d'), `${pressed ? 'press' : 'release'} ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.65); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames'), $('#waveScrollTrack'), $('#waveScrollThumb')); applyTheme(document.documentElement.dataset.theme); wire();
   ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, restartSimulation, restoreSavedCompileState, renderSources, openTools, openBottomTab, syncNavigation, projectData, saveProject, persistAppState, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations, reloadQsfText });
   wireActionLogger();

@@ -448,7 +448,13 @@ export async function createBoard3D(canvas, opts = {}) {
       for (const digit of segments) Object.assign(digit, { segs: 0, latched: 0, enabled: false, lastActive: -Infinity });
       for (const led of leds) led.on = false;
     },
-    get displayState() { return segments.map(({ segs, latched, enabled }) => ({ segs, latched, enabled })); },
+    get displayState() {
+      const now = performance.now();
+      return segments.map(({ segs, latched, enabled, lastActive }) => ({
+        segs, latched, enabled,
+        retained: state.persistence > 0 && now - lastActive < 20 + state.persistence * 240,
+      }));
+    },
     setKeyVisual(id, pressed) { const key = keys.find(k => k.id === id); if (key) key.target = pressed ? 1 : 0; },
     setBuzzer(on) { groups.buzzer.userData.active = state.power && on; },
     setPower(on) {
