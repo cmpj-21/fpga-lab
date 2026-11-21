@@ -113,7 +113,7 @@ $traceExe = Join-Path $buildDir 'Trace.exe'
 & $gpp -O2 -std=c++17 -municode -mwindows `
   "-I$wv2Dir" "-I$buildDir" `
   (Join-Path $nativeDir 'main.cpp') $resObj `
-  -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic `
+  -static-libgcc -static-libstdc++ "-Wl,-Bstatic" -lwinpthread "-Wl,-Bdynamic" `
   -lole32 -lshell32 -ldwmapi -luser32 -lgdi32 -luuid `
   -o $traceExe
 if ($LASTEXITCODE -ne 0) { throw "Failed to compile Trace.exe" }
@@ -121,8 +121,8 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to compile Trace.exe" }
 $stubExe = Join-Path $buildDir 'portable_stub.exe'
 & $gpp -O2 -std=c++17 -municode -mwindows `
   (Join-Path $nativeDir 'portable_stub.cpp') $resObj `
-  -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic `
-  -lole32 -lshell32 -ldwmapi -luser32 -lgdi32 `
+  -static-libgcc -static-libstdc++ "-Wl,-Bstatic" -lwinpthread "-Wl,-Bdynamic" `
+  -lole32 -lshell32 -ldwmapi -luser32 -lgdi32 -luuid `
   -o $stubExe
 if ($LASTEXITCODE -ne 0) { throw "Failed to compile portable_stub.exe" }
 
