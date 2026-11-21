@@ -320,7 +320,7 @@ async function build(top = $('#topSelect').value) {
     log(`${result.backend}\nCompiled ${result.top}. ${result.signals.length} observable signals.`);
     result.diagnostics.forEach(d => log(d, 'warning'));
     ide?.setProblems(parseDiagnostics((result.diagnostics || []).join('\n')));
-    ide?.recordRecentProject();
+    if ($('#homeView')?.classList.contains('hidden')) ide?.recordRecentProject();
     toast(`Compiled ${result.top}`, 'ok');
     waves.fit();
   } catch (e) {
@@ -1098,6 +1098,5 @@ async function boot() {
   ide.openFirst();
   ide.showHome(true);
   await build();
-  ide.renderHome();
 }
 boot();
