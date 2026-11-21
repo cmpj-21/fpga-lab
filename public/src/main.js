@@ -543,7 +543,7 @@ async function advance(cycles = 1) {
   } catch (e) { if (generation === S.generation) fail(e); } finally { S.busy = false; }
 }
 function setInput(id, value) {
-  if (!S.power || S.vcd || S.building || S.importing || S.exporting || S.dirty || S.error || !S.sim || S.sim.ended || S.inputs[id] === value) return;
+  if (!S.power || S.vcd || S.building || S.importing || S.exporting || S.dirty || S.error || !S.sim || !S.flashed || S.sim.ended || S.inputs[id] === value) return;
   S.inputs[id] = value; S.pending.push({ id, value }); syncKeys();
   if (!S.running) advance(0);
 }
@@ -568,7 +568,6 @@ function keyInput(net, pressed) {
   syncKeys();
 }
 function toggleDip(index) {
-  if (!S.power || S.building || S.importing || S.exporting || S.dirty || S.error || !!S.vcd || S.sim?.ended) return;
   S.dip ^= (1 << index);
   audio.click(true);
   updateNetInput(KEY_NETS[index]);
@@ -579,20 +578,18 @@ function syncKeys() {
     const net = button.dataset.key === 'reset' ? 'reset_btn' : button.dataset.key.replace('key', 's');
     const bound = S.bindings[net];
     const isDown = !!S.keys[net];
-    const isNetLow = S.power && bound && S.inputs[bound.signal.id]?.[bound.offset] === '0';
+    const isNetLow = S.power && S.flashed && bound && S.inputs[bound.signal.id]?.[bound.offset] === '0';
     button.classList.toggle('down', isDown || isNetLow);
     button.setAttribute('aria-pressed', String(isDown || isNetLow));
-    button.disabled = S.building || S.importing || S.exporting || S.dirty || S.error || !S.power || !bound?.signal.driveable || !!S.vcd || S.sim?.ended;
+    button.disabled = false;
     board?.setKeyVisual(button.dataset.key, isDown);
   });
   $$('.dip-btn').forEach(button => {
     const index = Number(button.dataset.dip);
     const isOn = (S.dip & (1 << index)) !== 0;
-    const net = KEY_NETS[index];
-    const bound = S.bindings[net];
     button.classList.toggle('on', isOn);
     button.setAttribute('aria-pressed', String(isOn));
-    button.disabled = S.building || S.importing || S.exporting || S.dirty || S.error || !S.power || !bound?.signal.driveable || !!S.vcd || S.sim?.ended;
+    button.disabled = false;
   });
   board?.setDip(S.dip);
 }
@@ -1012,7 +1009,7 @@ function wire() {
   window.addEventListener('keyup', e => { if (keys[e.key.toLowerCase()]) keyInput(keys[e.key.toLowerCase()], false); });
   window.addEventListener('blur', releaseKeys);
   document.addEventListener('visibilitychange', () => { if (document.hidden) { releaseKeys(); pause(); } });
-  $('#pwrToggle').onchange = e => { S.power = e.target.checked; pause(); board?.setPower(S.power); if (!S.power) { releaseKeys(); board?.clearOutputs(); sampleOutputs(); } else sampleOutputs(); syncKeys(); setStatus(); };
+  $('#pwrToggle').onchange = e => { S.power = e.target.checked; pause(); board?.setPower(S.power); if (!S.power) { releaseKeys(); board?.clearOutputs(); sampleOutputs(); } else { if (S.flashed) KEY_NETS.forEach(updateNetInput); sampleOutputs(); } syncKeys(); setStatus(); };
   const camera = name => { board?.setCamera(name); $('#center').classList.toggle('closeup', ['leds','fpga','display','dtubes','io','macro_low'].includes(name)); if ($('#camPreset').querySelector(`option[value="${name}"]`)) $('#camPreset').value = name; if ($('#pmCamSelect')) $('#pmCamSelect').value = name; $$('[data-camera]').forEach(b => b.classList.toggle('active', b.dataset.camera === name)); };
   $$('[data-camera]').forEach(b => b.onclick = () => camera(b.dataset.camera)); $('#camPreset').onchange = e => camera(e.target.value);
   $('#btnViewSettings').onclick = () => { $('#deck').classList.toggle('hidden'); $('#btnViewSettings').setAttribute('aria-expanded', String(!$('#deck').classList.contains('hidden'))); };

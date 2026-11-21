@@ -298,7 +298,7 @@ export async function createBoard3D(canvas, opts = {}) {
   canvas.addEventListener('pointerdown', event => {
     if (event.button !== 0) return;
     const target = pick(event);
-    if (state.toolMode === 'interact' && state.power && target?.type === 'key') {
+    if (state.toolMode === 'interact' && target?.type === 'key') {
       activeKey = target.id; controls.enabled = false;
       opts.onKey?.(target.id, true); canvas.setPointerCapture(event.pointerId);
       return;
@@ -331,7 +331,7 @@ export async function createBoard3D(canvas, opts = {}) {
           selectPart(target ? target.partId : null);
         } else if (target) {
           if (target.type === 'power') opts.onPower?.(!state.power);
-          else if (target.type === 'dip' && state.power) opts.onDip?.(target.index);
+          else if (target.type === 'dip') opts.onDip?.(target.index);
         }
       }
     }
