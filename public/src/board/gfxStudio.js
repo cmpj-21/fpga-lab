@@ -381,14 +381,15 @@ uniform float uThreshold;
 varying vec2 vUv;
 void main() {
   vec4 col = texture2D(tDiffuse, vUv);
-  float luma = dot(col.rgb, vec3(0.2126, 0.7152, 0.0722));
-  float peak = max(col.r, max(col.g, col.b));
+  vec3 safeCol = min(col.rgb, vec3(2.8));
+  float luma = dot(safeCol, vec3(0.2126, 0.7152, 0.0722));
+  float peak = max(safeCol.r, max(safeCol.g, safeCol.b));
   float brightness = max(luma, peak * 0.94);
   float knee = uThreshold * 0.18 + 0.0001;
   float soft = clamp(brightness - uThreshold + knee, 0.0, 2.0 * knee);
   soft = (soft * soft) / (4.0 * knee);
   float contrib = max(soft, brightness - uThreshold) / max(brightness, 0.0001);
-  gl_FragColor = vec4(col.rgb * clamp(contrib, 0.0, 8.0), 1.0);
+  gl_FragColor = vec4(safeCol * clamp(contrib, 0.0, 2.5), 1.0);
 }
 `;
 
@@ -1046,8 +1047,11 @@ export function createGfxStudio(ctx) {
   }
 
   // Post-Processing Render Targets & Fullscreen Quad
-  let rtScene = null, rtBloomA = null, rtBloomB = null;
+  let rtScene = null, rtBloomSrc = null, rtBloomA = null, rtBloomB = null;
   let rtW = 0, rtH = 0;
+  const blackOccluderMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+  const blackBgColor = new THREE.Color(0x000000);
+  const emitterBloomMats = new Map();
   const postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   const quadGeo = new THREE.PlaneGeometry(2, 2);
 
@@ -1114,7 +1118,7 @@ export function createGfxStudio(ctx) {
     const ph = Math.max(2, Math.floor(h));
     if (rtScene && rtW === pw && rtH === ph) return;
     rtW = pw; rtH = ph;
-    rtScene?.dispose(); rtBloomA?.dispose(); rtBloomB?.dispose();
+    rtScene?.dispose(); rtBloomSrc?.dispose(); rtBloomA?.dispose(); rtBloomB?.dispose();
     const depthTexture = new THREE.DepthTexture(pw, ph);
     depthTexture.type = THREE.UnsignedIntType;
     rtScene = new THREE.WebGLRenderTarget(pw, ph, {
@@ -1125,6 +1129,7 @@ export function createGfxStudio(ctx) {
       depthTexture,
     });
     const bw = Math.max(2, Math.floor(pw / 2)), bh = Math.max(2, Math.floor(ph / 2));
+    rtBloomSrc = new THREE.WebGLRenderTarget(bw, bh, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true });
     rtBloomA = new THREE.WebGLRenderTarget(bw, bh, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
     rtBloomB = new THREE.WebGLRenderTarget(bw, bh, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
   }
@@ -1320,22 +1325,27 @@ export function createGfxStudio(ctx) {
       const isMattePcb = isPcb && orig.metalness < 0.35;
       const isMatteBezel = isDisplayBezel && orig.metalness < 0.35;
       const isMattePlastic = !isPcb && !isDisplayBezel && orig.metalness < 0.15;
+      const isBrushedMetal = orig.metalness >= 0.35;
       const baseRoughness = isMattePcb
-        ? Math.max(orig.roughness, 0.74)
+        ? Math.max(orig.roughness, 0.76)
         : isMatteBezel
           ? Math.max(orig.roughness, 0.78)
           : isMattePlastic
-            ? Math.max(orig.roughness, 0.56)
-            : orig.roughness;
+            ? Math.max(orig.roughness, 0.58)
+            : isBrushedMetal
+              ? Math.max(orig.roughness, 0.36)
+              : orig.roughness;
       const targetEnvMapInt = cc > 0.01
         ? orig.envMapIntensity
         : isMattePcb
-          ? Math.min(orig.envMapIntensity, 0.32)
+          ? Math.min(orig.envMapIntensity, 0.28)
           : isMatteBezel
-            ? Math.min(orig.envMapIntensity, 0.36)
+            ? Math.min(orig.envMapIntensity, 0.34)
             : isMattePlastic
-              ? Math.min(orig.envMapIntensity, 0.55)
-              : orig.envMapIntensity;
+              ? Math.min(orig.envMapIntensity, 0.50)
+              : isBrushedMetal
+                ? Math.min(orig.envMapIntensity, 0.62)
+                : orig.envMapIntensity;
       // Determine target base color (only tint greenish/dark solder-mask PCB surfaces when pcbTheme is set)
       let targetColor = orig.colorHex;
       if (isPcb && pcbHex) {
@@ -1559,6 +1569,45 @@ export function createGfxStudio(ctx) {
     cursorLight.position.set(worldPoint.x, Math.max(worldPoint.y + 22, 18), worldPoint.z);
   }
 
+  function renderEmissiveBloomSource() {
+    const prevBg = scene.background;
+    const hideTargets = [floor, studioGroup, ctx.grid, ctx.labels, ctx.netGuides, ctx.highlight, ctx.hoverHighlight].filter(Boolean);
+    const prevVis = hideTargets.map(o => o.visible);
+    for (const o of hideTargets) o.visible = false;
+
+    const saved = [];
+    for (const mesh of origMaterials.keys()) {
+      saved.push([mesh, mesh.material]);
+      mesh.material = blackOccluderMat;
+    }
+    const swapEmitter = mesh => {
+      const src = mesh.material;
+      saved.push([mesh, src]);
+      let bm = emitterBloomMats.get(mesh);
+      if (!bm) {
+        bm = new THREE.MeshBasicMaterial({ color: 0x000000, toneMapped: false });
+        emitterBloomMats.set(mesh, bm);
+      }
+      if (src && src.emissive && src.emissiveIntensity > 0.01) {
+        bm.color.copy(src.emissive).multiplyScalar(Math.min(src.emissiveIntensity * 0.68, 2.6));
+      } else {
+        bm.color.setHex(0x000000);
+      }
+      mesh.material = bm;
+    };
+    for (const led of leds) swapEmitter(led.mesh);
+    for (const digit of segments) for (const mesh of digit.meshes) swapEmitter(mesh);
+
+    scene.background = blackBgColor;
+    renderer.setRenderTarget(rtBloomSrc);
+    renderer.clear();
+    renderer.render(scene, camera);
+
+    for (let i = 0; i < saved.length; i++) saved[i][0].material = saved[i][1];
+    scene.background = prevBg;
+    for (let i = 0; i < hideTargets.length; i++) hideTargets[i].visible = prevVis[i];
+  }
+
   function renderFrame(now = performance.now()) {
     floor.visible = !floor.userData.hideFloor && camera.position.y > 0;
 
@@ -1584,18 +1633,23 @@ export function createGfxStudio(ctx) {
 
     // 2. Render Bloom Passes if enabled
     if (gfx.bloom > 0) {
-      bloomExtractMat.uniforms.tDiffuse.value = rtScene.texture;
-      bloomExtractMat.uniforms.uThreshold.value = (gfx.bloomThreshold / 100) * 1.35;
-      postQuad.material = bloomExtractMat;
-      renderer.setRenderTarget(rtBloomA);
-      renderer.render(postScene, postCamera);
+      const selectiveEmissive = gfx.shadingMode === 'pbr' && gfx.bloomThreshold >= 70;
+      if (selectiveEmissive) {
+        renderEmissiveBloomSource();
+      } else {
+        bloomExtractMat.uniforms.tDiffuse.value = rtScene.texture;
+        bloomExtractMat.uniforms.uThreshold.value = (gfx.bloomThreshold / 100) * 1.35;
+        postQuad.material = bloomExtractMat;
+        renderer.setRenderTarget(rtBloomA);
+        renderer.render(postScene, postCamera);
+      }
 
       const radiusScale = 0.65 + (gfx.bloomRadius / 100) * 2.6;
       const bw = rtBloomA.width, bh = rtBloomA.height;
       const passes = [1.0, 2.2, 4.0, 6.8];
       for (let i = 0; i < passes.length; i++) {
         const spread = passes[i] * radiusScale;
-        bloomBlurMat.uniforms.tDiffuse.value = rtBloomA.texture;
+        bloomBlurMat.uniforms.tDiffuse.value = (i === 0 && selectiveEmissive) ? rtBloomSrc.texture : rtBloomA.texture;
         bloomBlurMat.uniforms.uStep.value.set(spread / bw, 0);
         postQuad.material = bloomBlurMat;
         renderer.setRenderTarget(rtBloomB);

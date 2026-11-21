@@ -7,8 +7,9 @@ export function hexOf(bits) {
   return BigInt('0b' + bits).toString(16).toUpperCase().padStart(Math.ceil(bits.length / 4), '0');
 }
 export class WaveViewer {
-  constructor(canvas, namesEl) {
+  constructor(canvas, namesEl, scrollTrackEl = null, scrollThumbEl = null) {
     this.canvas = canvas; this.ctx = canvas.getContext('2d'); this.namesEl = namesEl;
+    this.scrollTrack = scrollTrackEl; this.scrollThumb = scrollThumbEl; this.scrollDrag = null;
     this.signals = []; this.tStart = 0; this.tEnd = 1e9; this.cursorT = 0; this.lastTime = 0; this.maxSamples = 40000; this.drag = null;
     this.dpr = Math.min(devicePixelRatio || 1, 2);
     this.setTheme();
@@ -21,6 +22,47 @@ export class WaveViewer {
       this.draw(); this.onCursor?.(this.cursorT);
     });
     for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) canvas.addEventListener(event, () => this.drag = null);
+    if (this.scrollTrack && this.scrollThumb) {
+      const track = this.scrollTrack, thumb = this.scrollThumb;
+      track.addEventListener('pointerdown', e => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        this.onNavigate?.();
+        const rect = track.getBoundingClientRect();
+        const { total, span, scrollable, maxLeft } = this.scrollMetrics();
+        if (e.target !== thumb && scrollable > 0) {
+          const clickFrac = Math.max(0, Math.min(1, (e.clientX - rect.left) / Math.max(1, rect.width)));
+          const newStart = Math.max(0, Math.min(scrollable, clickFrac * total - span / 2));
+          this.tStart = newStart;
+          this.tEnd = newStart + span;
+          this.draw();
+        }
+        const m = this.scrollMetrics();
+        this.scrollDrag = { x: e.clientX, startT: this.tStart, span: m.span, scrollable: m.scrollable, maxLeft: m.maxLeft };
+        thumb.classList.add('dragging');
+        track.setPointerCapture(e.pointerId);
+      });
+      track.addEventListener('pointermove', e => {
+        if (!this.scrollDrag) return;
+        const { x, startT, span, scrollable, maxLeft } = this.scrollDrag;
+        if (scrollable <= 0 || maxLeft <= 0) return;
+        const dx = e.clientX - x;
+        const nextStart = Math.max(0, Math.min(scrollable, startT + (dx / maxLeft) * scrollable));
+        this.tStart = nextStart;
+        this.tEnd = nextStart + span;
+        this.draw();
+      });
+      for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+        track.addEventListener(ev, () => { this.scrollDrag = null; thumb.classList.remove('dragging'); });
+      }
+      track.addEventListener('keydown', e => {
+        const { span, scrollable } = this.scrollMetrics();
+        if (e.key === 'ArrowLeft') { e.preventDefault(); this.onNavigate?.(); this.tStart = Math.max(0, this.tStart - span * 0.2); this.tEnd = this.tStart + span; this.draw(); }
+        else if (e.key === 'ArrowRight') { e.preventDefault(); this.onNavigate?.(); this.tStart = Math.min(Math.max(scrollable, this.tStart + span * 0.2), this.tStart + span * 0.2); this.tEnd = this.tStart + span; this.draw(); }
+        else if (e.key === 'Home') { e.preventDefault(); this.onNavigate?.(); this.tStart = 0; this.tEnd = span; this.draw(); }
+        else if (e.key === 'End') { e.preventDefault(); this.onNavigate?.(); this.tStart = Math.max(0, this.lastTime - span); this.tEnd = this.tStart + span; this.draw(); }
+      });
+    }
     canvas.addEventListener('wheel', e => {
       const isHorizontalPan = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY);
       if (e.ctrlKey) {
@@ -148,5 +190,25 @@ export class WaveViewer {
     });
     const cursor = xOf(this.cursorT);
     if (cursor >= 0 && cursor <= width) { g.strokeStyle = this.palette.cursor; g.lineWidth = 1; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(cursor, HEADER); g.lineTo(cursor, height); g.stroke(); g.setLineDash([]); }
+    this.syncScrollbar();
+  }
+  scrollMetrics() {
+    const trackW = this.scrollTrack?.clientWidth || 1;
+    const span = Math.max(1, this.tEnd - this.tStart);
+    const total = Math.max(this.lastTime, this.tEnd, 1e6);
+    const scrollable = Math.max(0, total - span);
+    const ratio = Math.min(1, span / total);
+    const thumbW = Math.max(28, Math.min(trackW, Math.round(trackW * ratio)));
+    const maxLeft = Math.max(0, trackW - thumbW);
+    return { trackW, span, total, scrollable, thumbW, maxLeft };
+  }
+  syncScrollbar() {
+    if (!this.scrollTrack || !this.scrollThumb) return;
+    const { scrollable, thumbW, maxLeft } = this.scrollMetrics();
+    const frac = scrollable > 0 ? Math.max(0, Math.min(1, this.tStart / scrollable)) : 0;
+    this.scrollThumb.style.width = `${thumbW}px`;
+    this.scrollThumb.style.transform = `translateX(${Math.round(maxLeft * frac)}px)`;
+    this.scrollThumb.classList.toggle('full', scrollable <= 0);
+    this.scrollTrack.setAttribute('aria-valuenow', String(Math.round(frac * 100)));
   }
 }
