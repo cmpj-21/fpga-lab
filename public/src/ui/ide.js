@@ -264,7 +264,7 @@ export function createIde(api) {
     });
     drag($('#hSplit'), event => {
       const rect = $('#workbench').getBoundingClientRect();
-      layout.panelH = clamp(Math.round(rect.bottom - event.clientY), 130, Math.max(170, rect.height - 200)); applyLayout();
+      layout.panelH = clamp(Math.round(rect.bottom - event.clientY), 130, Math.max(140, rect.height - 190)); applyLayout();
     });
     drag($('#lSplit'), event => {
       layout.leftW = clamp(Math.round(event.clientX - $('#rail').getBoundingClientRect().right), 200, 480); applyLayout();
