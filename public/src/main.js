@@ -121,6 +121,7 @@ function uiSnapshot() {
     keysDlg: $('#keysDialog')?.open ? 'open' : 'closed',
     homeDlg: $('#homeConfirmDialog')?.open ? 'open' : 'closed',
     newProjDlg: $('#newProjectDialog')?.open ? 'open' : 'closed',
+    projDlg: $('#projectSettingsDialog')?.open ? 'open' : 'closed',
     menu: $$('.menu-btn[aria-expanded="true"]')[0]?.dataset.menu || 'closed',
     theme: document.documentElement.dataset.theme || 'light',
     power: S.power ? 'on' : 'off',
@@ -144,7 +145,7 @@ function uiSnapshot() {
   };
 }
 function diffSnapshot(before, after) {
-  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tabs', 'tab', 'editor', 'board', 'left', 'hdlOpen', 'hdlRoot', 'waves', 'right', 'deck', 'about', 'keysDlg', 'homeDlg', 'newProjDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
+  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tabs', 'tab', 'editor', 'board', 'left', 'hdlOpen', 'hdlRoot', 'waves', 'right', 'deck', 'about', 'keysDlg', 'homeDlg', 'newProjDlg', 'projDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
   const out = [];
   for (const k of keys) if (before[k] !== after[k]) out.push(`${k}:${before[k]}->${after[k]}`);
   return out;
@@ -272,13 +273,16 @@ function markDirty() { S.dirty = true; S.flashed = false; S.error = false; S.pen
 function projectData() { ide?.commitAll(); return { format: 'trace-project', version: 1, sources: S.sources, assignments: [...S.assignments], top: $('#topSelect').value, topLibrary: $('#topLibrary').value, standard: $('#standardSelect').value, generics: $('#genericInput').value, sdf: S.sdf ? { ...S.sdf, instance: $('#sdfInstance').value, corner: $('#sdfCorner').value } : null, projectDir: S.projectDir || null, projectName: S.projectName || '' }; }
 function syncProjectSaveUI() {
   const saved = !!S.projectDir;
-  if ($('#btnSaveProject')) $('#btnSaveProject').textContent = saved ? 'Save Project' : 'Save Project As…';
+  if ($('#btnSaveProject')) {
+    $('#btnSaveProject').title = saved ? `Save Project (${S.projectDir}) (Ctrl+Shift+S)` : 'Save Project As… (Ctrl+Shift+S)';
+    $('#btnSaveProject').setAttribute('aria-label', saved ? 'Save Project' : 'Save Project As');
+  }
   if ($('#menuSaveProjectLabel')) $('#menuSaveProjectLabel').textContent = saved ? 'Save Project' : 'Save Project As…';
   if ($('#menuSaveProjectAs')) $('#menuSaveProjectAs').classList.toggle('hidden', !saved);
   if ($('#saveProjectHint')) {
     const folderName = saved ? S.projectDir.split(/[\\/]/).filter(Boolean).pop() : '';
-    $('#saveProjectHint').textContent = saved ? `${folderName} · .qpf/.qsf` : 'Not saved to disk';
-    $('#saveProjectHint').title = saved ? S.projectDir : 'Choose a project folder to save .qpf, .qsf and .vhd files';
+    $('#saveProjectHint').textContent = saved ? `${folderName} · .qpf/.qsf` : 'Not saved to disk — Save As…';
+    $('#saveProjectHint').title = saved ? `Saved in ${S.projectDir} (click to save)` : 'Choose a project folder to save .qpf, .qsf and .vhd files';
   }
 }
 async function saveProjectToDisk({ saveAs = false, quiet = false } = {}) {
@@ -1196,7 +1200,7 @@ function syncNavigation() {
 function leftTab(name) {
   $$('.ltab').forEach(t => t.classList.toggle('active', t.id === 'ltab-' + name));
   const title = $('#leftTitle');
-  if (title) title.textContent = name === 'pins' ? 'Pin Planner' : 'Project';
+  if (title) title.textContent = name === 'pins' ? 'Pin Planner' : 'Explorer';
   syncNavigation();
 }
 function toggleLeft(name) {
@@ -1255,9 +1259,10 @@ function wire() {
   $('#speed').oninput = e => { S.speed = Number(e.target.value); $('#rateLabel').textContent = `${(10 ** ((S.speed - 55) / 25)).toFixed(1).replace('.0', '')}×`; };
   $('#clkHz').onchange = e => { S.clkHz = Number(e.target.value); accumulator = 0; log(`Ideal clock: ${S.clkHz} Hz. Execution speed is limited by native simulation and display throughput.`); };
   $('#btnMute').onclick = () => { const muted = !audio.isMuted(); audio.setMuted(muted); if (!muted) audio.resume(); $('#btnMute').setAttribute('aria-pressed', String(muted)); $('#muteLabel').textContent = muted ? 'Sound off' : 'Sound on'; };
-  $('#btnElab').onclick = () => build(); $('#topSelect').onchange = markDirty;
+  $('#btnElab').onclick = () => ide ? ide.saveAndCompile() : build(); $('#topSelect').onchange = markDirty;
   $('#btnDemo').onclick = () => { S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; S.assignments.clear(); S.discoveredPorts = []; S.projectDir = null; S.projectName = 'Counter demo'; S.sdf = null; $('#genericInput').value = ''; $('#topLibrary').value = 'work'; $('#standardSelect').value = '93'; renderSdf(); renderSources(); $('#topSelect').value = DEMO_TOP; $('#designTitle').textContent = 'Counter demo'; $('#designSubtitle').textContent = 'Build needed · VHDL-1993'; renderPins(); syncProjectSaveUI(); markDirty(); toast('Counter demo loaded. Click Build & Compile when ready.'); };
   $('#btnSaveProject').onclick = () => saveProjectToDisk({ saveAs: false });
+  if ($('#saveProjectHint')) $('#saveProjectHint').onclick = () => saveProjectToDisk({ saveAs: false });
   $('#btnOpenPinoutRef')?.addEventListener('click', () => openTools('pinout'));
   $('#pinoutSearch')?.addEventListener('input', () => renderPinoutRef());
   for (const id of ['standardSelect', 'topLibrary', 'genericInput', 'sdfInstance', 'sdfCorner']) $('#' + id).onchange = markDirty;

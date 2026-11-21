@@ -236,7 +236,7 @@ export function createIde(api) {
   }
 
   // ---------- layout (resizable panes) ----------
-  let boardPaneOpen = true;
+  let boardPaneOpen = false;
   function computeMinTopHeight() {
     if (!boardPaneOpen || $('#ideMain')?.classList.contains('board-closed')) return 140;
     const headH = $('.board-pane-head')?.offsetHeight || 34;
@@ -356,8 +356,10 @@ export function createIde(api) {
   }
   function resetLayout() {
     layout = { ...DEFAULT_LAYOUT };
-    $('#app').classList.remove('no-library', 'no-waves', 'panel-max');
-    setBoardPaneOpen(true);
+    $('#app').classList.remove('no-library', 'panel-max');
+    $('#app').classList.add('no-waves');
+    $('#right')?.classList.add('hidden');
+    setBoardPaneOpen(false);
     setEditorPaneOpen(true);
     applyLayout(); saveLayout();
     api.syncNavigation();
@@ -581,6 +583,7 @@ export function createIde(api) {
   // ---------- explorer ----------
   function showNewFile() {
     showHome(false);
+    const sec = $('.exp-project'); if (sec) sec.open = true;
     $('#newFileRow')?.classList.remove('hidden');
     if ($('#app').classList.contains('no-library') || !$('#ltab-library')?.classList.contains('active')) $('#btnLibrary').click();
     $('#newFileName').value = ''; $('#newFileName').focus();
@@ -945,6 +948,7 @@ export function createIde(api) {
     theme: () => $('#btnTheme').click(),
     resetLayout,
     flash: () => api.flashToBoard?.(),
+    projectSettings: () => $('#projectSettingsDialog')?.showModal(),
     restart: () => $('#btnReset').click(),
     step: () => $('#btnStep').click(),
     run: () => $('#btnRun').click(),
@@ -992,6 +996,8 @@ export function createIde(api) {
       else if (target === 'tools') api.openTools();
     }));
     $('#wbResetLayout')?.addEventListener('click', resetLayout);
+    $('#btnProjectSettings')?.addEventListener('click', () => $('#projectSettingsDialog')?.showModal());
+    $('#sbLang')?.addEventListener('click', () => $('#projectSettingsDialog')?.showModal());
     $('#btnOpenFirst')?.addEventListener('click', () => { if (S.sources.length) openFile(S.sources[0].name); else showNewFile(); });
     $('#btnNewFile')?.addEventListener('click', showNewFile);
     $('#btnNewFileExplorer')?.addEventListener('click', showNewFile);
