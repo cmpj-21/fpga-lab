@@ -21,27 +21,38 @@ const uart = new UartReceiver();
 const reported = new Map();
 const uiActions = [], pendingActions = [], pendingEvents = [];
 
-function flushEvents() {
+function persistAppState(patch) {
+  try { fetch('/api/state', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).catch(() => {}); } catch {}
+}
+function flushEvents(useBeacon = false) {
   if (!pendingEvents.length) return;
   const events = pendingEvents.splice(0, 50);
-  try { fetch('/api/log/event', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events }) }).catch(() => {}); } catch {}
+  const body = JSON.stringify({ events });
+  if (useBeacon && navigator.sendBeacon) {
+    try { navigator.sendBeacon('/api/log/event', new Blob([body], { type: 'application/json' })); return; } catch {}
+  }
+  try { fetch('/api/log/event', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body }).catch(() => {}); } catch {}
 }
 function recordLogEvent(level, message) {
   pendingEvents.push({ level, message: String(message), simTime: fmtTime(S.time) });
   clearTimeout(eventFlushTimer);
-  eventFlushTimer = setTimeout(flushEvents, 180);
+  eventFlushTimer = setTimeout(() => flushEvents(false), 180);
 }
-function flushActions() {
+function flushActions(useBeacon = false) {
   if (!pendingActions.length) return;
   const lines = pendingActions.splice(0, 50);
-  try { fetch('/api/log/action', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lines }) }).catch(() => {}); } catch {}
+  const body = JSON.stringify({ lines });
+  if (useBeacon && navigator.sendBeacon) {
+    try { navigator.sendBeacon('/api/log/action', new Blob([body], { type: 'application/json' })); return; } catch {}
+  }
+  try { fetch('/api/log/action', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body }).catch(() => {}); } catch {}
 }
 function recordActionLine(line) {
   uiActions.push(line);
   if (uiActions.length > 60) uiActions.shift();
   pendingActions.push(line);
   clearTimeout(actionFlushTimer);
-  actionFlushTimer = setTimeout(flushActions, 180);
+  actionFlushTimer = setTimeout(() => flushActions(false), 180);
 }
 function toast(message, kind = '') { const el = $('#toast'); el.textContent = message; el.className = `toast ${kind}`; clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.add('hidden'), 4500); if (kind === 'err') { lastErrorSeq++; lastErrorMsg = String(message); report(message); } }
 function log(message, severity = 'info', stack = '') {
@@ -161,7 +172,7 @@ function trackUiAction(kind, el, detail = '') {
     recordActionLine(`#${id} ${kind.padEnd(8)} ${target} -> BLOCKED (0ms) [reason:control disabled | status:${before.status} | view:${before.view}]`);
     return;
   }
-  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnTruthCopy|#btnTruthExport|#btnSaveProject|#saveFileBtn|#btnRefreshExplorer|#btnVcd|#btnImport|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#btnChangeHdlRoot|#homeChangeHdlRoot|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#ciPins|#btnOpenPinoutRef|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
+  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnTruthCopy|#btnTruthExport|#btnSaveProject|#saveFileBtn|#btnRefreshExplorer|#homeConfirmSave|#psSave|#btnVcd|#btnImport|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#btnChangeHdlRoot|#homeChangeHdlRoot|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#ciPins|#btnOpenPinoutRef|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
   setTimeout(async () => {
     await new Promise(r => requestAnimationFrame(r));
     const waitStart = performance.now();
@@ -369,7 +380,11 @@ async function openProjectFromDiskPath(targetPath = '', { promptIfInWorkbench = 
     return false;
   }
 }
-function saveProject() { try { localStorage.setItem('trace.project.v1', JSON.stringify(projectData())); } catch { toast('Browser storage is full or unavailable. Use Save Project As… to keep your files.', 'err'); } }
+function saveProject() {
+  const data = projectData();
+  try { localStorage.setItem('trace.project.v1', JSON.stringify(data)); } catch { toast('Browser storage is full or unavailable. Use Save Project As… to keep your files.', 'err'); }
+  persistAppState({ lastProject: data });
+}
 function restoreProject(project) {
   if (!project || project.format !== 'trace-project' || project.version !== 1 || !Array.isArray(project.sources) || project.sources.length > 100 || !project.sources.every(s => s && typeof s.name === 'string' && typeof s.text === 'string' && /^(?:[a-z0-9_][a-z0-9_. -]*\/)*[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i.test(s.name) && (!s.library || /^[a-z][a-z0-9_]*$/i.test(s.library))) || !['93','02','08'].includes(project.standard) || !/^[a-z][a-z0-9_]*$/i.test(project.topLibrary || 'work') || typeof project.generics !== 'string' || !Array.isArray(project.assignments) || !project.assignments.every(p => Array.isArray(p) && p.length === 2 && Number.isInteger(p[0]) && p[0] >= 1 && p[0] <= 144 && typeof p[1] === 'string') || (project.sdf && (typeof project.sdf.text !== 'string' || typeof project.sdf.instance !== 'string' || !['min','typ','max'].includes(project.sdf.corner)))) throw new Error('Invalid Trace project file.');
   S.sources = project.sources; S.assignments = new Map(project.assignments); S.sdf = project.sdf || null;
@@ -1325,6 +1340,7 @@ function wire() {
     const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
     applyTheme(theme);
     try { localStorage.setItem('trace.theme', theme); } catch {}
+    persistAppState({ theme });
   };
   $('#btnRun').onclick = async () => {
     if (!S.power || S.building || S.importing || S.exporting) return;
@@ -1684,7 +1700,7 @@ function wire() {
   $('#uartClear').onclick = () => $('#uartOut').replaceChildren(); $('#btnTruth').onclick = runTruth;
   if ($('#btnTruthCopy')) $('#btnTruthCopy').onclick = copyTruthTable;
   if ($('#btnTruthExport')) $('#btnTruthExport').onclick = exportTruthTable;
-  window.addEventListener('pagehide', () => { flushActions(); flushEvents(); if (S.sim?.id) navigator.sendBeacon(`/api/sim/${S.sim.id}/close`, ''); });
+  window.addEventListener('pagehide', () => { flushActions(true); flushEvents(true); if (S.sim?.id) navigator.sendBeacon(`/api/sim/${S.sim.id}/close`, ''); });
 }
 function frame(now) {
   requestAnimationFrame(frame); const dt = Math.max(0, Math.min(.1, (now - lastFrame) / 1000)); lastFrame = now;
@@ -1692,14 +1708,37 @@ function frame(now) {
   if (S.running && !S.busy) { accumulator += S.clkHz * 10 ** ((S.speed - 55) / 25) * dt; const cycles = Math.min(512, Math.floor(accumulator)); if (Number.isInteger(cycles) && cycles > 0) { accumulator -= cycles; accumulator = Math.max(0, Math.min(accumulator, 512)); advance(cycles); } }
   else if (!S.running && S.pending.length && !S.busy && !S.building) advance(0);
 }
+async function hydrateDiskState() {
+  try {
+    const res = await fetch('/api/state');
+    if (!res.ok) return;
+    const data = await res.json();
+    const st = data?.state;
+    if (!st || typeof st !== 'object') return;
+    if (['light', 'dark'].includes(st.theme)) {
+      document.documentElement.dataset.theme = st.theme;
+      try { localStorage.setItem('trace.theme', st.theme); } catch {}
+    }
+    if (st.layout && typeof st.layout === 'object') {
+      try { localStorage.setItem('trace.layout.v1', JSON.stringify(st.layout)); } catch {}
+    }
+    if (Array.isArray(st.recents)) {
+      try { localStorage.setItem('trace.recents.v1', JSON.stringify(st.recents)); } catch {}
+    }
+    if (st.lastProject && Array.isArray(st.lastProject.sources) && st.lastProject.sources.length) {
+      try { localStorage.setItem('trace.project.v1', JSON.stringify(st.lastProject)); } catch {}
+    }
+  } catch {}
+}
 async function boot() {
+  await hydrateDiskState();
   matchMedia('(max-width: 1000px)').addEventListener('change', syncNavigation);
   syncNavigation();
   audio.setMuted(true);
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
   try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { if (pressed) trackUiAction('3D', $('#view3d'), `press ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.65); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames'), $('#waveScrollTrack'), $('#waveScrollThumb')); applyTheme(document.documentElement.dataset.theme); wire();
-  ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, renderSources, openTools, openBottomTab, syncNavigation, projectData, saveProject, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations });
+  ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, renderSources, openTools, openBottomTab, syncNavigation, projectData, saveProject, persistAppState, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations });
   wireActionLogger();
   fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);

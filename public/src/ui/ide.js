@@ -237,7 +237,10 @@ export function createIde(api) {
   const tabs = [];
   let active = null, problems = [], cursor = null, layout = { ...DEFAULT_LAYOUT };
   try { layout = { ...DEFAULT_LAYOUT, ...JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}') }; } catch {}
-  const saveLayout = () => { try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch {} };
+  const saveLayout = () => {
+    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch {}
+    api.persistAppState?.({ layout });
+  };
   const find = name => S.sources.find(source => source.name === name) || S.sources.find(source => source.name.toLowerCase() === String(name || '').toLowerCase());
   const findByDiagFile = file => find(file) || S.sources.find(source => baseNameOf(source.name).toLowerCase() === baseNameOf(file).toLowerCase());
   const libraryOf = source => source?.library || 'work';
@@ -1201,7 +1204,9 @@ export function createIde(api) {
     } catch { return []; }
   }
   function saveRecents(list) {
-    try { localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0, 12))); } catch {}
+    const trimmed = list.slice(0, 12);
+    try { localStorage.setItem(RECENTS_KEY, JSON.stringify(trimmed)); } catch {}
+    api.persistAppState?.({ recents: trimmed });
   }
   function currentProjectTitle() {
     const topName = $('#topSelect')?.value || S.sim?.top || S.sources[0]?.name.replace(/\.[^.]+$/, '') || 'fpga_project';
@@ -1434,6 +1439,7 @@ export function createIde(api) {
     try {
       if (baselineStorage === null) localStorage.removeItem('trace.project.v1');
       else localStorage.setItem('trace.project.v1', baselineStorage);
+      api.persistAppState?.({ lastProject: baselineStorage ? JSON.parse(baselineStorage) : null });
     } catch {}
     saveRecents(baselineRecents);
     setProblems([]);

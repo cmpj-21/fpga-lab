@@ -45,6 +45,7 @@ struct AppState {
     HANDLE job = nullptr;
     HANDLE nodeProcess = nullptr;
     HANDLE stdoutRead = nullptr;
+    HANDLE stdinWrite = nullptr;
     ICoreWebView2Controller* controller = nullptr;
     ICoreWebView2* webview = nullptr;
     std::wstring exeDir;
@@ -371,9 +372,18 @@ static bool StartBackendServer() {
     if (!CreatePipe(&g_app.stdoutRead, &stdoutWrite, &sa, 0)) return false;
     SetHandleInformation(g_app.stdoutRead, HANDLE_FLAG_INHERIT, 0);
 
-    // Set environment variables for packaged mode + ephemeral port + resolved user data directory
+    HANDLE stdinRead = nullptr;
+    if (!CreatePipe(&stdinRead, &g_app.stdinWrite, &sa, 0)) {
+        CloseHandle(stdoutWrite);
+        CloseHandle(g_app.stdoutRead);
+        g_app.stdoutRead = nullptr;
+        return false;
+    }
+    SetHandleInformation(g_app.stdinWrite, HANDLE_FLAG_INHERIT, 0);
+
+    // Set environment variables for packaged mode + preferred stable port (8044, fallback 0) + resolved user data directory
     std::wstring dataDir = GetDataDir();
-    SetEnvironmentVariableW(L"PORT", L"0");
+    SetEnvironmentVariableW(L"PORT", L"auto");
     SetEnvironmentVariableW(L"OPEN_BROWSER", L"0");
     SetEnvironmentVariableW(L"TRACE_PACKAGED", L"1");
     SetEnvironmentVariableW(L"TRACE_DATA_DIR", dataDir.c_str());
@@ -388,7 +398,7 @@ static bool StartBackendServer() {
     si.wShowWindow = SW_HIDE;
     si.hStdOutput = stdoutWrite;
     si.hStdError = stdoutWrite;
-    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdInput = stdinRead;
 
     PROCESS_INFORMATION pi{};
     DWORD flags = CREATE_NO_WINDOW | CREATE_SUSPENDED;
@@ -397,10 +407,13 @@ static bool StartBackendServer() {
         cmdBuf.data(), nullptr, nullptr, TRUE, flags, nullptr, g_app.exeDir.c_str(), &si, &pi);
 
     CloseHandle(stdoutWrite);
+    CloseHandle(stdinRead);
 
     if (!ok) {
         CloseHandle(g_app.stdoutRead);
         g_app.stdoutRead = nullptr;
+        CloseHandle(g_app.stdinWrite);
+        g_app.stdinWrite = nullptr;
         MessageBoxW(g_app.hwnd, L"Failed to start Trace Node.js runtime (runtime\\node\\node.exe).", L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
         return false;
     }
@@ -582,14 +595,20 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
         DispatchMessageW(&msg);
     }
 
-    // Cleanly terminate Node.js & any child GHDL processes via Job Object
+    // Signal graceful shutdown via stdin EOF so server.mjs flushes logs & archives latest.log -> YYYY-MM-DD.log
+    if (g_app.stdinWrite) {
+        CloseHandle(g_app.stdinWrite);
+        g_app.stdinWrite = nullptr;
+    }
+    if (g_app.nodeProcess) {
+        WaitForSingleObject(g_app.nodeProcess, 2500);
+        CloseHandle(g_app.nodeProcess);
+        g_app.nodeProcess = nullptr;
+    }
+    // Hard safety net: terminate any stubborn child GHDL/Node processes via Job Object
     if (g_app.job) {
         CloseHandle(g_app.job);
         g_app.job = nullptr;
-    }
-    if (g_app.nodeProcess) {
-        CloseHandle(g_app.nodeProcess);
-        g_app.nodeProcess = nullptr;
     }
     if (g_app.stdoutRead) {
         CloseHandle(g_app.stdoutRead);

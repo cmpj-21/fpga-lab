@@ -11,6 +11,33 @@ const PUBLIC = path.join(ROOT, 'public');
 const IS_PACKAGED = process.env.TRACE_PACKAGED === '1';
 const USER_DATA_DIR = path.resolve(process.env.TRACE_DATA_DIR || (IS_PACKAGED ? path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'TraceFPGA') : ROOT));
 const CONFIG_FILE = path.resolve(process.env.TRACE_CONFIG_FILE || path.join(USER_DATA_DIR, 'trace.config.json'));
+const STATE_FILE = path.resolve(process.env.TRACE_STATE_FILE || path.join(USER_DATA_DIR, 'trace.state.json'));
+let stateWriteQueue = Promise.resolve();
+async function readAppState() {
+  try {
+    const raw = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch { return {}; }
+}
+async function patchAppState(patch) {
+  if (!patch || typeof patch !== 'object') return readAppState();
+  const allowed = ['recents', 'lastProject', 'theme', 'layout'];
+  let nextState = {};
+  await (stateWriteQueue = stateWriteQueue.then(async () => {
+    const current = await readAppState();
+    const next = { ...current };
+    for (const key of allowed) {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) {
+        if (patch[key] === null) delete next[key];
+        else next[key] = patch[key];
+      }
+    }
+    await fs.mkdir(path.dirname(STATE_FILE), { recursive: true });
+    await fs.writeFile(STATE_FILE, JSON.stringify(next, null, 2) + '\n', 'utf8');
+    nextState = next;
+  }));
+  return nextState;
+}
 function loadInitialHdlRoot() {
   if (process.env.HDL_ROOT) return path.resolve(process.env.HDL_ROOT);
   try {
@@ -43,8 +70,11 @@ async function setHdlRoot(dir) {
   if (ownsLog) appendLogLine('info', 'app', `Changed Local HDL library folder to ${hdlRoot}`);
   return { ok: true, root: hdlRoot, groups: await hdlTree() };
 }
-const REQUESTED_PORT = process.env.PORT !== undefined && process.env.PORT !== '' ? Number(process.env.PORT) : 8044;
+const PORT_ENV = process.env.PORT;
+const AUTO_PORT = PORT_ENV === 'auto';
+const REQUESTED_PORT = AUTO_PORT ? 8044 : (PORT_ENV !== undefined && PORT_ENV !== '' ? Number(PORT_ENV) : 8044);
 let activePort = REQUESTED_PORT || 8044;
+let triedFallbackPort = false;
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.vcd': 'text/plain', '.glb': 'model/gltf-binary', '.wasm': 'application/wasm' };
 const within = (root, full) => { const rel = path.relative(root, full); return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)); };
 const LOG_DIR = path.resolve(process.env.TRACE_LOG_DIR || path.join(USER_DATA_DIR, 'logs'));
@@ -565,7 +595,15 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://127.0.0.1:${activePort}`);
     if (url.pathname === '/api/health') {
       const cfg = await configuration().catch(e => ({ version: null, error: e.message }));
-      return send(res, 200, { ok: !!cfg.version, app: 'trace-workbench', hdlRoot, backend: cfg.version, error: cfg.error, sessions: sessions.size, logFile: LOG_FILE, actionLogFile: ACTION_LOG_FILE });
+      return send(res, 200, { ok: !!cfg.version, app: 'trace-workbench', hdlRoot, backend: cfg.version, error: cfg.error, sessions: sessions.size, logFile: LOG_FILE, actionLogFile: ACTION_LOG_FILE, stateFile: STATE_FILE });
+    }
+    if (url.pathname === '/api/state' && req.method === 'GET') {
+      return send(res, 200, { ok: true, state: await readAppState() });
+    }
+    if (url.pathname === '/api/state' && req.method === 'POST') {
+      const patch = await json(req, 12 * 1024 * 1024);
+      await patchAppState(patch);
+      return send(res, 200, { ok: true });
     }
     if (url.pathname === '/api/log' && req.method === 'POST') {
       const written = await appendLog(clientReport(await json(req, 64 * 1024)));
@@ -702,6 +740,11 @@ server.listen(REQUESTED_PORT, '127.0.0.1', () => {
   openBrowser();
 });
 server.on('error', async error => {
+  if (error.code === 'EADDRINUSE' && AUTO_PORT && !triedFallbackPort) {
+    triedFallbackPort = true;
+    server.listen(0, '127.0.0.1');
+    return;
+  }
   if (error.code === 'EADDRINUSE') {
     const existing = await fetch(address + '/api/health', { signal: AbortSignal.timeout(3000) }).then(r => r.json()).catch(() => null);
     if (existing?.app === 'trace-workbench') { console.log(`Trace is already running at ${address}`); openBrowser(); return; }
@@ -715,10 +758,18 @@ process.on('exit', () => { if (ownsLog) archiveLog(); });
 async function shutdown() {
   if (stopping) return;
   stopping = true;
+  // Brief grace window so WebView2 pagehide sendBeacon log/state flushes land on disk
+  if (IS_PACKAGED) await new Promise(r => setTimeout(r, 180));
   if (ownsLog) appendLogLine('info', 'app', 'Trace workbench shutting down');
   server.close();
   await Promise.race([Promise.all([...sessions.values()].map(s => s.close().catch(() => {}))), new Promise(r => setTimeout(r, 2000))]);
+  await stateWriteQueue.catch(() => {});
   await logQueue;
-  process.exit();
+  process.exit(0);
 }
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) process.on(signal, shutdown);
+if (IS_PACKAGED) {
+  process.stdin.resume();
+  process.stdin.on('end', shutdown);
+  process.stdin.on('close', shutdown);
+}
