@@ -113,7 +113,7 @@
         <label class="field">Camera<select id="camPreset"><option value="hero">Perspective</option><option value="top">Top-down</option><option value="fpga">FPGA detail</option><option value="display">Display detail</option><option value="dtubes">Four dtubes</option><option value="leds">Four LEDs</option><option value="io">Connectors</option><option value="underside">Underside</option></select></label>
         <label class="field">Exploded view <span id="explodeVal">0%</span><input id="explode" type="range" min="0" max="100" value="0"></label>
         <label class="field">Display persistence <span id="persistVal">60%</span><input id="persistence" type="range" min="0" max="100" value="60"></label>
-        <label class="field">LED intensity <span id="glowVal">40%</span><input id="glow" type="range" min="0" max="100" value="40"></label>
+        <label class="field">LED intensity <span id="glowVal">65%</span><input id="glow" type="range" min="0" max="100" value="65"></label>
         <div class="ctl-row"><label><input id="tglOrbit" type="checkbox"> Auto-rotate</label><label><input id="tglLabels" type="checkbox"> Labels</label></div>
         <div class="ctl-row"><label><input id="tglGrid" type="checkbox"> Grid</label><label><input id="tglTraces" type="checkbox"> Net guides</label></div>
         <label class="field">Render quality<select id="quality" data-gfx="quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high" selected>High</option><option value="ultra">Ultra (2.25× · 4K)</option><option value="extreme">Extreme (2.75× · 4K)</option></select></label>
@@ -130,26 +130,26 @@
           <label class="field">Clearcoat lacquer <span data-gfx-val="clearcoat">0%</span><input type="range" min="0" max="100" value="0" data-gfx="clearcoat"></label>
           <label class="field">LED &amp; 7-seg palette<select data-gfx="ledTheme"><option value="default">Factory Red / Green</option><option value="amber">Vintage HP Amber</option><option value="emerald">Oscilloscope Green</option><option value="ice-blue">Cryo Cyan / Blue</option><option value="ultraviolet">Synthwave Violet</option><option value="pure-white">Xenon Pure White</option><option value="custom">Custom Color…</option></select></label>
           <label class="field">Custom LED color<input type="color" data-gfx="ledCustomColor" value="#ff2921"></label>
-          <label class="field">LED glow intensity <span data-gfx-val="ledGlow">40%</span><input type="range" min="0" max="300" value="40" data-gfx="ledGlow"></label>
-          <label class="field">7-seg glow intensity <span data-gfx-val="segGlow">40%</span><input type="range" min="0" max="300" value="40" data-gfx="segGlow"></label>
-          <label class="field">3D LED surface bleed <span data-gfx-val="ledLightBleed">0%</span><input type="range" min="0" max="100" value="0" data-gfx="ledLightBleed"></label>
+          <label class="field">LED glow intensity <span data-gfx-val="ledGlow">65%</span><input type="range" min="0" max="300" value="65" data-gfx="ledGlow"></label>
+          <label class="field">7-seg glow intensity <span data-gfx-val="segGlow">65%</span><input type="range" min="0" max="300" value="65" data-gfx="segGlow"></label>
+          <label class="field">3D LED surface bleed <span data-gfx-val="ledLightBleed">48%</span><input type="range" min="0" max="100" value="48" data-gfx="ledLightBleed"></label>
         </div></details>
         <details class="gfx-acc"><summary>Lighting rig &amp; IBL</summary><div class="gfx-acc-body">
           <label class="field">Lighting preset<select data-gfx="lightPreset"><option value="default">Workbench Default</option><option value="studio-three-point">3-Point Studio</option><option value="dramatic-noir">Dramatic Low-Key</option><option value="cyberpunk">Neon Synthwave</option><option value="golden-hour">Golden Hour Sun</option><option value="clean-lab">Cleanroom Overheads</option><option value="inspect-macro">Macro Ring Inspection</option></select></label>
           <label class="field">Environment dome<select data-gfx="envPreset"><option value="room">Studio Room</option><option value="studio-soft">Softbox Dome</option><option value="cyber-grid">Cyber Neon Chamber</option><option value="sunset">Sunset Horizon</option><option value="dark-void">Dark Void</option><option value="off">Disabled (No IBL)</option></select></label>
-          <label class="field">IBL intensity <span data-gfx-val="envIntensity">65%</span><input type="range" min="0" max="250" value="65" data-gfx="envIntensity"></label>
+          <label class="field">IBL intensity <span data-gfx-val="envIntensity">42%</span><input type="range" min="0" max="250" value="42" data-gfx="envIntensity"></label>
           <label class="field">IBL rotation <span data-gfx-val="envRotation">0°</span><input type="range" min="0" max="360" value="0" data-gfx="envRotation"></label>
-          <label class="field">Key light intensity <span data-gfx-val="keyIntensity">2.7</span><input type="range" min="0" max="6" step="0.1" value="2.7" data-gfx="keyIntensity"></label>
+          <label class="field">Key light intensity <span data-gfx-val="keyIntensity">1.85</span><input type="range" min="0" max="6" step="0.1" value="1.85" data-gfx="keyIntensity"></label>
           <label class="field">Key light color<input type="color" data-gfx="keyColor" value="#fffaf2"></label>
           <label class="field">Key azimuth <span data-gfx-val="keyAzimuth">-39°</span><input type="range" min="-180" max="180" value="-39" data-gfx="keyAzimuth"></label>
           <label class="field">Key elevation <span data-gfx-val="keyElevation">55°</span><input type="range" min="5" max="90" value="55" data-gfx="keyElevation"></label>
-          <label class="field">Rim light intensity <span data-gfx-val="rimIntensity">1.5</span><input type="range" min="0" max="5" step="0.1" value="1.5" data-gfx="rimIntensity"></label>
+          <label class="field">Rim light intensity <span data-gfx-val="rimIntensity">0.85</span><input type="range" min="0" max="5" step="0.1" value="0.85" data-gfx="rimIntensity"></label>
           <label class="field">Rim light color<input type="color" data-gfx="rimColor" value="#e8eeff"></label>
           <label class="field">Rim azimuth <span data-gfx-val="rimAzimuth">146°</span><input type="range" min="-180" max="180" value="146" data-gfx="rimAzimuth"></label>
           <label class="field">Rim elevation <span data-gfx-val="rimElevation">35°</span><input type="range" min="-45" max="90" value="35" data-gfx="rimElevation"></label>
           <label class="field">Fill light intensity <span data-gfx-val="fillIntensity">0</span><input type="range" min="0" max="4" step="0.1" value="0" data-gfx="fillIntensity"></label>
           <label class="field">Fill light color<input type="color" data-gfx="fillColor" value="#ffdfc2"></label>
-          <label class="field">Ambient hemisphere <span data-gfx-val="hemiIntensity">1.4</span><input type="range" min="0" max="4" step="0.1" value="1.4" data-gfx="hemiIntensity"></label>
+          <label class="field">Ambient hemisphere <span data-gfx-val="hemiIntensity">0.95</span><input type="range" min="0" max="4" step="0.1" value="0.95" data-gfx="hemiIntensity"></label>
           <div class="ctl-row"><label>Sky <input type="color" data-gfx="skyColor" value="#ffffff"></label><label>Ground <input type="color" data-gfx="groundColor" value="#8b8d85"></label></div>
           <div class="ctl-row"><label><input type="checkbox" data-gfx="cursorLight"> Cursor flashlight</label><input type="color" data-gfx="cursorLightColor" value="#fff6e5"></div>
           <label class="field">Flashlight power <span data-gfx-val="cursorLightInt">2.5</span><input type="range" min="0.2" max="6" step="0.1" value="2.5" data-gfx="cursorLightInt"></label>
@@ -159,10 +159,10 @@
           <label class="field">Field of view <span data-gfx-val="fov">38°</span><input type="range" min="12" max="75" value="38" data-gfx="fov"></label>
           <label class="field">Camera roll <span data-gfx-val="cameraRoll">0°</span><input type="range" min="-45" max="45" value="0" data-gfx="cameraRoll"></label>
           <label class="field">Tone mapping<select data-gfx="toneMapping"><option value="aces">ACES Filmic</option><option value="agx">AgX Cinematic</option><option value="neutral">Khronos PBR Neutral</option><option value="reinhard">Reinhard</option><option value="cineon">Cineon Film</option><option value="linear">Linear Unmapped</option></select></label>
-          <label class="field">Exposure <span data-gfx-val="exposure">1.15</span><input type="range" min="0.2" max="3" step="0.05" value="1.15" data-gfx="exposure"></label>
-          <label class="field">HDR bloom <span data-gfx-val="bloom">0%</span><input type="range" min="0" max="150" value="0" data-gfx="bloom"></label>
-          <label class="field">Bloom threshold <span data-gfx-val="bloomThreshold">65%</span><input type="range" min="10" max="100" value="65" data-gfx="bloomThreshold"></label>
-          <label class="field">Bloom radius <span data-gfx-val="bloomRadius">50%</span><input type="range" min="10" max="100" value="50" data-gfx="bloomRadius"></label>
+          <label class="field">Exposure <span data-gfx-val="exposure">1.05</span><input type="range" min="0.2" max="3" step="0.05" value="1.05" data-gfx="exposure"></label>
+          <label class="field">HDR bloom <span data-gfx-val="bloom">34%</span><input type="range" min="0" max="150" value="34" data-gfx="bloom"></label>
+          <label class="field">Bloom threshold <span data-gfx-val="bloomThreshold">92%</span><input type="range" min="10" max="100" value="92" data-gfx="bloomThreshold"></label>
+          <label class="field">Bloom radius <span data-gfx-val="bloomRadius">55%</span><input type="range" min="10" max="100" value="55" data-gfx="bloomRadius"></label>
           <label class="field">SSAO cavity <span data-gfx-val="ssao">0%</span><input type="range" min="0" max="100" value="0" data-gfx="ssao"></label>
           <label class="field">SSAO radius <span data-gfx-val="ssaoRadius">50%</span><input type="range" min="10" max="100" value="50" data-gfx="ssaoRadius"></label>
           <label class="field">DoF bokeh blur <span data-gfx-val="dof">0%</span><input type="range" min="0" max="100" value="0" data-gfx="dof"></label>

@@ -11,7 +11,7 @@ export const DEFAULT_GFX = {
   fov: 38,
   cameraRoll: 0,
   toneMapping: 'aces',
-  exposure: 1.15,
+  exposure: 1.05,
   orbitSpeed: 0.6,
   // Shading & Materials
   shadingMode: 'pbr',
@@ -22,25 +22,25 @@ export const DEFAULT_GFX = {
   clearcoat: 0,
   ledTheme: 'default',
   ledCustomColor: '#ff2921',
-  ledGlow: 40,
-  segGlow: 40,
-  ledLightBleed: 0,
+  ledGlow: 65,
+  segGlow: 65,
+  ledLightBleed: 48,
   // Lighting & Environment
   lightPreset: 'default',
   envPreset: 'room',
-  envIntensity: 65,
+  envIntensity: 42,
   envRotation: 0,
-  keyIntensity: 2.7,
+  keyIntensity: 1.85,
   keyColor: '#fffaf2',
   keyAzimuth: -39,
   keyElevation: 55,
-  rimIntensity: 1.5,
+  rimIntensity: 0.85,
   rimColor: '#e8eeff',
   rimAzimuth: 146,
   rimElevation: 35,
   fillIntensity: 0,
   fillColor: '#ffdfc2',
-  hemiIntensity: 1.4,
+  hemiIntensity: 0.95,
   skyColor: '#ffffff',
   groundColor: '#8b8d85',
   cursorLight: false,
@@ -55,9 +55,9 @@ export const DEFAULT_GFX = {
   bgColor: '#1a1f18',
   bgColorBottom: '#0a0c09',
   // Post-Processing & Color Grading
-  bloom: 0,
-  bloomThreshold: 65,
-  bloomRadius: 50,
+  bloom: 34,
+  bloomThreshold: 92,
+  bloomRadius: 55,
   ssao: 0,
   ssaoRadius: 50,
   dof: 0,
@@ -81,11 +81,11 @@ export const DEFAULT_GFX = {
 
 export const LIGHT_PRESETS = {
   default: {
-    keyIntensity: 2.7, keyColor: '#fffaf2', keyAzimuth: -39, keyElevation: 55,
-    rimIntensity: 1.5, rimColor: '#e8eeff', rimAzimuth: 146, rimElevation: 35,
+    keyIntensity: 1.85, keyColor: '#fffaf2', keyAzimuth: -39, keyElevation: 55,
+    rimIntensity: 0.85, rimColor: '#e8eeff', rimAzimuth: 146, rimElevation: 35,
     fillIntensity: 0, fillColor: '#ffdfc2',
-    hemiIntensity: 1.4, skyColor: '#ffffff', groundColor: '#8b8d85',
-    envPreset: 'room', envIntensity: 65,
+    hemiIntensity: 0.95, skyColor: '#ffffff', groundColor: '#8b8d85',
+    envPreset: 'room', envIntensity: 42,
   },
   'studio-three-point': {
     keyIntensity: 3.6, keyColor: '#fff8ee', keyAzimuth: -45, keyElevation: 48,
@@ -384,7 +384,7 @@ void main() {
   float luma = dot(col.rgb, vec3(0.2126, 0.7152, 0.0722));
   float peak = max(col.r, max(col.g, col.b));
   float brightness = max(luma, peak * 0.94);
-  float knee = uThreshold * 0.42 + 0.0001;
+  float knee = uThreshold * 0.18 + 0.0001;
   float soft = clamp(brightness - uThreshold + knee, 0.0, 2.0 * knee);
   soft = (soft * soft) / (4.0 * knee);
   float contrib = max(soft, brightness - uThreshold) / max(brightness, 0.0001);
@@ -610,14 +610,18 @@ void main() {
     col += (bloomCol + hotCore) * uBloom * 1.45;
   }
 
-  // Exposure & Tone Mapping
-  col *= uExposure;
-  if (uToneMap == 0) col = toneMapACES(col);
-  else if (uToneMap == 1) col = toneMapAgX(col);
-  else if (uToneMap == 2) col = toneMapNeutral(col);
-  else if (uToneMap == 3) col = toneMapReinhard(col);
-  else if (uToneMap == 4) col = toneMapCineon(col);
-  else col = clamp(col, 0.0, 1.0);
+  // Exposure & Tone Mapping (preserve exact theme backdrop on non-gradient background)
+  if (!isBackground || uBgGradient == 1) {
+    col *= uExposure;
+    if (uToneMap == 0) col = toneMapACES(col);
+    else if (uToneMap == 1) col = toneMapAgX(col);
+    else if (uToneMap == 2) col = toneMapNeutral(col);
+    else if (uToneMap == 3) col = toneMapReinhard(col);
+    else if (uToneMap == 4) col = toneMapCineon(col);
+    else col = clamp(col, 0.0, 1.0);
+  } else {
+    col = clamp(col, 0.0, 1.0);
+  }
 
   col = linearToSrgb(col);
 
@@ -802,6 +806,23 @@ function makeCuttingMatTexture() {
   return tex;
 }
 
+function makeGlowHaloTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0.0, 'rgba(255,255,255,0.95)');
+  g.addColorStop(0.14, 'rgba(255,255,255,0.72)');
+  g.addColorStop(0.34, 'rgba(255,255,255,0.34)');
+  g.addColorStop(0.62, 'rgba(255,255,255,0.10)');
+  g.addColorStop(1.0, 'rgba(255,255,255,0.0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 export function createGfxStudio(ctx) {
   const { renderer, scene, camera, controls, model, groups, key, rim, hemi, floor, leds, segments } = ctx;
   const gfx = { ...DEFAULT_GFX };
@@ -811,6 +832,7 @@ export function createGfxStudio(ctx) {
   const origMaterials = new Map();
   const touchBoxes = [];
   const pcbMeshes = [];
+  const displayBezelMeshes = [];
   model.traverse(obj => {
     if (!obj.isMesh) return;
     if (obj.userData.isTouchBox) {
@@ -823,6 +845,7 @@ export function createGfxStudio(ctx) {
         colorHex: obj.material.color ? obj.material.color.getHex() : 0xffffff,
         roughness: obj.material.roughness ?? 0.5,
         metalness: obj.material.metalness ?? 0.0,
+        envMapIntensity: obj.material.envMapIntensity ?? 1.0,
         flatShading: !!obj.material.flatShading,
         wireframe: !!obj.material.wireframe,
       });
@@ -830,6 +853,7 @@ export function createGfxStudio(ctx) {
     let p = obj;
     while (p && p !== model) {
       if (p.name === 'pcb') { pcbMeshes.push(obj); break; }
+      if (p.name === 'display' && !/^segment_/.test(obj.name)) { displayBezelMeshes.push(obj); break; }
       p = p.parent;
     }
   });
@@ -847,8 +871,10 @@ export function createGfxStudio(ctx) {
   cursorLight.position.set(0, 28, 0);
   studioGroup.add(cursorLight);
 
-  // 3D LED & Display Point Lights for real PCB surface light bleed
+  // 3D LED & Display Point Lights + Optical Halo Sprites (stored in studioGroup so model.children stays untouched)
   const tmpBox = new THREE.Box3();
+  const tmpWorldPos = new THREE.Vector3();
+  const glowHaloTex = makeGlowHaloTexture();
   const ledPointLights = leds.map(l => {
     const pos = tmpBox.setFromObject(l.mesh).getCenter(new THREE.Vector3());
     const pl = new THREE.PointLight(l.id === 'pwrled' ? 0x39d66b : 0xff2921, 0, 32, 1.6);
@@ -856,12 +882,52 @@ export function createGfxStudio(ctx) {
     studioGroup.add(pl);
     return { id: l.id, light: pl, led: l };
   });
+  const ledHalos = leds.map(l => {
+    const pos = tmpBox.setFromObject(l.mesh).getCenter(new THREE.Vector3());
+    const mat = new THREE.SpriteMaterial({
+      map: glowHaloTex,
+      color: l.id === 'pwrled' ? 0x39d66b : 0xff2921,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: true,
+      toneMapped: false,
+    });
+    const sprite = new THREE.Sprite(mat);
+    sprite.position.set(pos.x, pos.y + 1.3, pos.z);
+    sprite.scale.set(14, 14, 1);
+    sprite.visible = false;
+    sprite.renderOrder = 10;
+    studioGroup.add(sprite);
+    return sprite;
+  });
   const digitPointLights = segments.map(seg => {
     const pos = tmpBox.setFromObject(seg.meshes[6]).getCenter(new THREE.Vector3());
     const pl = new THREE.PointLight(0xff2921, 0, 38, 1.5);
     pl.position.set(pos.x, pos.y + 4.2, pos.z);
     studioGroup.add(pl);
     return pl;
+  });
+  const digitHalos = segments.map(seg => {
+    const pos = tmpBox.setFromObject(seg.meshes[6]).getCenter(new THREE.Vector3());
+    const mat = new THREE.SpriteMaterial({
+      map: glowHaloTex,
+      color: 0xff2921,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: true,
+      toneMapped: false,
+    });
+    const sprite = new THREE.Sprite(mat);
+    sprite.position.set(pos.x, pos.y + 1.8, pos.z);
+    sprite.scale.set(18, 22, 1);
+    sprite.visible = false;
+    sprite.renderOrder = 10;
+    studioGroup.add(sprite);
+    return sprite;
   });
 
   // Floor materials
@@ -1250,6 +1316,26 @@ export function createGfxStudio(ctx) {
 
     for (const [mesh, orig] of origMaterials.entries()) {
       const isPcb = pcbMeshes.includes(mesh);
+      const isDisplayBezel = displayBezelMeshes.includes(mesh);
+      const isMattePcb = isPcb && orig.metalness < 0.35;
+      const isMatteBezel = isDisplayBezel && orig.metalness < 0.35;
+      const isMattePlastic = !isPcb && !isDisplayBezel && orig.metalness < 0.15;
+      const baseRoughness = isMattePcb
+        ? Math.max(orig.roughness, 0.74)
+        : isMatteBezel
+          ? Math.max(orig.roughness, 0.78)
+          : isMattePlastic
+            ? Math.max(orig.roughness, 0.56)
+            : orig.roughness;
+      const targetEnvMapInt = cc > 0.01
+        ? orig.envMapIntensity
+        : isMattePcb
+          ? Math.min(orig.envMapIntensity, 0.32)
+          : isMatteBezel
+            ? Math.min(orig.envMapIntensity, 0.36)
+            : isMattePlastic
+              ? Math.min(orig.envMapIntensity, 0.55)
+              : orig.envMapIntensity;
       // Determine target base color (only tint greenish/dark solder-mask PCB surfaces when pcbTheme is set)
       let targetColor = orig.colorHex;
       if (isPcb && pcbHex) {
@@ -1271,19 +1357,21 @@ export function createGfxStudio(ctx) {
           if (!phys || !phys.isMeshPhysicalMaterial) {
             phys = new THREE.MeshPhysicalMaterial({
               color: targetColor,
-              roughness: THREE.MathUtils.clamp(orig.roughness * rScale, 0.02, 1),
+              roughness: THREE.MathUtils.clamp(baseRoughness * rScale, 0.02, 1),
               metalness: THREE.MathUtils.clamp(orig.metalness * mScale, 0, 1),
               clearcoat: cc,
               clearcoatRoughness: 0.12,
+              envMapIntensity: targetEnvMapInt,
               flatShading: mode === 'flat',
               wireframe: mode === 'wireframe',
             });
             derivedMatCache.set(mesh, phys);
           } else {
             phys.color.setHex(targetColor);
-            phys.roughness = THREE.MathUtils.clamp(orig.roughness * rScale, 0.02, 1);
+            phys.roughness = THREE.MathUtils.clamp(baseRoughness * rScale, 0.02, 1);
             phys.metalness = THREE.MathUtils.clamp(orig.metalness * mScale, 0, 1);
             phys.clearcoat = cc;
+            phys.envMapIntensity = targetEnvMapInt;
             phys.flatShading = mode === 'flat';
             phys.wireframe = mode === 'wireframe';
             phys.needsUpdate = true;
@@ -1292,8 +1380,9 @@ export function createGfxStudio(ctx) {
         } else {
           mesh.material = orig.material;
           if (mesh.material.color) mesh.material.color.setHex(targetColor);
-          if (mesh.material.roughness !== undefined) mesh.material.roughness = THREE.MathUtils.clamp(orig.roughness * rScale, 0.02, 1);
+          if (mesh.material.roughness !== undefined) mesh.material.roughness = THREE.MathUtils.clamp(baseRoughness * rScale, 0.02, 1);
           if (mesh.material.metalness !== undefined) mesh.material.metalness = THREE.MathUtils.clamp(orig.metalness * mScale, 0, 1);
+          if (mesh.material.envMapIntensity !== undefined) mesh.material.envMapIntensity = targetEnvMapInt;
           const wantFlat = mode === 'flat' ? true : orig.flatShading;
           if (mesh.material.flatShading !== wantFlat) {
             mesh.material.flatShading = wantFlat;
@@ -1358,15 +1447,32 @@ export function createGfxStudio(ctx) {
       const isPwr = led.id === 'pwrled';
       const active = powerOn && (isPwr ? true : (stagePose.enabled ? !!stagePose.leds[i] : led.on));
       led.mesh.material.emissive.setHex(isPwr ? pal.pwrEm : pal.em);
-      if (active && ledOverdrive > 0) {
-        led.mesh.material.emissive.lerp(new THREE.Color(0xfff4d8), Math.min(0.45, ledOverdrive * 0.22));
+      if (active) {
+        const coreMix = Math.min(0.45, 0.14 + ledOverdrive * 0.22);
+        led.mesh.material.emissive.lerp(new THREE.Color(0xfff4d8), coreMix);
       }
-      led.mesh.material.emissiveIntensity = active ? 0.7 + ledGlowNorm * 2.4 + ledOverdrive * 1.8 : 0;
+      led.mesh.material.emissiveIntensity = active ? 1.45 + ledGlowNorm * 3.1 + ledOverdrive * 2.2 : 0;
       led.mesh.material.color.setHex(isPwr ? (active ? pal.pwrOn : 0x183520) : (active ? pal.on : pal.off));
       const pl = ledPointLights[i];
-      if (pl) {
-        pl.light.color.setHex(isPwr ? pal.pwrEm : pal.em);
-        pl.light.intensity = active && bleed > 0 ? bleed * (1.2 + ledGlowNorm * 4.2) : 0;
+      const halo = ledHalos[i];
+      if (pl || halo) {
+        led.mesh.getWorldPosition(tmpWorldPos);
+        if (pl) {
+          pl.light.position.set(tmpWorldPos.x, tmpWorldPos.y + 3.0, tmpWorldPos.z);
+          pl.light.color.setHex(isPwr ? pal.pwrEm : pal.em);
+          pl.light.intensity = active && bleed > 0 ? bleed * (1.1 + ledGlowNorm * 3.6) : 0;
+        }
+        if (halo) {
+          const haloStrength = active && ledGlowNorm > 0.01 ? Math.min(1, 0.28 + ledGlowNorm * 0.56) : 0;
+          halo.visible = haloStrength > 0.005;
+          if (halo.visible) {
+            halo.position.set(tmpWorldPos.x, tmpWorldPos.y + 1.3, tmpWorldPos.z);
+            halo.material.color.setHex(isPwr ? pal.pwrEm : pal.em);
+            halo.material.opacity = haloStrength;
+            const s = (isPwr ? 12 : 14) * (0.72 + Math.min(1.8, ledGlowNorm) * 0.45);
+            halo.scale.set(s, s, 1);
+          }
+        }
       }
     }
 
@@ -1382,16 +1488,34 @@ export function createGfxStudio(ctx) {
         if (on) digLitBits++;
         const material = digit.meshes[bit].material;
         material.emissive.setHex(pal.em);
-        if (on && segOverdrive > 0) {
-          material.emissive.lerp(new THREE.Color(0xfff4d8), Math.min(0.45, segOverdrive * 0.22));
+        if (on) {
+          const coreMix = Math.min(0.45, 0.14 + segOverdrive * 0.22);
+          material.emissive.lerp(new THREE.Color(0xfff4d8), coreMix);
         }
-        material.emissiveIntensity = on ? 1 + segGlowNorm * 1.7 + segOverdrive * 1.8 : 0;
+        material.emissiveIntensity = on ? 1.6 + segGlowNorm * 2.6 + segOverdrive * 2.2 : 0;
         material.color.setHex(on ? pal.segOn : pal.segOff);
       }
       const dLight = digitPointLights[d];
-      if (dLight) {
-        dLight.color.setHex(pal.em);
-        dLight.intensity = bleed > 0 && digLitBits > 0 ? bleed * (digLitBits / 7) * (1.5 + segGlowNorm * 3.8) : 0;
+      const dHalo = digitHalos[d];
+      if (dLight || dHalo) {
+        digit.meshes[6].getWorldPosition(tmpWorldPos);
+        const litFrac = digLitBits / 7;
+        if (dLight) {
+          dLight.position.set(tmpWorldPos.x, tmpWorldPos.y + 4.2, tmpWorldPos.z);
+          dLight.color.setHex(pal.em);
+          dLight.intensity = bleed > 0 && digLitBits > 0 ? bleed * litFrac * (1.2 + segGlowNorm * 3.2) : 0;
+        }
+        if (dHalo) {
+          const haloStrength = powerOn && digLitBits > 0 && segGlowNorm > 0.01 ? Math.min(0.72, (0.14 + litFrac * 0.34) * (0.45 + segGlowNorm * 0.72)) : 0;
+          dHalo.visible = haloStrength > 0.005;
+          if (dHalo.visible) {
+            dHalo.position.set(tmpWorldPos.x, tmpWorldPos.y + 1.8, tmpWorldPos.z);
+            dHalo.material.color.setHex(pal.em);
+            dHalo.material.opacity = haloStrength;
+            const sc = 0.82 + Math.min(1.6, segGlowNorm) * 0.32;
+            dHalo.scale.set(17 * sc, 21 * sc, 1);
+          }
+        }
       }
     }
   }
@@ -1461,7 +1585,7 @@ export function createGfxStudio(ctx) {
     // 2. Render Bloom Passes if enabled
     if (gfx.bloom > 0) {
       bloomExtractMat.uniforms.tDiffuse.value = rtScene.texture;
-      bloomExtractMat.uniforms.uThreshold.value = (gfx.bloomThreshold / 100) * 1.25;
+      bloomExtractMat.uniforms.uThreshold.value = (gfx.bloomThreshold / 100) * 1.35;
       postQuad.material = bloomExtractMat;
       renderer.setRenderTarget(rtBloomA);
       renderer.render(postScene, postCamera);
@@ -1686,6 +1810,9 @@ export function createGfxStudio(ctx) {
     ctx2d.fillText(subText, x + Math.round(26 * scale), y + Math.round(42 * scale));
     ctx2d.restore();
   }
+
+  syncLighting();
+  syncMaterialsAndShading();
 
   return {
     get gfx() { return gfx; },

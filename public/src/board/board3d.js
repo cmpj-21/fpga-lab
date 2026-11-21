@@ -10,7 +10,7 @@ export async function createBoard3D(canvas, opts = {}) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.15;
+  renderer.toneMappingExposure = 1.05;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.shadowMap.autoUpdate = false;
@@ -27,19 +27,19 @@ export async function createBoard3D(canvas, opts = {}) {
   const pmrem = new THREE.PMREMGenerator(renderer);
   const room = new RoomEnvironment();
   scene.environment = pmrem.fromScene(room, .04).texture;
-  scene.environmentIntensity = .65;
+  scene.environmentIntensity = .42;
   room.dispose();
   pmrem.dispose();
-  const key = new THREE.DirectionalLight(0xfffaf2, 2.7);
+  const key = new THREE.DirectionalLight(0xfffaf2, 1.85);
   key.position.set(-80, 180, 100);
   key.castShadow = true;
   Object.assign(key.shadow.camera, { left: -120, right: 120, top: 120, bottom: -120, near: 20, far: 450 });
   key.shadow.bias = -.00015;
   key.shadow.normalBias = .04;
   scene.add(key);
-  const rim = new THREE.DirectionalLight(0xe8eeff, 1.5);
+  const rim = new THREE.DirectionalLight(0xe8eeff, .85);
   rim.position.set(80, 100, -120);
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x8b8d85, 1.4);
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x8b8d85, .95);
   scene.add(rim, hemi);
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(1200, 1200), new THREE.ShadowMaterial({ opacity: .13 }));
   floor.rotation.x = -Math.PI / 2;
@@ -53,7 +53,7 @@ export async function createBoard3D(canvas, opts = {}) {
   scene.add(model);
   model.updateMatrixWorld(true);
   const groups = Object.fromEntries(model.children.map(object => [object.name, object]));
-  const state = { power: true, persistence: .6, glow: .4, explode: 0, explodeTarget: 0, tween: null, navMode: 'orbit', toolMode: 'interact', selected: null, hovered: null, hideOutline: false };
+  const state = { power: true, persistence: .6, glow: .65, explode: 0, explodeTarget: 0, tween: null, navMode: 'orbit', toolMode: 'interact', selected: null, hovered: null, hideOutline: false };
   function syncCameraButtons() {
     const mode = state.navMode === 'pan' ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
     controls.mouseButtons.LEFT = mode;
