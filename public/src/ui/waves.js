@@ -125,7 +125,7 @@ export class WaveViewer {
       const start = Math.max(0, this.sampleIndex(signal, this.tStart));
       for (let i = start; i < samples.length; i++) {
         const sample = samples[i]; if (sample.t > this.tEnd) break;
-        const nextTime = samples[i + 1]?.t ?? this.lastTime;
+        const nextTime = samples[i + 1]?.t ?? (this.lastTime > sample.t ? this.lastTime : this.tEnd);
         if (nextTime < this.tStart) continue;
         const x1 = Math.max(0, xOf(sample.t)), x2 = Math.min(width, xOf(nextTime));
         const real = ['real', 'realtime'].includes(signal.kind);

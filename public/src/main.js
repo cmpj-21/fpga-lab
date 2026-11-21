@@ -410,6 +410,7 @@ async function flashToBoard() {
   }
   S.flashed = true;
   S.time = 0; S.cycles = 0; S.inputs = {}; S.values.clear(); S.pending = [];
+  if ($('#waveFollow')) $('#waveFollow').checked = true;
   buildBindings(); buildWaves(); renderPins(); renderTruthInputs();
   $('#virtualInputs').replaceChildren(); $('#virtualInputs').classList.add('hidden');
   uart.reset(); $('#uartOut').replaceChildren();
@@ -498,6 +499,14 @@ function sampleOutputs() {
     el.classList.toggle('hi', /[1H]/.test(val));
   });
 }
+function waveFollowSpan() {
+  const cycleFs = 1e15 / S.clkHz;
+  const effectiveCyclesPerSec = Math.min(512 * 30, S.clkHz * 10 ** ((S.speed - 55) / 25));
+  if (clockId() === -1) {
+    return Math.max(cycleFs * 12, effectiveCyclesPerSec * 2.5 * cycleFs);
+  }
+  return Math.max(cycleFs * 40, Math.min(cycleFs * 250, effectiveCyclesPerSec * 0.25 * cycleFs));
+}
 function consume(result) {
   result.logs?.forEach(m => log(m, /warning/i.test(m) ? 'warning' : 'info'));
   for (const sample of result.samples || []) {
@@ -507,7 +516,7 @@ function consume(result) {
   }
   if (result.ended) { S.sim.ended = true; S.pending = []; pause(); log('Testbench completed normally. Its final waveform is ready to export.'); }
   $('#roTime').textContent = fmtTime(S.time);
-  if ($('#waveFollow').checked && S.time > 0) waves.follow(S.time, 1e15 / S.clkHz * 12);
+  if ($('#waveFollow').checked && S.time > 0) waves.follow(S.time, waveFollowSpan());
   waves.draw();
   for (const input of $$('#virtualInputs input')) {
     if (document.activeElement === input) continue;
@@ -1210,6 +1219,7 @@ function wire() {
     }
   };
   $('#btnVcd').onclick = exportVcd; $('#waveZoomIn').onclick = () => { $('#waveFollow').checked = false; waves.zoom(1 / 1.4); }; $('#waveZoomOut').onclick = () => { $('#waveFollow').checked = false; waves.zoom(1.4); }; $('#waveFit').onclick = () => { $('#waveFollow').checked = false; waves.fit(); };
+  $('#waveFollow').onchange = () => { if ($('#waveFollow').checked && S.time > 0) { waves.follow(S.time, waveFollowSpan()); waves.draw(); } };
   waves.onCursor = time => $('#waveCursor').textContent = `Cursor ${fmtTime(time)}`; waves.onNavigate = () => $('#waveFollow').checked = false;
   $('#btnLibrary').onclick = () => toggleLeft('library');
   $('#btnPins').onclick = () => toggleLeft('pins'); $('#closeLeft').onclick = () => { $('#app').classList.remove('mobile-library'); $('#app').classList.add('no-library'); syncNavigation(); };
