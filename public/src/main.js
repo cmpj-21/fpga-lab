@@ -861,7 +861,17 @@ function renderPins() {
     tr.append(td);
     $('#pinBody').append(tr);
   }
-  for (const port of rows) {
+  const focusPinRow = idx => {
+    const inputs = $$('#pinBody input');
+    if (idx < 0 || idx >= inputs.length) return;
+    const next = inputs[idx];
+    if (!next || next.disabled) return;
+    next.closest('tr')?.scrollIntoView({ block: 'nearest' });
+    next.focus();
+    next.select();
+  };
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    const port = rows[rowIndex];
     const currentPin = findPinForPort(port.name);
     const boardNet = currentPin ? (PIN_NET[currentPin] || '') : '';
     const bound = boardNet ? S.bindings[boardNet] : null;
@@ -887,21 +897,30 @@ function renderPins() {
     input.title = currentPin ? `Assigned to PIN_${currentPin}${boardNet ? ` (${boardNet})` : ''}` : 'Enter devboard pin number (1–144), e.g. 88 or PIN_88';
     input.className = bound ? 'mapped' : currentPin ? 'assigned' : 'unmapped';
     input.disabled = S.building || S.importing;
-    input.onchange = () => {
+    let committed = false;
+    const commitInput = (moveDelta = 0) => {
       const parsed = parsePinInput(input.value);
       if (Number.isNaN(parsed)) {
         toast('Enter a valid EP4CE6 pin number from 1 to 144 (e.g. 88 or PIN_88).', 'err');
         input.value = currentPin ? `PIN_${currentPin}` : '';
-        return;
+        input.select();
+        return false;
       }
       if (parsed !== null) {
         const existingOwner = (S.assignments.get(parsed) || '').trim().toLowerCase();
         if (existingOwner && existingOwner !== port.name) {
           toast(`PIN_${parsed} is already assigned to ${existingOwner}. Clear or change it first.`, 'err');
           input.value = currentPin ? `PIN_${currentPin}` : '';
-          return;
+          input.select();
+          return false;
         }
       }
+      if (parsed === currentPin) {
+        input.value = currentPin ? `PIN_${currentPin}` : '';
+        if (moveDelta !== 0) focusPinRow(rowIndex + moveDelta);
+        return true;
+      }
+      committed = true;
       if (currentPin !== null) S.assignments.delete(currentPin);
       if (parsed !== null) {
         S.assignments.set(parsed, port.name);
@@ -910,6 +929,15 @@ function renderPins() {
       saveProject();
       if (S.vcd) { buildBindings(); renderPins(); board?.clearOutputs(); sampleOutputs(); }
       else { markDirty(); renderPins(); toast(parsed ? `Assigned ${port.label} → PIN_${parsed}${PIN_NET[parsed] ? ` (${PIN_NET[parsed]})` : ''}. Click Build & Compile before flashing.` : `Unassigned ${port.label}. Click Build & Compile before flashing.`); }
+      if (moveDelta !== 0) focusPinRow(rowIndex + moveDelta);
+      return true;
+    };
+    input.onchange = () => { if (!committed) commitInput(0); };
+    input.onkeydown = e => {
+      if (e.key === 'Enter') { e.preventDefault(); commitInput(e.shiftKey ? -1 : 1); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); commitInput(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); commitInput(-1); }
+      else if (e.key === 'Escape') { e.preventDefault(); input.value = currentPin ? `PIN_${currentPin}` : ''; input.blur(); }
     };
     locCell.append(input);
     const netCell = document.createElement('td');
