@@ -23,6 +23,8 @@
 #include <shellapi.h>
 #include <cstdint>
 #include <cstring>
+#include <cwchar>
+#include <cctype>
 #include <string>
 #include <vector>
 
@@ -149,7 +151,73 @@ static HWND ShowSplash(HINSTANCE hInst) {
     return hwnd;
 }
 
-static bool ExtractEmbeddedZip(const std::wstring& selfPath, const PortableTrailer& tr, const std::wstring& destDir) {
+static std::wstring GetSystemTarPath() {
+    wchar_t sysDir[MAX_PATH * 4] = {};
+    UINT n = GetSystemDirectoryW(sysDir, MAX_PATH * 4);
+    if (n > 0 && n < MAX_PATH * 4) {
+        std::wstring p(sysDir, n);
+        if (!p.empty() && p.back() != L'\\') p.push_back(L'\\');
+        return p + L"tar.exe";
+    }
+    return L"C:\\Windows\\System32\\tar.exe";
+}
+
+static bool DeleteDirRecursive(const std::wstring& dir) {
+    if (!PathExists(dir)) return true;
+    WIN32_FIND_DATAW fd{};
+    HANDLE hFind = FindFirstFileW((dir + L"\\*").c_str(), &fd);
+    bool ok = true;
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            if (std::wcscmp(fd.cFileName, L".") == 0 || std::wcscmp(fd.cFileName, L"..") == 0) continue;
+            std::wstring child = dir + L"\\" + fd.cFileName;
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                if (!DeleteDirRecursive(child)) ok = false;
+            } else {
+                SetFileAttributesW(child.c_str(), FILE_ATTRIBUTE_NORMAL);
+                if (!DeleteFileW(child.c_str())) ok = false;
+            }
+        } while (FindNextFileW(hFind, &fd));
+        FindClose(hFind);
+    }
+    SetFileAttributesW(dir.c_str(), FILE_ATTRIBUTE_NORMAL);
+    if (!RemoveDirectoryW(dir.c_str())) ok = false;
+    return ok;
+}
+
+static void PruneOldCacheDirs(const std::wstring& cacheRoot, const std::wstring& keepTag) {
+    WIN32_FIND_DATAW fd{};
+    HANDLE hFind = FindFirstFileW((cacheRoot + L"\\*").c_str(), &fd);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        std::wstring name = fd.cFileName;
+        if (name == L"." || name == L".." || name == keepTag) continue;
+        // Remove previous 8-hex-char version folders or leftover .tmp-* staging folders
+        bool isHexTag = (name.size() == 8);
+        if (isHexTag) {
+            for (wchar_t c : name) {
+                if (c > 0x7F || !std::isxdigit(static_cast<unsigned char>(c))) { isHexTag = false; break; }
+            }
+        }
+        bool isTempStage = (name.find(L".tmp-") != std::wstring::npos);
+        if (isHexTag || isTempStage) {
+            DeleteDirRecursive(cacheRoot + L"\\" + name);
+        }
+    } while (FindNextFileW(hFind, &fd));
+    FindClose(hFind);
+}
+
+static void PumpSplashMessages(HWND splash) {
+    if (!splash) return;
+    MSG m{};
+    while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&m);
+        DispatchMessageW(&m);
+    }
+}
+
+static bool ExtractEmbeddedZip(const std::wstring& selfPath, const PortableTrailer& tr, const std::wstring& destDir, HWND splash) {
     HANDLE in = CreateFileW(selfPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (in == INVALID_HANDLE_VALUE) return false;
 
@@ -160,10 +228,14 @@ static bool ExtractEmbeddedZip(const std::wstring& selfPath, const PortableTrail
         return false;
     }
 
-    wchar_t tempDir[MAX_PATH] = {};
-    GetTempPathW(MAX_PATH, tempDir);
-    std::wstring zipPath = std::wstring(tempDir) + L"trace-portable-" +
-        std::wstring(tr.tag, tr.tag + 8) + L".zip";
+    wchar_t tempDir[MAX_PATH * 4] = {};
+    DWORD tLen = GetTempPathW(MAX_PATH * 4, tempDir);
+    if (tLen == 0 || tLen >= MAX_PATH * 4) {
+        CloseHandle(in);
+        return false;
+    }
+    std::wstring zipPath = std::wstring(tempDir, tLen) + L"trace-portable-" +
+        std::wstring(tr.tag, tr.tag + 8) + L"-" + std::to_wstring(GetCurrentProcessId()) + L".zip";
 
     HANDLE out = CreateFileW(zipPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
     if (out == INVALID_HANDLE_VALUE) {
@@ -180,6 +252,7 @@ static bool ExtractEmbeddedZip(const std::wstring& selfPath, const PortableTrail
         if (!ReadFile(in, buf.data(), toRead, &got, nullptr) || got == 0) { copyOk = false; break; }
         if (!WriteFile(out, buf.data(), got, &wrote, nullptr) || wrote != got) { copyOk = false; break; }
         remaining -= got;
+        PumpSplashMessages(splash);
     }
     CloseHandle(out);
     CloseHandle(in);
@@ -190,8 +263,9 @@ static bool ExtractEmbeddedZip(const std::wstring& selfPath, const PortableTrail
 
     CreateDirsRecursive(destDir);
 
-    // Use Windows 10/11 built-in bsdtar (tar.exe) for fast native ZIP extraction
-    std::wstring cmd = L"tar.exe -xf \"" + zipPath + L"\" -C \"" + destDir + L"\"";
+    // Explicitly invoke Windows System32 bsdtar (never shadowed by MSYS2/Git GNU tar on PATH)
+    std::wstring tarExe = GetSystemTarPath();
+    std::wstring cmd = L"\"" + tarExe + L"\" -xf \"" + zipPath + L"\" -C \"" + destDir + L"\"";
     std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
     cmdBuf.push_back(L'\0');
 
@@ -200,10 +274,18 @@ static bool ExtractEmbeddedZip(const std::wstring& selfPath, const PortableTrail
     si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
     PROCESS_INFORMATION pi{};
-    BOOL started = CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, destDir.c_str(), &si, &pi);
+    BOOL started = CreateProcessW(tarExe.c_str(), cmdBuf.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, destDir.c_str(), &si, &pi);
     DWORD exitCode = 1;
     if (started) {
-        WaitForSingleObject(pi.hProcess, INFINITE);
+        for (;;) {
+            DWORD waitRes = MsgWaitForMultipleObjects(1, &pi.hProcess, FALSE, INFINITE, QS_ALLINPUT);
+            if (waitRes == WAIT_OBJECT_0) break;
+            if (waitRes == WAIT_OBJECT_0 + 1) {
+                PumpSplashMessages(splash);
+            } else {
+                break;
+            }
+        }
         GetExitCodeProcess(pi.hProcess, &exitCode);
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
@@ -240,27 +322,62 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR lpCmdLine, int nCmdSho
     ReadFile(f, &tr, sizeof(tr), &got, nullptr);
     CloseHandle(f);
 
-    if (got != sizeof(tr) || std::memcmp(tr.magic, "TRCPORT1", 8) != 0 ||
-        tr.payloadOffset + tr.payloadSize + sizeof(tr) != (uint64_t)fileSize.QuadPart) {
+    uint64_t fsize = static_cast<uint64_t>(fileSize.QuadPart);
+    uint64_t maxPayload = fsize - sizeof(tr);
+    bool tagValid = true;
+    for (int i = 0; i < 8; ++i) {
+        if (!std::isxdigit(static_cast<unsigned char>(tr.tag[i]))) { tagValid = false; break; }
+    }
+    if (got != sizeof(tr) || std::memcmp(tr.magic, "TRCPORT1", 8) != 0 || !tagValid ||
+        tr.payloadSize == 0 || tr.payloadOffset > maxPayload || tr.payloadSize != maxPayload - tr.payloadOffset) {
         MessageBoxW(nullptr, L"Invalid or corrupted Trace portable bundle.", L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
         return 1;
     }
 
     std::wstring tag(tr.tag, tr.tag + 8);
-    std::wstring cacheDir = GetCacheRoot() + L"\\" + tag;
+    std::wstring cacheRoot = GetCacheRoot();
+    std::wstring cacheDir = cacheRoot + L"\\" + tag;
     std::wstring targetExe = cacheDir + L"\\Trace.exe";
     std::wstring readyFlag = cacheDir + L"\\.ready";
 
     if (!PathExists(readyFlag) || !PathExists(targetExe)) {
-        HWND splash = ShowSplash(hInstance);
-        bool ok = ExtractEmbeddedZip(selfPath, tr, cacheDir);
-        if (splash) DestroyWindow(splash);
-        if (!ok || !PathExists(targetExe)) {
+        HANDLE unpackMutex = CreateMutexW(nullptr, FALSE, (L"Local\\TracePortableUnpack_" + tag).c_str());
+        if (unpackMutex) {
+            WaitForSingleObject(unpackMutex, INFINITE);
+        }
+        bool needExtract = (!PathExists(readyFlag) || !PathExists(targetExe));
+        bool unpackOk = true;
+        if (needExtract) {
+            CreateDirsRecursive(cacheRoot);
+            HWND splash = ShowSplash(hInstance);
+            std::wstring stageDir = cacheDir + L".tmp-" + std::to_wstring(GetCurrentProcessId());
+            DeleteDirRecursive(stageDir);
+            bool ok = ExtractEmbeddedZip(selfPath, tr, stageDir, splash);
+            if (ok && PathExists(stageDir + L"\\Trace.exe")) {
+                HANDLE rf = CreateFileW((stageDir + L"\\.ready").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN, nullptr);
+                if (rf != INVALID_HANDLE_VALUE) CloseHandle(rf);
+                DeleteDirRecursive(cacheDir);
+                if (!MoveFileExW(stageDir.c_str(), cacheDir.c_str(), MOVEFILE_WRITE_THROUGH)) {
+                    DeleteDirRecursive(stageDir);
+                    unpackOk = false;
+                }
+            } else {
+                DeleteDirRecursive(stageDir);
+                unpackOk = false;
+            }
+            if (splash) DestroyWindow(splash);
+            if (unpackOk) {
+                PruneOldCacheDirs(cacheRoot, tag);
+            }
+        }
+        if (unpackMutex) {
+            ReleaseMutex(unpackMutex);
+            CloseHandle(unpackMutex);
+        }
+        if (!unpackOk || !PathExists(targetExe)) {
             MessageBoxW(nullptr, L"Failed to unpack Trace FPGA Workbench portable bundle.", L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
             return 1;
         }
-        HANDLE rf = CreateFileW(readyFlag.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN, nullptr);
-        if (rf != INVALID_HANDLE_VALUE) CloseHandle(rf);
     }
 
     SetEnvironmentVariableW(L"TRACE_PORTABLE", L"1");

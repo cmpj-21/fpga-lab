@@ -5,6 +5,7 @@
 
 [Setup]
 AppId={{8F3D9B6E-4D72-4E2A-B81C-7A9C3E52F041}
+AppMutex=TraceFPGAWorkbenchMutex
 AppName=Trace FPGA Workbench
 AppVersion={#MyAppVersion}
 AppVerName=Trace FPGA Workbench {#MyAppVersion}

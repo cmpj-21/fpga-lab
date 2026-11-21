@@ -25,11 +25,10 @@ Write-Host "=== Trace FPGA Workbench Release Builder v$Version ===" -ForegroundC
 $gpp     = Join-Path $MsysBin 'g++.exe'
 $gcc     = Join-Path $MsysBin 'gcc.exe'
 $windres = Join-Path $MsysBin 'windres.exe'
-$ldd     = Join-Path $MsysBin 'ldd.exe'
-if (!(Test-Path $ldd)) { $ldd = 'C:\msys64\usr\bin\ldd.exe' }
+$sysTar  = Join-Path $env:SystemRoot 'System32\tar.exe'
 
-foreach ($tool in @($gpp, $gcc, $windres)) {
-  if (!(Test-Path $tool)) { throw "Required MSYS2 UCRT64 tool not found: $tool" }
+foreach ($tool in @($gpp, $gcc, $windres, $sysTar)) {
+  if (!(Test-Path $tool)) { throw "Required build tool not found: $tool" }
 }
 
 $wv2Header = Join-Path $wv2Dir 'WebView2.h'
@@ -89,8 +88,12 @@ Write-Host "  Built VPI plugin: $(Split-Path -Leaf $vpiOut)" -ForegroundColor Gr
 
 # 5. Compile Win32 resources + native Trace.exe + portable_stub.exe
 Write-Host "Compiling native Windows executables..." -ForegroundColor Cyan
+$verParts = @($Version -split '\.' | ForEach-Object { if ($_ -match '^\d+') { [int]$matches[0] } else { 0 } })
+$verMajor = if ($verParts.Count -ge 1) { $verParts[0] } else { 1 }
+$verMinor = if ($verParts.Count -ge 2) { $verParts[1] } else { 0 }
+$verPatch = if ($verParts.Count -ge 3) { $verParts[2] } else { 0 }
 $resObj = Join-Path $buildDir 'trace.res'
-& $windres -I $nativeDir (Join-Path $nativeDir 'trace.rc') -O coff -o $resObj
+& $windres "-DTRACE_VER_MAJOR=$verMajor" "-DTRACE_VER_MINOR=$verMinor" "-DTRACE_VER_PATCH=$verPatch" -I $nativeDir (Join-Path $nativeDir 'trace.rc') -O coff -o $resObj
 if ($LASTEXITCODE -ne 0) { throw "windres failed" }
 
 $traceExe = Join-Path $buildDir 'Trace.exe'
@@ -144,12 +147,14 @@ foreach ($extraGhdl in (Get-ChildItem -Path $ghdlBinDir -Filter 'ghdl*.exe' -Err
 }
 Copy-Item $ghdlPrefix.Path (Join-Path $stageDir 'runtime\ghdl\lib\ghdl') -Recurse -Force
 
-# Collect all DLLs bundled with GHDL + any transitive UCRT64 DLLs referenced by ghdl.exe / bridge.vpi
+# Collect only GHDL-owned DLLs + transitive non-Windows DLLs imported by ghdl*.exe / bridge.vpi
 $dllCandidates = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($dir in @($ghdlBinDir, $vpiLib)) {
   if (Test-Path $dir) {
-    foreach ($d in (Get-ChildItem -Path $dir -Filter '*.dll' -ErrorAction SilentlyContinue)) {
-      [void]$dllCandidates.Add($d.FullName)
+    foreach ($pat in @('libghdl*.dll', '*ghdlvpi*.dll')) {
+      foreach ($d in (Get-ChildItem -Path $dir -Filter $pat -ErrorAction SilentlyContinue)) {
+        [void]$dllCandidates.Add($d.FullName)
+      }
     }
   }
 }
@@ -159,7 +164,8 @@ $searchDirs = @($ghdlBinDir, $vpiLib, $MsysBin) | Where-Object { Test-Path $_ } 
 if (Test-Path $objdump) {
   $queue = New-Object System.Collections.Generic.Queue[string]
   $visited = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
-  foreach ($seed in (@($ghdlExe, $vpiOut) + @($dllCandidates))) {
+  $extraGhdlExes = @(Get-ChildItem -Path $ghdlBinDir -Filter 'ghdl*.exe' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+  foreach ($seed in (@($ghdlExe, $vpiOut) + $extraGhdlExes + @($dllCandidates))) {
     if ($seed -and (Test-Path $seed) -and $visited.Add($seed)) { $queue.Enqueue($seed) }
   }
   while ($queue.Count -gt 0) {
@@ -191,14 +197,14 @@ foreach ($dll in $dllCandidates) {
 }
 Write-Host "  Bundled $($dllCandidates.Count) GHDL runtime DLL(s)" -ForegroundColor Green
 
-# 7. Package Portable Folder ZIP
+# 7. Package Portable Folder ZIP (using Windows System32 bsdtar, never MSYS2/Git GNU tar)
 $zipOut = Join-Path $distDir "Trace-FPGA-Workbench-Portable-x64.zip"
 if (Test-Path $zipOut) { Remove-Item -Force $zipOut }
 Write-Host "Creating Portable ZIP: $zipOut" -ForegroundColor Cyan
 Push-Location $stageDir
 try {
-  & tar.exe -a -c -f $zipOut *
-  if ($LASTEXITCODE -ne 0) { throw "tar.exe failed creating $zipOut" }
+  & $sysTar -a -c -f $zipOut *
+  if ($LASTEXITCODE -ne 0) { throw "System32 tar.exe failed creating $zipOut" }
 } finally {
   Pop-Location
 }

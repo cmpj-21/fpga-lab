@@ -1,11 +1,24 @@
 #include <winver.h>
 
+#ifndef TRACE_VER_MAJOR
+#define TRACE_VER_MAJOR 1
+#endif
+#ifndef TRACE_VER_MINOR
+#define TRACE_VER_MINOR 0
+#endif
+#ifndef TRACE_VER_PATCH
+#define TRACE_VER_PATCH 0
+#endif
+#define TRACE_STR_INNER(x) #x
+#define TRACE_STR(x) TRACE_STR_INNER(x)
+#define TRACE_VER_STRING TRACE_STR(TRACE_VER_MAJOR) "." TRACE_STR(TRACE_VER_MINOR) "." TRACE_STR(TRACE_VER_PATCH)
+
 101 ICON "trace.ico"
 1 24 "trace.manifest"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,0,0
- PRODUCTVERSION 1,0,0,0
+ FILEVERSION TRACE_VER_MAJOR,TRACE_VER_MINOR,TRACE_VER_PATCH,0
+ PRODUCTVERSION TRACE_VER_MAJOR,TRACE_VER_MINOR,TRACE_VER_PATCH,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS VOS_NT_WINDOWS32
@@ -18,11 +31,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Trace FPGA Workbench"
             VALUE "FileDescription", "Trace FPGA Workbench — VHDL IDE & 3D Cyclone IV Simulator"
-            VALUE "FileVersion", "1.0.0.0"
+            VALUE "FileVersion", TRACE_VER_STRING ".0"
             VALUE "InternalName", "Trace"
             VALUE "OriginalFilename", "Trace.exe"
             VALUE "ProductName", "Trace FPGA Workbench"
-            VALUE "ProductVersion", "1.0.0"
+            VALUE "ProductVersion", TRACE_VER_STRING
         END
     END
     BLOCK "VarFileInfo"

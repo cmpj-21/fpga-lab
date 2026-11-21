@@ -42,19 +42,22 @@ using CreateWebView2EnvFn = HRESULT(STDAPICALLTYPE*)(
 
 struct AppState {
     HWND hwnd = nullptr;
+    HANDLE appMutex = nullptr;
     HANDLE job = nullptr;
     HANDLE nodeProcess = nullptr;
+    HANDLE watcherThread = nullptr;
     HANDLE stdoutRead = nullptr;
     HANDLE stdinWrite = nullptr;
     ICoreWebView2Controller* controller = nullptr;
     ICoreWebView2* webview = nullptr;
     std::wstring exeDir;
     std::wstring exePath;
+    std::wstring dataDir;
     std::wstring baseUrl;
     std::wstring initialQuery;
-    std::wstring pendingError;
     bool devtools = false;
     bool ready = false;
+    bool navigated = false;
 };
 
 static AppState g_app;
@@ -103,8 +106,17 @@ static bool DirExists(const std::wstring& path) {
     return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-static bool IsDirWritable(const std::wstring& dir) {
+static void CreateDirsRecursive(const std::wstring& dir) {
+    if (dir.empty() || DirExists(dir)) return;
+    size_t pos = dir.find_last_of(L"\\/");
+    if (pos != std::wstring::npos && pos > 2) {
+        CreateDirsRecursive(dir.substr(0, pos));
+    }
     CreateDirectoryW(dir.c_str(), nullptr);
+}
+
+static bool IsDirWritable(const std::wstring& dir) {
+    CreateDirsRecursive(dir);
     std::wstring probe = dir + L"\\.trace-write-test";
     HANDLE h = CreateFileW(probe.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
     if (h == INVALID_HANDLE_VALUE) return false;
@@ -118,12 +130,16 @@ static std::wstring GetDataDir() {
     DWORD n = GetEnvironmentVariableW(L"TRACE_DATA_DIR", envBuf, MAX_PATH * 4);
     if (n > 0 && n < MAX_PATH * 4) {
         std::wstring d(envBuf, n);
-        CreateDirectoryW(d.c_str(), nullptr);
+        CreateDirsRecursive(d);
         return d;
     }
-    // 2. Portable folder mode (portable.mode marker or existing TraceData\ beside Trace.exe)
+    // 2. Portable folder mode (portable.mode marker or existing TraceData\ beside Trace.exe).
+    // Skip when TRACE_PORTABLE=1 (single-file stub running out of versioned cache dir whose host folder was read-only).
+    wchar_t portFlag[16] = {};
+    DWORD pfLen = GetEnvironmentVariableW(L"TRACE_PORTABLE", portFlag, 16);
+    bool fromSingleFileStub = (pfLen > 0 && std::wstring(portFlag, pfLen) == L"1");
     std::wstring siblingData = g_app.exeDir + L"\\TraceData";
-    if ((FileExists(g_app.exeDir + L"\\portable.mode") || DirExists(siblingData)) && IsDirWritable(siblingData)) {
+    if (!fromSingleFileStub && (FileExists(g_app.exeDir + L"\\portable.mode") || DirExists(siblingData)) && IsDirWritable(siblingData)) {
         return siblingData;
     }
     // 3. Installed app default (%LOCALAPPDATA%\TraceFPGA)
@@ -139,7 +155,7 @@ static std::wstring GetDataDir() {
     }
     if (!dir.empty() && dir.back() == L'\\') dir.pop_back();
     dir += L"\\TraceFPGA";
-    CreateDirectoryW(dir.c_str(), nullptr);
+    CreateDirsRecursive(dir);
     return dir;
 }
 
@@ -150,10 +166,42 @@ static void ResizeWebView() {
     g_app.controller->put_Bounds(rc);
 }
 
+static void NavigateIfReady() {
+    if (!g_app.navigated && g_app.webview && !g_app.baseUrl.empty()) {
+        g_app.navigated = true;
+        std::wstring target = g_app.baseUrl + g_app.initialQuery;
+        g_app.webview->Navigate(target.c_str());
+    }
+}
+
+static std::wstring QuoteWin32Arg(const std::wstring& arg) {
+    if (arg.empty()) return L"\"\"";
+    std::wstring out = L"\"";
+    size_t backslashes = 0;
+    for (wchar_t c : arg) {
+        if (c == L'\\') {
+            ++backslashes;
+        } else if (c == L'"') {
+            out.append(backslashes * 2 + 1, L'\\');
+            out.push_back(L'"');
+            backslashes = 0;
+        } else {
+            if (backslashes) {
+                out.append(backslashes, L'\\');
+                backslashes = 0;
+            }
+            out.push_back(c);
+        }
+    }
+    if (backslashes) out.append(backslashes * 2, L'\\');
+    out.push_back(L'"');
+    return out;
+}
+
 static void SpawnNewWindowWithQuery(const std::wstring& query) {
-    std::wstring cmd = L"\"" + g_app.exePath + L"\"";
+    std::wstring cmd = QuoteWin32Arg(g_app.exePath);
     if (!query.empty()) {
-        cmd += L" --query \"" + query + L"\"";
+        cmd += L" --query " + QuoteWin32Arg(query);
     }
     if (g_app.devtools) {
         cmd += L" --devtools";
@@ -265,10 +313,7 @@ public:
         ResizeWebView();
         g_app.controller->put_IsVisible(TRUE);
 
-        if (g_app.webview && !g_app.baseUrl.empty()) {
-            std::wstring target = g_app.baseUrl + g_app.initialQuery;
-            g_app.webview->Navigate(target.c_str());
-        }
+        NavigateIfReady();
         return S_OK;
     }
 };
@@ -312,13 +357,25 @@ public:
 
 // ---------- Backend Node.js Process Management ----------
 
-static DWORD WINAPI BackendWatcherThread(LPVOID) {
+struct WatcherParams {
+    HWND hwnd = nullptr;
+    HANDLE stdoutRead = nullptr;
+    std::wstring dataDir;
+};
+
+static DWORD WINAPI BackendWatcherThread(LPVOID lpParam) {
+    WatcherParams* params = reinterpret_cast<WatcherParams*>(lpParam);
+    HWND hwnd = params ? params->hwnd : nullptr;
+    HANDLE stdoutRead = params ? params->stdoutRead : nullptr;
+    std::wstring dataDir = params ? params->dataDir : L"";
+    delete params;
+
     std::string buffer;
     char chunk[1024];
     DWORD bytesRead = 0;
     bool signaled = false;
 
-    while (ReadFile(g_app.stdoutRead, chunk, sizeof(chunk) - 1, &bytesRead, nullptr) && bytesRead > 0) {
+    while (stdoutRead && ReadFile(stdoutRead, chunk, sizeof(chunk) - 1, &bytesRead, nullptr) && bytesRead > 0) {
         chunk[bytesRead] = '\0';
         buffer.append(chunk, bytesRead);
         size_t pos = 0;
@@ -328,15 +385,20 @@ static DWORD WINAPI BackendWatcherThread(LPVOID) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
             if (!signaled && line.rfind("TRACE_READY ", 0) == 0) {
                 std::string url = line.substr(12);
-                g_app.baseUrl = Utf8ToWide(url);
+                auto* urlPtr = new std::wstring(Utf8ToWide(url));
                 signaled = true;
-                PostMessageW(g_app.hwnd, WM_APP_BACKEND_READY, 0, 0);
+                if (!PostMessageW(hwnd, WM_APP_BACKEND_READY, 0, reinterpret_cast<LPARAM>(urlPtr))) {
+                    delete urlPtr;
+                }
             }
         }
     }
-    if (!signaled) {
-        g_app.pendingError = L"Trace backend server exited before becoming ready.\n\nCheck %LOCALAPPDATA%\\TraceFPGA\\logs\\latest.log for details.";
-        PostMessageW(g_app.hwnd, WM_APP_BACKEND_FAIL, 0, 0);
+    if (!signaled && hwnd) {
+        std::wstring logPath = dataDir.empty() ? L"%LOCALAPPDATA%\\TraceFPGA\\logs\\latest.log" : (dataDir + L"\\logs\\latest.log");
+        auto* errPtr = new std::wstring(L"Trace backend server exited before becoming ready.\n\nCheck " + logPath + L" for details.");
+        if (!PostMessageW(hwnd, WM_APP_BACKEND_FAIL, 0, reinterpret_cast<LPARAM>(errPtr))) {
+            delete errPtr;
+        }
     }
     return 0;
 }
@@ -382,11 +444,11 @@ static bool StartBackendServer() {
     SetHandleInformation(g_app.stdinWrite, HANDLE_FLAG_INHERIT, 0);
 
     // Set environment variables for packaged mode + preferred stable port (8044, fallback 0) + resolved user data directory
-    std::wstring dataDir = GetDataDir();
+    g_app.dataDir = GetDataDir();
     SetEnvironmentVariableW(L"PORT", L"auto");
     SetEnvironmentVariableW(L"OPEN_BROWSER", L"0");
     SetEnvironmentVariableW(L"TRACE_PACKAGED", L"1");
-    SetEnvironmentVariableW(L"TRACE_DATA_DIR", dataDir.c_str());
+    SetEnvironmentVariableW(L"TRACE_DATA_DIR", g_app.dataDir.c_str());
 
     std::wstring cmd = L"\"" + nodeExe + L"\" \"" + serverMjs + L"\"";
     std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
@@ -425,14 +487,19 @@ static bool StartBackendServer() {
     CloseHandle(pi.hThread);
     g_app.nodeProcess = pi.hProcess;
 
-    HANDLE thread = CreateThread(nullptr, 0, BackendWatcherThread, nullptr, 0, nullptr);
-    if (thread) CloseHandle(thread);
+    auto* wparams = new WatcherParams{ g_app.hwnd, g_app.stdoutRead, g_app.dataDir };
+    g_app.watcherThread = CreateThread(nullptr, 0, BackendWatcherThread, wparams, 0, nullptr);
+    if (!g_app.watcherThread) {
+        delete wparams;
+    }
     return true;
 }
 
 static void InitWebView2() {
     std::wstring loaderPath = g_app.exeDir + L"\\WebView2Loader.dll";
-    HMODULE mod = LoadLibraryW(FileExists(loaderPath) ? loaderPath.c_str() : L"WebView2Loader.dll");
+    HMODULE mod = FileExists(loaderPath)
+        ? LoadLibraryExW(loaderPath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)
+        : nullptr;
     if (!mod) {
         MessageBoxW(g_app.hwnd, L"Missing WebView2Loader.dll beside Trace.exe.", L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
         PostQuitMessage(1);
@@ -451,8 +518,8 @@ static void InitWebView2() {
         L"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
         L"--enable-gpu-rasterization --enable-zero-copy --disable-background-timer-throttling --disable-renderer-backgrounding");
 
-    std::wstring userData = GetDataDir() + L"\\webview2";
-    CreateDirectoryW(userData.c_str(), nullptr);
+    std::wstring userData = (g_app.dataDir.empty() ? GetDataDir() : g_app.dataDir) + L"\\webview2";
+    CreateDirsRecursive(userData);
 
     auto* handler = new EnvironmentCompletedHandler();
     HRESULT hr = createEnv(nullptr, userData.c_str(), nullptr, handler);
@@ -480,17 +547,24 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             ResizeWebView();
             return 0;
         }
-        case WM_APP_BACKEND_READY:
-            g_app.ready = true;
-            if (g_app.webview) {
-                std::wstring target = g_app.baseUrl + g_app.initialQuery;
-                g_app.webview->Navigate(target.c_str());
+        case WM_APP_BACKEND_READY: {
+            auto* urlPtr = reinterpret_cast<std::wstring*>(lParam);
+            if (urlPtr) {
+                g_app.baseUrl = *urlPtr;
+                delete urlPtr;
             }
+            g_app.ready = true;
+            NavigateIfReady();
             return 0;
-        case WM_APP_BACKEND_FAIL:
-            MessageBoxW(hwnd, g_app.pendingError.c_str(), L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
+        }
+        case WM_APP_BACKEND_FAIL: {
+            auto* errPtr = reinterpret_cast<std::wstring*>(lParam);
+            std::wstring errMsg = errPtr ? *errPtr : L"Trace backend server exited before becoming ready.";
+            delete errPtr;
+            MessageBoxW(hwnd, errMsg.c_str(), L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
             DestroyWindow(hwnd);
             return 0;
+        }
         case WM_DESTROY:
             if (g_app.controller) {
                 g_app.controller->Close();
@@ -535,6 +609,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
+    // Named mutex pairs with Inno Setup AppMutex so installers detect running Trace instances
+    g_app.appMutex = CreateMutexW(nullptr, FALSE, L"TraceFPGAWorkbenchMutex");
+
     wchar_t modPath[MAX_PATH * 4] = {};
     GetModuleFileNameW(nullptr, modPath, MAX_PATH * 4);
     g_app.exePath = modPath;
@@ -557,12 +634,21 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     wc.lpszClassName = L"TraceFPGAWorkbenchWindow";
     RegisterClassExW(&wc);
 
-    int screenW = GetSystemMetrics(SM_CXSCREEN);
-    int screenH = GetSystemMetrics(SM_CYSCREEN);
-    int winW = (screenW >= 1600) ? 1440 : (int)(screenW * 0.90);
-    int winH = (screenH >= 960)  ? 900  : (int)(screenH * 0.88);
-    int posX = (screenW - winW) / 2;
-    int posY = (screenH - winH) / 2;
+    RECT workArea{};
+    if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0)) {
+        workArea.left = 0;
+        workArea.top = 0;
+        workArea.right = GetSystemMetrics(SM_CXSCREEN);
+        workArea.bottom = GetSystemMetrics(SM_CYSCREEN);
+    }
+    int workW = workArea.right - workArea.left;
+    int workH = workArea.bottom - workArea.top;
+    int winW = (workW >= 1600) ? 1440 : (int)(workW * 0.92);
+    int winH = (workH >= 960)  ? 900  : (int)(workH * 0.92);
+    if (winW > workW) winW = workW;
+    if (winH > workH) winH = workH;
+    int posX = workArea.left + (workW - winW) / 2;
+    int posY = workArea.top + (workH - winH) / 2;
 
     g_app.hwnd = CreateWindowExW(
         0,
@@ -610,9 +696,19 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
         CloseHandle(g_app.job);
         g_app.job = nullptr;
     }
+    // Wait for watcher thread to exit cleanly on pipe EOF before closing stdoutRead
+    if (g_app.watcherThread) {
+        WaitForSingleObject(g_app.watcherThread, 1500);
+        CloseHandle(g_app.watcherThread);
+        g_app.watcherThread = nullptr;
+    }
     if (g_app.stdoutRead) {
         CloseHandle(g_app.stdoutRead);
         g_app.stdoutRead = nullptr;
+    }
+    if (g_app.appMutex) {
+        CloseHandle(g_app.appMutex);
+        g_app.appMutex = nullptr;
     }
     DeleteObject(bgBrush);
     CoUninitialize();

@@ -82,7 +82,7 @@ Click **LEDs** beside the four small indicators below the board. The camera move
 ### Important: reset is not restart
 
 - **Board Reset / R** drives the design's active-low `reset_btn` input. The demo uses a synchronous reset, so it needs a clock edge. While paused, hold **R** and click **Step**.
-- The **circular-arrow button at the top** restarts the native simulation by rebuilding it. This discards the current run and starts again from time zero.
+- The **circular-arrow button at the top** restarts the native simulation timeline from time zero without recompiling or reflashing your design, preserving your selected Logic Analyzer signals.
 
 Click blank space before using global shortcuts if a text field is focused.
 
@@ -94,11 +94,11 @@ Screenshots illustrate the layout; your design, clock, open panels, and signal v
 
 | Area | What it does |
 |---|---|
-| Home (left rail / top brand) | Open a confirmation dialog to save or discard recent project changes, cancel and stop all active simulations, and return to the Welcome screen |
-| Top circular arrow | Restart the current simulation, or rewind a VCD replay |
+| Home (left rail / top brand) | Return to the Welcome screen (prompts to save or discard only if there are unsaved changes or an active simulation) |
+| Top circular arrow | Restart the current simulation timeline from time zero without recompiling, or rewind a VCD replay |
 | Top Step icon | Advance one generated clock cycle; in replay, advance one recorded timestamp |
 | Run / Pause | Start or pause automatic advancement |
-| Open files | Import local source files, artifacts, or a saved Trace project |
+| File > Open / Add Files | Import local source files, artifacts, or a saved Trace project (`Ctrl+O`) |
 | Files | Sources, top entity, compiler options, Quartus `.qpf`/`.qsf` Save Project / Save Project As…, and local HDL library |
 | Pins | Quartus-style Pin Planner listing detected design ports where you assign board pin numbers (`PIN_xx`); includes a **Board Pinout ↗** button to open the Master Pinout Reference |
 | Signals | Show or hide the logic analyzer |
