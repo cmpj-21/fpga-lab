@@ -7,7 +7,36 @@ import { compileDesign, configuration, sessions, closeAllSessions, setEngineLogg
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
-const HDL_ROOT = process.env.HDL_ROOT || 'C:\\Users\\cmpj\\dev\\HDL';
+const CONFIG_FILE = path.resolve(process.env.TRACE_CONFIG_FILE || path.join(ROOT, 'trace.config.json'));
+function loadInitialHdlRoot() {
+  if (process.env.HDL_ROOT) return path.resolve(process.env.HDL_ROOT);
+  try {
+    const raw = JSON.parse(readFileSync(CONFIG_FILE, 'utf8'));
+    if (typeof raw?.hdlRoot === 'string' && path.isAbsolute(raw.hdlRoot) && statSync(raw.hdlRoot).isDirectory()) {
+      return path.resolve(raw.hdlRoot);
+    }
+  } catch {}
+  const sibling = path.resolve(ROOT, '..', 'HDL');
+  try { if (statSync(sibling).isDirectory()) return sibling; } catch {}
+  return ROOT;
+}
+let hdlRoot = loadInitialHdlRoot();
+async function persistConfig(patch) {
+  let current = {};
+  try { current = JSON.parse(await fs.readFile(CONFIG_FILE, 'utf8')); } catch {}
+  const next = { ...current, ...patch };
+  await fs.writeFile(CONFIG_FILE, JSON.stringify(next, null, 2) + '\n', 'utf8');
+}
+async function setHdlRoot(dir) {
+  if (typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error('Local HDL library folder must be an absolute path.');
+  const resolved = path.resolve(dir);
+  const st = await fs.stat(resolved).catch(() => null);
+  if (!st || !st.isDirectory()) throw new Error(`Folder does not exist: ${resolved}`);
+  hdlRoot = resolved;
+  await persistConfig({ hdlRoot }).catch(e => appendLogLine('warn', 'app', `Could not save config: ${e.message}`));
+  if (ownsLog) appendLogLine('info', 'app', `Changed Local HDL library folder to ${hdlRoot}`);
+  return { ok: true, root: hdlRoot, groups: await hdlTree() };
+}
 const PORT = Number(process.env.PORT || 8044);
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.vcd': 'text/plain' };
 const within = (root, full) => { const rel = path.relative(root, full); return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)); };
@@ -133,9 +162,9 @@ async function runPowershell(script) {
     });
   });
 }
-async function pickProjectFolder(initialDir = '') {
+async function pickProjectFolder(initialDir = '', description = 'Choose FPGA Project Folder (saves .qpf, .qsf & .vhd files)') {
   if (process.platform !== 'win32') throw new Error('Native folder picker is supported on Windows.');
-  let start = HDL_ROOT;
+  let start = hdlRoot;
   if (initialDir && path.isAbsolute(initialDir)) {
     const exists = await fs.stat(initialDir).then(s => s.isDirectory(), () => false);
     if (exists) start = initialDir;
@@ -144,13 +173,14 @@ async function pickProjectFolder(initialDir = '') {
     if (!exists) start = ROOT;
   }
   const safeStart = start.replace(/'/g, "''");
+  const safeDesc = String(description || 'Choose Folder').replace(/'/g, "''");
   const ps = [
     'Add-Type -AssemblyName System.Windows.Forms',
     '$owner = New-Object System.Windows.Forms.Form',
     '$owner.TopMost = $true',
     '$owner.StartPosition = "CenterScreen"',
     '$dlg = New-Object System.Windows.Forms.FolderBrowserDialog',
-    '$dlg.Description = "Choose FPGA Project Folder (saves .qpf, .qsf & .vhd files)"',
+    `$dlg.Description = '${safeDesc}'`,
     '$dlg.UseDescriptionForTitle = $true',
     '$dlg.ShowNewFolderButton = $true',
     `$dlg.SelectedPath = '${safeStart}'`,
@@ -163,7 +193,7 @@ async function pickProjectFolder(initialDir = '') {
 }
 async function pickProjectFile(initialDir = '') {
   if (process.platform !== 'win32') throw new Error('Native file picker is supported on Windows.');
-  let start = HDL_ROOT;
+  let start = hdlRoot;
   if (initialDir && path.isAbsolute(initialDir)) {
     const exists = await fs.stat(initialDir).then(s => s.isDirectory(), () => false);
     if (exists) start = initialDir;
@@ -302,7 +332,7 @@ function parseQsfText(text) {
 }
 async function openProjectFromDisk(inputPath) {
   if (typeof inputPath !== 'string' || !inputPath.trim()) throw new Error('Specify a project file or folder path.');
-  const resolved = path.isAbsolute(inputPath) ? path.resolve(inputPath) : path.resolve(HDL_ROOT, inputPath);
+  const resolved = path.isAbsolute(inputPath) ? path.resolve(inputPath) : path.resolve(hdlRoot, inputPath);
   const st = await fs.stat(resolved).catch(() => null);
   if (!st) throw new Error(`Project path not found: ${resolved}`);
   if (st.isFile() && /\.json$/i.test(resolved)) {
@@ -384,7 +414,7 @@ async function hdlTree() {
     }
     if (files.length) groups.push({ dir: rel || '.', files: files.sort((a, b) => a.name.localeCompare(b.name)) });
   }
-  await walk(HDL_ROOT, '', 0);
+  await walk(hdlRoot, '', 0);
   return groups.sort((a, b) => a.dir.localeCompare(b.dir));
 }
 
@@ -395,7 +425,7 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
     if (url.pathname === '/api/health') {
       const cfg = await configuration().catch(e => ({ version: null, error: e.message }));
-      return send(res, 200, { ok: !!cfg.version, app: 'trace-workbench', hdlRoot: HDL_ROOT, backend: cfg.version, error: cfg.error, sessions: sessions.size, logFile: LOG_FILE, actionLogFile: ACTION_LOG_FILE });
+      return send(res, 200, { ok: !!cfg.version, app: 'trace-workbench', hdlRoot, backend: cfg.version, error: cfg.error, sessions: sessions.size, logFile: LOG_FILE, actionLogFile: ACTION_LOG_FILE });
     }
     if (url.pathname === '/api/log' && req.method === 'POST') {
       const written = await appendLog(clientReport(await json(req, 64 * 1024)));
@@ -413,7 +443,17 @@ const server = http.createServer(async (req, res) => {
       const written = await appendActionLog(actionReport(await json(req, 64 * 1024)));
       return send(res, written ? 200 : 500, written ? { ok: true, file: ACTION_LOG_FILE } : { error: `Cannot write ${ACTION_LOG_FILE}.` });
     }
-    if (url.pathname === '/api/hdl/tree') return send(res, 200, { root: HDL_ROOT, groups: await hdlTree() });
+    if (url.pathname === '/api/hdl/tree') return send(res, 200, { root: hdlRoot, groups: await hdlTree() });
+    if (url.pathname === '/api/hdl/pick-root' && req.method === 'POST') {
+      const picked = await pickProjectFolder(hdlRoot, 'Choose Local HDL Library Folder');
+      if (picked.cancelled || !picked.dir) return send(res, 200, { ok: true, cancelled: true, root: hdlRoot });
+      const updated = await setHdlRoot(picked.dir);
+      return send(res, 200, { ...updated, cancelled: false });
+    }
+    if (url.pathname === '/api/hdl/root' && req.method === 'POST') {
+      const body = await json(req, 32 * 1024);
+      return send(res, 200, await setHdlRoot(body?.path));
+    }
     if (url.pathname === '/api/project/pick-folder' && req.method === 'POST') {
       const body = await json(req, 32 * 1024).catch(() => ({}));
       return send(res, 200, await pickProjectFolder(body?.initialDir));
@@ -430,8 +470,8 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, await openProjectFromDisk(body?.path));
     }
     if (url.pathname === '/api/hdl/file') {
-      const full = await fs.realpath(path.resolve(HDL_ROOT, url.searchParams.get('path') || ''));
-      if (!within(await fs.realpath(HDL_ROOT), full)) return send(res, 403, { error: 'Path outside HDL root.' });
+      const full = await fs.realpath(path.resolve(hdlRoot, url.searchParams.get('path') || ''));
+      if (!within(await fs.realpath(hdlRoot), full)) return send(res, 403, { error: 'Path outside HDL root.' });
       if (!/\.(vhd|vhdl|vho|cf|sdf|qsf|vcd|sof|pof|vo|hex|mif|mem|txt|dat)$/i.test(full)) return send(res, 400, { error: 'Not a supported HDL/data artifact.' });
       if ((await fs.stat(full)).size > 32 * 1024 * 1024) return send(res, 413, { error: 'Artifact exceeds 32 MB.' });
       return send(res, 200, await fs.readFile(full), 'application/octet-stream');
@@ -481,7 +521,7 @@ const address = `http://127.0.0.1:${PORT}`;
 function openBrowser() {
   if (process.env.OPEN_BROWSER === '1' && process.platform === 'win32') execFile('cmd.exe', ['/d', '/c', 'start', '', address], { windowsHide: true }, error => { if (error) console.error(`Open ${address} in your browser.`); });
 }
-server.listen(PORT, '127.0.0.1', () => { claimLog(`Trace workbench started at ${address} (Node ${process.version}, HDL root: ${HDL_ROOT})`); console.log(`Trace workbench: ${address}`); openBrowser(); });
+server.listen(PORT, '127.0.0.1', () => { claimLog(`Trace workbench started at ${address} (Node ${process.version}, HDL root: ${hdlRoot})`); console.log(`Trace workbench: ${address}`); openBrowser(); });
 server.on('error', async error => {
   if (error.code === 'EADDRINUSE') {
     const existing = await fetch(address + '/api/health', { signal: AbortSignal.timeout(3000) }).then(r => r.json()).catch(() => null);

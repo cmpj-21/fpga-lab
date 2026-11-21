@@ -14,7 +14,7 @@ import * as audio from './ui/audio.js';
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const S = { sources: [], sim: null, flashed: false, projectDir: null, projectName: '', running: false, power: true, building: false, busy: false, clkHz: 1000, speed: 55, time: 0, inputs: {}, assignments: new Map(), compiledAssignments: new Map(), discoveredPorts: [], bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0 };
-let board, waves, ide, toastTimer, sourceIndex, consoleCount = 0, logFile = '', actionLogFile = '', reportCount = 0;
+let board, waves, ide, toastTimer, sourceIndex, consoleCount = 0, logFile = '', actionLogFile = '', currentHdlRoot = '', reportCount = 0;
 let lastFrame = performance.now(), accumulator = 0, lastDraw = 0;
 let actionSeq = 0, lastErrorSeq = 0, lastErrorMsg = '', actionFlushTimer = 0, eventFlushTimer = 0;
 const uart = new UartReceiver();
@@ -112,6 +112,7 @@ function uiSnapshot() {
     editor: $('#sourceDialog')?.open ? 'open' : 'closed',
     left: !leftOpen ? 'closed' : ($('#ltab-pins')?.classList.contains('active') ? 'pins' : 'library'),
     hdlOpen: $$('#hdlTree .hdl-group.open').length,
+    hdlRoot: currentHdlRoot || 'none',
     waves: $('#app')?.classList.contains('no-waves') ? 'hidden' : 'open',
     right: $('#right')?.classList.contains('hidden') ? 'closed' : ($$('#right .tab.active')[0]?.dataset.rtab || 'open'),
     deck: $('#deck')?.classList.contains('hidden') ? 'closed' : 'open',
@@ -142,7 +143,7 @@ function uiSnapshot() {
   };
 }
 function diffSnapshot(before, after) {
-  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tabs', 'tab', 'editor', 'left', 'hdlOpen', 'waves', 'right', 'deck', 'about', 'keysDlg', 'homeDlg', 'newProjDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
+  const keys = ['view', 'status', 'top', 'time', 'cycles', 'files', 'tabs', 'tab', 'editor', 'left', 'hdlOpen', 'hdlRoot', 'waves', 'right', 'deck', 'about', 'keysDlg', 'homeDlg', 'newProjDlg', 'menu', 'theme', 'power', 'dip', 'keys', 'leds', 'cam', 'tool', 'nav', 'part', 'clkHz', 'std', 'truthRows', 'uartLen', 'recents', 'problems', 'newFile'];
   const out = [];
   for (const k of keys) if (before[k] !== after[k]) out.push(`${k}:${before[k]}->${after[k]}`);
   return out;
@@ -157,7 +158,7 @@ function trackUiAction(kind, el, detail = '') {
     recordActionLine(`#${id} ${kind.padEnd(8)} ${target} -> BLOCKED (0ms) [reason:control disabled | status:${before.status} | view:${before.view}]`);
     return;
   }
-  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnSaveProject|#btnVcd|#btnImport|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#ciPins|#btnOpenPinoutRef|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
+  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnSaveProject|#btnVcd|#btnImport|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#btnChangeHdlRoot|#homeChangeHdlRoot|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#ciPins|#btnOpenPinoutRef|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
   setTimeout(async () => {
     await new Promise(r => requestAnimationFrame(r));
     const waitStart = performance.now();
@@ -1056,31 +1057,56 @@ async function loadFiles(files) {
   } finally { S.importing = false; setStatus(); }
 }
 function importError(e) { log(e.message, 'error'); toast(e.message, 'err'); openTools('console'); }
+function renderHdlTree(result) {
+  currentHdlRoot = result?.root || '';
+  for (const id of ['hdlRootPath', 'homeHdlRoot']) {
+    const el = $('#' + id);
+    if (!el) continue;
+    el.textContent = currentHdlRoot || 'Not configured';
+    el.title = currentHdlRoot || 'Local HDL library folder';
+  }
+  const groups = result?.groups || [];
+  $('#hdlTree').replaceChildren();
+  for (const group of groups) {
+    const wrap = document.createElement('div'); wrap.className = 'hdl-group';
+    const heading = document.createElement('button'); heading.className = 'hdl-dir'; heading.textContent = group.dir; heading.onclick = () => wrap.classList.toggle('open');
+    const list = document.createElement('div'); list.className = 'hdl-files';
+    for (const file of group.files) {
+      const button = document.createElement('button'); button.className = 'hdl-file'; button.dataset.name = `${group.dir}/${file.name}`.toLowerCase();
+      const kind = document.createElement('span'); kind.className = 'fk'; kind.textContent = file.kind.toUpperCase(); button.append(kind, document.createTextNode(file.name));
+      button.onclick = async () => {
+        try {
+          if (file.kind === 'qpf') { await openProjectFromDiskPath(file.rel); return; }
+          const response = await fetch('/api/hdl/file?path=' + encodeURIComponent(file.rel));
+          if (!response.ok) throw new Error('File could not be read.');
+          await loadFiles([new File([await response.blob()], file.name)]);
+        } catch (e) { toast(e.message, 'err'); }
+      };
+      list.append(button);
+    }
+    wrap.append(heading, list); $('#hdlTree').append(wrap);
+  }
+  ide?.populateHomeHdl(groups);
+  if (!groups.length) $('#hdlTree').textContent = 'No HDL files found in this folder. Click Change… to pick another folder.';
+}
 async function fetchTree() {
   try {
-    const result = await fetch('/api/hdl/tree').then(r => r.json()); $('#hdlTree').replaceChildren();
-    for (const group of result.groups) {
-      const wrap = document.createElement('div'); wrap.className = 'hdl-group';
-      const heading = document.createElement('button'); heading.className = 'hdl-dir'; heading.textContent = group.dir; heading.onclick = () => wrap.classList.toggle('open');
-      const list = document.createElement('div'); list.className = 'hdl-files';
-      for (const file of group.files) {
-        const button = document.createElement('button'); button.className = 'hdl-file'; button.dataset.name = `${group.dir}/${file.name}`.toLowerCase();
-        const kind = document.createElement('span'); kind.className = 'fk'; kind.textContent = file.kind.toUpperCase(); button.append(kind, document.createTextNode(file.name));
-        button.onclick = async () => {
-          try {
-            if (file.kind === 'qpf') { await openProjectFromDiskPath(file.rel); return; }
-            const response = await fetch('/api/hdl/file?path=' + encodeURIComponent(file.rel));
-            if (!response.ok) throw new Error('File could not be read.');
-            await loadFiles([new File([await response.blob()], file.name)]);
-          } catch (e) { toast(e.message, 'err'); }
-        };
-        list.append(button);
-      }
-      wrap.append(heading, list); $('#hdlTree').append(wrap);
-    }
-    ide?.populateHomeHdl(result.groups);
-    if (!result.groups.length) $('#hdlTree').textContent = 'No HDL files found. Open files to begin.';
+    const result = await fetch('/api/hdl/tree').then(r => r.json());
+    renderHdlTree(result);
   } catch { $('#hdlTree').textContent = 'Local library unavailable. Open files to begin.'; }
+}
+async function changeHdlRoot() {
+  try {
+    const res = await fetch('/api/hdl/pick-root', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Could not change Local HDL library folder.');
+    if (data.cancelled) return;
+    if ($('#libSearch')) $('#libSearch').value = '';
+    if ($('#homeHdlSearch')) $('#homeHdlSearch').value = '';
+    renderHdlTree(data);
+    recordLogEvent('info', `Local HDL library folder changed to ${data.root}`);
+    toast(`Local HDL library set to ${data.root}`);
+  } catch (e) { toast(e.message, 'err'); }
 }
 async function loadBitstream(buffer, name) {
   const info = await inspectBitstream(buffer, name); openTools('programmer'); $('#progInfo').classList.remove('hidden');
@@ -1479,6 +1505,8 @@ function wire() {
   $('#waveFollow').onchange = () => { if ($('#waveFollow').checked && S.time > 0) { waves.follow(S.time, waveFollowSpan()); waves.draw(); } };
   waves.onCursor = time => $('#waveCursor').textContent = `Cursor ${fmtTime(time)}`; waves.onNavigate = () => $('#waveFollow').checked = false;
   $('#btnLibrary').onclick = () => toggleLeft('library');
+  if ($('#btnChangeHdlRoot')) $('#btnChangeHdlRoot').onclick = changeHdlRoot;
+  if ($('#homeChangeHdlRoot')) $('#homeChangeHdlRoot').onclick = changeHdlRoot;
   $('#btnPins').onclick = () => toggleLeft('pins'); $('#closeLeft').onclick = () => { $('#app').classList.remove('mobile-library'); $('#app').classList.add('no-library'); syncNavigation(); };
   $('#btnSignals').onclick = () => { $('#app').classList.toggle('no-waves'); syncNavigation(); };
   $('#btnTools').onclick = () => $('#right').classList.contains('hidden') ? openTools() : $('#closeRight').click();

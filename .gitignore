@@ -1,6 +1,7 @@
-# Runtime server logs
+# Runtime server logs & local user config
 logs/
 *.log
+trace.config.json
 
 # Large simulation waveforms
 *.vcd

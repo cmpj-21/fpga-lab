@@ -58,6 +58,7 @@
       <ul id="srcList" class="src-list"></ul>
       <button id="dropZone" class="dropzone"><span class="upload-plus">+</span><span>Add source files<small>VHDL, QSF, VCD or saved project</small></span></button>
       <div class="section-label library-label"><span>Local HDL library</span><button id="btnDemo" class="text-btn">Load demo</button></div>
+      <div class="hdl-root-bar"><span id="hdlRootPath" class="hdl-root-path mono" title="Local HDL library folder">—</span><button id="btnChangeHdlRoot" type="button" class="text-btn" title="Choose Local HDL library folder">Change…</button></div>
       <input id="libSearch" class="search" type="search" aria-label="Filter HDL library" placeholder="Search files…">
       <div id="hdlTree" class="hdl-tree"><p class="empty">Reading local files…</p></div>
       <div class="sidebar-foot"><i></i>All processing stays on this device</div>
@@ -391,6 +392,7 @@
             <div><span class="eyebrow">LOCAL DISK</span><h2>Local HDL library</h2></div>
             <input id="homeHdlSearch" class="search" type="search" placeholder="Filter local HDL files…" aria-label="Filter local HDL files">
           </div>
+          <div class="hdl-root-bar"><span id="homeHdlRoot" class="hdl-root-path mono" title="Local HDL library folder">—</span><button id="homeChangeHdlRoot" type="button" class="text-btn" title="Choose Local HDL library folder">Change folder…</button></div>
           <div id="homeHdlList" class="home-hdl-list"><p class="empty">Reading local files…</p></div>
         </div>
       </div>
