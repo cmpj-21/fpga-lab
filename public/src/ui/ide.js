@@ -236,7 +236,31 @@ export function createIde(api) {
   }
 
   // ---------- layout (resizable panes) ----------
+  function computeMinTopHeight() {
+    const headH = $('.board-pane-head')?.offsetHeight || 34;
+    const tbH = $('#boardPane > .view-toolbar')?.offsetHeight || 40;
+    const ioH = $('#inputBar')?.offsetHeight || 44;
+    const vIn = $('#virtualInputs');
+    const vInH = (vIn && !vIn.classList.contains('hidden')) ? vIn.offsetHeight : 0;
+    return headH + tbH + ioH + vInH + 110;
+  }
+  function clampLayoutBounds() {
+    const mainRect = $('#ideMain')?.getBoundingClientRect();
+    if (mainRect && mainRect.width > 560 && !$('#ideMain')?.classList.contains('editor-closed')) {
+      const minBoardPx = 320;
+      const minEditorPx = 240;
+      const maxEditorPct = Math.max(20, Math.min(75, Math.floor(((mainRect.width - minBoardPx) / mainRect.width) * 1000) / 10));
+      const minEditorPct = Math.min(maxEditorPct, Math.max(20, Math.ceil((minEditorPx / mainRect.width) * 1000) / 10));
+      layout.editorFrac = clamp(layout.editorFrac, minEditorPct, maxEditorPct);
+    }
+    const wbRect = $('#workbench')?.getBoundingClientRect();
+    if (wbRect && wbRect.height > 260) {
+      const maxPanelH = Math.max(130, Math.floor(wbRect.height - computeMinTopHeight()));
+      layout.panelH = clamp(layout.panelH, 130, maxPanelH);
+    }
+  }
   function applyLayout() {
+    clampLayoutBounds();
     const root = document.documentElement.style;
     root.setProperty('--left-w', `${layout.leftW}px`);
     root.setProperty('--editor-frac', `${layout.editorFrac}%`);
@@ -264,11 +288,24 @@ export function createIde(api) {
     });
     drag($('#hSplit'), event => {
       const rect = $('#workbench').getBoundingClientRect();
-      layout.panelH = clamp(Math.round(rect.bottom - event.clientY), 130, Math.max(140, rect.height - 190)); applyLayout();
+      const maxPanelH = Math.max(130, Math.floor(rect.height - computeMinTopHeight()));
+      layout.panelH = clamp(Math.round(rect.bottom - event.clientY), 130, maxPanelH); applyLayout();
     });
     drag($('#lSplit'), event => {
       layout.leftW = clamp(Math.round(event.clientX - $('#rail').getBoundingClientRect().right), 200, 480); applyLayout();
     });
+    window.addEventListener('resize', () => applyLayout());
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(() => {
+        const prev = layout.panelH;
+        clampLayoutBounds();
+        if (layout.panelH !== prev) document.documentElement.style.setProperty('--panel-h', `${layout.panelH}px`);
+      });
+      const tb = $('#boardPane > .view-toolbar');
+      const io = $('#inputBar');
+      if (tb) ro.observe(tb);
+      if (io) ro.observe(io);
+    }
     const reset = (splitter, patch) => splitter?.addEventListener('dblclick', () => { Object.assign(layout, patch); applyLayout(); saveLayout(); });
     reset($('#vSplit'), { editorFrac: DEFAULT_LAYOUT.editorFrac });
     reset($('#hSplit'), { panelH: DEFAULT_LAYOUT.panelH });
