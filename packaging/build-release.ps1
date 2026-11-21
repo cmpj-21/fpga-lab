@@ -143,42 +143,45 @@ foreach ($extraGhdl in (Get-ChildItem -Path $ghdlBinDir -Filter 'ghdl*.exe' -Err
 }
 Copy-Item $ghdlPrefix.Path (Join-Path $stageDir 'runtime\ghdl\lib\ghdl') -Recurse -Force
 
-# Collect dependent UCRT64/MSYS2 DLLs for ghdl.exe, libghdlvpi, and bridge.vpi
+# Collect all DLLs bundled with GHDL + any transitive UCRT64 DLLs referenced by ghdl.exe / bridge.vpi
 $dllCandidates = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
-$scanTargets = @($ghdlExe, $vpiOut)
-$vpiDllCandidate = Get-ChildItem -Path $ghdlBinDir, $vpiLib -Filter '*ghdlvpi*.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($vpiDllCandidate) {
-  [void]$dllCandidates.Add($vpiDllCandidate.FullName)
-  $scanTargets += $vpiDllCandidate.FullName
-}
-$libGhdlDlls = Get-ChildItem -Path $ghdlBinDir, $vpiLib -Filter 'libghdl*.dll' -ErrorAction SilentlyContinue
-foreach ($d in $libGhdlDlls) {
-  [void]$dllCandidates.Add($d.FullName)
-  $scanTargets += $d.FullName
+foreach ($dir in @($ghdlBinDir, $vpiLib)) {
+  if (Test-Path $dir) {
+    foreach ($d in (Get-ChildItem -Path $dir -Filter '*.dll' -ErrorAction SilentlyContinue)) {
+      [void]$dllCandidates.Add($d.FullName)
+    }
+  }
 }
 
-if (Test-Path $ldd) {
-  $prevPath = $env:PATH
-  $env:PATH = "$ghdlBinDir;$vpiLib;$MsysBin;$env:PATH"
-  try {
-    foreach ($target in $scanTargets) {
-      $lines = & $ldd $target 2>$null
-      foreach ($line in $lines) {
-        if ($line -match '=>\s+([^\s(]+)') {
-          $raw = $matches[1].Trim()
-          if ($raw -match '^/([a-zA-Z])/(.*)$') {
-            $winPath = "$($matches[1].ToUpper()):\$($matches[2] -replace '/', '\')"
-          } else {
-            $winPath = $raw
-          }
-          if ((Test-Path $winPath) -and ($winPath -notmatch '^[A-Z]:\\Windows\\')) {
-            [void]$dllCandidates.Add($winPath)
+$objdump = Join-Path $MsysBin 'objdump.exe'
+$searchDirs = @($ghdlBinDir, $vpiLib, $MsysBin) | Where-Object { Test-Path $_ } | Select-Object -Unique
+if (Test-Path $objdump) {
+  $queue = New-Object System.Collections.Generic.Queue[string]
+  $visited = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($seed in (@($ghdlExe, $vpiOut) + @($dllCandidates))) {
+    if ($seed -and (Test-Path $seed) -and $visited.Add($seed)) { $queue.Enqueue($seed) }
+  }
+  while ($queue.Count -gt 0) {
+    $cur = $queue.Dequeue()
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $outLines = & $objdump -p $cur 2>$null
+    $ErrorActionPreference = $prevEap
+    foreach ($line in $outLines) {
+      if ($line -match '^\s*DLL Name:\s+(\S+)') {
+        $dllName = $matches[1].Trim()
+        $sysPath = Join-Path $env:SystemRoot "System32\$dllName"
+        if (Test-Path $sysPath) { continue }
+        foreach ($sd in $searchDirs) {
+          $found = Join-Path $sd $dllName
+          if (Test-Path $found) {
+            [void]$dllCandidates.Add($found)
+            if ($visited.Add($found)) { $queue.Enqueue($found) }
+            break
           }
         }
       }
     }
-  } finally {
-    $env:PATH = $prevPath
   }
 }
 
