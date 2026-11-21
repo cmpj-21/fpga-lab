@@ -750,7 +750,7 @@ function buildWaves() {
   renderSignalChips();
 }
 function renderSignalChips() {
-  $('#sigChips').replaceChildren(); $('#signalCount').textContent = String(waves.signals.length);
+  $('#sigChips').replaceChildren(); $('#signalCount').textContent = `${waves.signals.length} signals`;
   waves.signals.forEach(signal => {
     const button = document.createElement('button'); button.className = `sig-chip ${signal.visible ? 'on' : 'off'}`;
     const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = signal.color;
@@ -1193,15 +1193,17 @@ async function exportVcd() {
 }
 function syncNavigation() {
   const leftOpen = getComputedStyle($('#left')).display !== 'none';
+  const dockOpen = !$('#app').classList.contains('no-waves') || !$('#right').classList.contains('hidden');
   const states = {
     btnLibrary: leftOpen && $('#ltab-library').classList.contains('active'),
     btnPins: leftOpen && $('#ltab-pins').classList.contains('active'),
-    btnSignals: !$('#app').classList.contains('no-waves'),
-    btnTools: !$('#right').classList.contains('hidden')
+    btnTools: dockOpen
   };
   for (const [id, open] of Object.entries(states)) {
-    $('#' + id).classList.toggle('active', open);
-    $('#' + id).setAttribute('aria-expanded', String(open));
+    const el = $('#' + id);
+    if (!el) continue;
+    el.classList.toggle('active', open);
+    el.setAttribute('aria-expanded', String(open));
   }
 }
 function leftTab(name) {
@@ -1216,19 +1218,19 @@ function toggleLeft(name) {
   if (innerWidth <= 1000) app.classList.toggle('mobile-library', !close); else app.classList.toggle('no-library', close);
   leftTab(name);
 }
-let lastToolTab = 'console';
+let lastBottomTab = 'waves';
 function openBottomTab(tab = 'console') {
-  if (tab === 'waves') {
+  lastBottomTab = tab || 'console';
+  if (lastBottomTab === 'waves') {
     $('#app').classList.remove('no-waves');
     $('#right').classList.add('hidden');
     $$('.dock-tab').forEach(t => { const active = t.dataset.docktab === 'waves'; t.classList.toggle('active', active); t.setAttribute('aria-selected', String(active)); });
     requestAnimationFrame(() => waves?.resize());
   } else {
-    lastToolTab = tab || 'console';
     $('#app').classList.add('no-waves');
     $('#right').classList.remove('hidden');
-    $$('.dock-tab').forEach(t => { const active = t.dataset.docktab === lastToolTab; t.classList.toggle('active', active); t.setAttribute('aria-selected', String(active)); });
-    $$('.rtab').forEach(t => t.classList.toggle('active', t.id === 'rtab-' + lastToolTab));
+    $$('.dock-tab').forEach(t => { const active = t.dataset.docktab === lastBottomTab; t.classList.toggle('active', active); t.setAttribute('aria-selected', String(active)); });
+    $$('.rtab').forEach(t => t.classList.toggle('active', t.id === 'rtab-' + lastBottomTab));
   }
   syncNavigation();
 }
@@ -1237,7 +1239,7 @@ function closeBottomDock() {
   $('#right').classList.add('hidden');
   syncNavigation();
 }
-function openTools(name = lastToolTab) {
+function openTools(name = lastBottomTab) {
   openBottomTab(name || 'console');
 }
 function applyTheme(theme) {
@@ -1570,8 +1572,7 @@ function wire() {
   if ($('#btnChangeHdlRoot')) $('#btnChangeHdlRoot').onclick = changeHdlRoot;
   if ($('#homeChangeHdlRoot')) $('#homeChangeHdlRoot').onclick = changeHdlRoot;
   $('#btnPins').onclick = () => toggleLeft('pins'); $('#closeLeft').onclick = () => { $('#app').classList.remove('mobile-library'); $('#app').classList.add('no-library'); syncNavigation(); };
-  $('#btnSignals').onclick = () => !$('#app').classList.contains('no-waves') ? closeBottomDock() : openBottomTab('waves');
-  $('#btnTools').onclick = () => !$('#right').classList.contains('hidden') ? closeBottomDock() : openBottomTab(lastToolTab);
+  $('#btnTools').onclick = () => (!$('#app').classList.contains('no-waves') || !$('#right').classList.contains('hidden')) ? closeBottomDock() : openBottomTab(lastBottomTab);
   $('#closeRight').onclick = closeBottomDock;
   $$('[data-ltab]').forEach(b => b.onclick = () => leftTab(b.dataset.ltab)); $$('[data-docktab]').forEach(b => b.onclick = () => openBottomTab(b.dataset.docktab));
   for (const id of ['btnAbout', 'btnLimits']) $('#' + id).onclick = () => $('#aboutDialog').showModal();

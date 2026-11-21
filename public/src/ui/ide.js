@@ -966,7 +966,7 @@ export function createIde(api) {
     comment: () => docs.get(active)?.editor.toggleComment(),
     viewExplorer: () => $('#btnLibrary').click(),
     viewPins: () => $('#btnPins').click(),
-    panelWaves: () => api.openBottomTab ? api.openBottomTab('waves') : ($('#app').classList.contains('no-waves') && $('#btnSignals').click()),
+    panelWaves: () => api.openBottomTab?.('waves'),
     panelProblems: () => api.openTools('problems'),
     panelConsole: () => api.openTools('console'),
     panelPinout: () => api.openTools('pinout'),
