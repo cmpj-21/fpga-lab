@@ -438,6 +438,9 @@ uniform float uTemperature;
 uniform float uTint;
 uniform int uLut;
 uniform int uBgGradient;
+uniform int uHasDepth;
+uniform int uBgHasSolid;
+uniform vec3 uBgSolid;
 uniform vec3 uBgTop;
 uniform vec3 uBgBottom;
 varying vec2 vUv;
@@ -537,17 +540,21 @@ void main() {
     col.b = texture2D(tDiffuse, clamp(uv - dir, 0.001, 0.999)).b;
   }
 
-  float centerDepth = readLinearDepth(uv);
-  bool isBackground = centerDepth >= uFar * 0.995;
+  float centerDepth = uHasDepth == 1 ? readLinearDepth(uv) : uFar;
+  bool isBackground = uHasDepth == 1 ? (centerDepth >= uFar * 0.995) : (alpha < 0.002);
 
-  // Gradient studio backdrop
-  if (isBackground && uBgGradient == 1) {
+  if (uHasDepth == 0 && alpha > 0.001) {
+    col = col / alpha;
+  }
+
+  // Gradient studio backdrop (depth path)
+  if (uHasDepth == 1 && isBackground && uBgGradient == 1) {
     float gradT = clamp(uv.y * 0.85 + 0.15 * (1.0 - r2 * 0.35), 0.0, 1.0);
     col = pow(mix(uBgBottom, uBgTop, gradT), vec3(2.2));
   }
 
   // Depth of Field (12-tap Golden Angle Bokeh Spiral)
-  if (uDof > 0.001) {
+  if (uHasDepth == 1 && uDof > 0.001) {
     float coc = clamp(abs(centerDepth - uDofFocus) / max(uDofFocus * (1.35 - uDofAperture * 0.95), 8.0), 0.0, 1.0);
     float blurRadius = coc * uDof * 9.5;
     if (blurRadius > 0.25) {
@@ -579,7 +586,7 @@ void main() {
   }
 
   // Screen-Space Ambient Occlusion (Symmetric Paired Valley SSAO — slope-invariant on flat surfaces)
-  if (uSsao > 0.001 && !isBackground) {
+  if (uHasDepth == 1 && uSsao > 0.001 && !isBackground) {
     float occ = 0.0;
     float radPx = (1.5 + uSsaoRadius * 4.5);
     float jitter = fract(sin(dot(uv * uResolution, vec2(12.9898, 78.233))) * 43758.5453) * 0.785398;
@@ -611,20 +618,42 @@ void main() {
     col += (bloomCol + hotCore) * uBloom * 1.45;
   }
 
-  // Exposure & Tone Mapping (preserve exact theme backdrop on non-gradient background)
-  if (!isBackground || uBgGradient == 1) {
-    col *= uExposure;
-    if (uToneMap == 0) col = toneMapACES(col);
-    else if (uToneMap == 1) col = toneMapAgX(col);
-    else if (uToneMap == 2) col = toneMapNeutral(col);
-    else if (uToneMap == 3) col = toneMapReinhard(col);
-    else if (uToneMap == 4) col = toneMapCineon(col);
-    else col = clamp(col, 0.0, 1.0);
+  // Exposure & Tone Mapping (preserve exact theme backdrop & smooth MSAA edges)
+  if (uHasDepth == 0) {
+    vec3 fg = col * uExposure;
+    if (uToneMap == 0) fg = toneMapACES(fg);
+    else if (uToneMap == 1) fg = toneMapAgX(fg);
+    else if (uToneMap == 2) fg = toneMapNeutral(fg);
+    else if (uToneMap == 3) fg = toneMapReinhard(fg);
+    else if (uToneMap == 4) fg = toneMapCineon(fg);
+    else fg = clamp(fg, 0.0, 1.0);
+    vec3 fgSrgb = linearToSrgb(fg);
+    if (uBgGradient == 1) {
+      float gradT = clamp(uv.y * 0.85 + 0.15 * (1.0 - r2 * 0.35), 0.0, 1.0);
+      vec3 bgSrgb = linearToSrgb(mix(uBgBottom, uBgTop, gradT));
+      col = mix(bgSrgb, fgSrgb, clamp(alpha, 0.0, 1.0));
+      alpha = 1.0;
+    } else if (uBgHasSolid == 1) {
+      vec3 bgSrgb = linearToSrgb(uBgSolid);
+      col = mix(bgSrgb, fgSrgb, clamp(alpha, 0.0, 1.0));
+      alpha = 1.0;
+    } else {
+      col = fgSrgb;
+    }
   } else {
-    col = clamp(col, 0.0, 1.0);
+    if (!isBackground || uBgGradient == 1) {
+      col *= uExposure;
+      if (uToneMap == 0) col = toneMapACES(col);
+      else if (uToneMap == 1) col = toneMapAgX(col);
+      else if (uToneMap == 2) col = toneMapNeutral(col);
+      else if (uToneMap == 3) col = toneMapReinhard(col);
+      else if (uToneMap == 4) col = toneMapCineon(col);
+      else col = clamp(col, 0.0, 1.0);
+    } else {
+      col = clamp(col, 0.0, 1.0);
+    }
+    col = linearToSrgb(col);
   }
-
-  col = linearToSrgb(col);
 
   if (uBloom > 0.001) {
     vec3 srgbHalo = linearToSrgb(bloomCol * uBloom * 0.65);
@@ -632,7 +661,7 @@ void main() {
   }
 
   // Sobel Depth & Luma Edge Outline
-  if (uEdgeOutline > 0.001) {
+  if (uHasDepth == 1 && uEdgeOutline > 0.001) {
     float dN = readLinearDepth(uv + vec2(0.0, texel.y));
     float dS = readLinearDepth(uv - vec2(0.0, texel.y));
     float dE = readLinearDepth(uv + vec2(texel.x, 0.0));
@@ -731,6 +760,116 @@ void main() {
   }
 
   gl_FragColor = vec4(col, alpha);
+}
+`;
+
+const FRAG_FXAA = /* glsl */ `
+uniform sampler2D tDiffuse;
+uniform vec2 uInvRes;
+varying vec2 vUv;
+
+float fxaaLuma(vec3 rgb) {
+  return dot(rgb, vec3(0.299, 0.587, 0.114));
+}
+
+void main() {
+  vec4 center = texture2D(tDiffuse, vUv);
+  float lumaM = fxaaLuma(center.rgb);
+  float lumaN = fxaaLuma(texture2D(tDiffuse, vUv + vec2(0.0, uInvRes.y)).rgb);
+  float lumaS = fxaaLuma(texture2D(tDiffuse, vUv - vec2(0.0, uInvRes.y)).rgb);
+  float lumaE = fxaaLuma(texture2D(tDiffuse, vUv + vec2(uInvRes.x, 0.0)).rgb);
+  float lumaW = fxaaLuma(texture2D(tDiffuse, vUv - vec2(uInvRes.x, 0.0)).rgb);
+
+  float lumaMin = min(lumaM, min(min(lumaN, lumaS), min(lumaE, lumaW)));
+  float lumaMax = max(lumaM, max(max(lumaN, lumaS), max(lumaE, lumaW)));
+  float lumaRange = lumaMax - lumaMin;
+
+  if (lumaRange < max(0.0312, lumaMax * 0.125)) {
+    gl_FragColor = center;
+    return;
+  }
+
+  float lumaNW = fxaaLuma(texture2D(tDiffuse, vUv + vec2(-uInvRes.x,  uInvRes.y)).rgb);
+  float lumaNE = fxaaLuma(texture2D(tDiffuse, vUv + vec2( uInvRes.x,  uInvRes.y)).rgb);
+  float lumaSW = fxaaLuma(texture2D(tDiffuse, vUv + vec2(-uInvRes.x, -uInvRes.y)).rgb);
+  float lumaSE = fxaaLuma(texture2D(tDiffuse, vUv + vec2( uInvRes.x, -uInvRes.y)).rgb);
+
+  float lumaNS = lumaN + lumaS;
+  float lumaEW = lumaE + lumaW;
+  float lumaNWSW = lumaNW + lumaSW;
+  float lumaNENE = lumaNE + lumaSE;
+  float lumaNWNE = lumaNW + lumaNE;
+  float lumaSWSE = lumaSW + lumaSE;
+
+  float edgeHorz = abs(-2.0 * lumaW + lumaNWSW) + abs(-2.0 * lumaM + lumaNS) * 2.0 + abs(-2.0 * lumaE + lumaNENE);
+  float edgeVert = abs(-2.0 * lumaN + lumaNWNE) + abs(-2.0 * lumaM + lumaEW) * 2.0 + abs(-2.0 * lumaS + lumaSWSE);
+  bool isHorz = edgeHorz >= edgeVert;
+
+  float luma1 = isHorz ? lumaS : lumaW;
+  float luma2 = isHorz ? lumaN : lumaE;
+  float grad1 = abs(luma1 - lumaM);
+  float grad2 = abs(luma2 - lumaM);
+  bool is1Steepest = grad1 >= grad2;
+  float gradScaled = 0.25 * max(grad1, grad2);
+
+  float stepLen = isHorz ? uInvRes.y : uInvRes.x;
+  float lumaLocalAvg;
+  if (is1Steepest) {
+    stepLen = -stepLen;
+    lumaLocalAvg = 0.5 * (luma1 + lumaM);
+  } else {
+    lumaLocalAvg = 0.5 * (luma2 + lumaM);
+  }
+
+  vec2 curUv = vUv;
+  if (isHorz) curUv.y += stepLen * 0.5;
+  else curUv.x += stepLen * 0.5;
+
+  vec2 offset = isHorz ? vec2(uInvRes.x, 0.0) : vec2(0.0, uInvRes.y);
+  vec2 uv1 = curUv - offset;
+  vec2 uv2 = curUv + offset;
+  float lumaEnd1 = fxaaLuma(texture2D(tDiffuse, uv1).rgb) - lumaLocalAvg;
+  float lumaEnd2 = fxaaLuma(texture2D(tDiffuse, uv2).rgb) - lumaLocalAvg;
+  bool reached1 = abs(lumaEnd1) >= gradScaled;
+  bool reached2 = abs(lumaEnd2) >= gradScaled;
+
+  for (int i = 0; i < 7; i++) {
+    if (reached1 && reached2) break;
+    float mult = i < 3 ? 1.0 : (i < 5 ? 2.0 : 4.0);
+    if (!reached1) {
+      uv1 -= offset * mult;
+      lumaEnd1 = fxaaLuma(texture2D(tDiffuse, uv1).rgb) - lumaLocalAvg;
+      reached1 = abs(lumaEnd1) >= gradScaled;
+    }
+    if (!reached2) {
+      uv2 += offset * mult;
+      lumaEnd2 = fxaaLuma(texture2D(tDiffuse, uv2).rgb) - lumaLocalAvg;
+      reached2 = abs(lumaEnd2) >= gradScaled;
+    }
+  }
+
+  float dist1 = isHorz ? (vUv.x - uv1.x) : (vUv.y - uv1.y);
+  float dist2 = isHorz ? (uv2.x - vUv.x) : (uv2.y - vUv.y);
+  bool isDir1 = dist1 < dist2;
+  float distFinal = min(dist1, dist2);
+  float edgeLen = max(dist1 + dist2, 0.0001);
+  float pixelOffset = -distFinal / edgeLen + 0.5;
+
+  bool isLumaCenterSmaller = lumaM < lumaLocalAvg;
+  bool correctVar = ((isDir1 ? lumaEnd1 : lumaEnd2) < 0.0) != isLumaCenterSmaller;
+  float finalOffset = correctVar ? pixelOffset : 0.0;
+
+  float lumaAvg = (1.0 / 12.0) * (2.0 * (lumaNS + lumaEW) + lumaNWSW + lumaNENE);
+  float subOff1 = clamp(abs(lumaAvg - lumaM) / lumaRange, 0.0, 1.0);
+  float subOff2 = (-2.0 * subOff1 + 3.0) * subOff1 * subOff1;
+  float subOffFinal = subOff2 * subOff2 * 0.75;
+  finalOffset = max(finalOffset, subOffFinal);
+
+  vec2 finalUv = vUv;
+  if (isHorz) finalUv.y += finalOffset * stepLen;
+  else finalUv.x += finalOffset * stepLen;
+
+  gl_FragColor = vec4(texture2D(tDiffuse, finalUv).rgb, center.a);
 }
 `;
 
@@ -1047,8 +1186,9 @@ export function createGfxStudio(ctx) {
   }
 
   // Post-Processing Render Targets & Fullscreen Quad
-  let rtScene = null, rtBloomSrc = null, rtBloomA = null, rtBloomB = null;
+  let rtScene = null, rtSceneMsaa = null, rtPost = null, rtBloomSrc = null, rtBloomA = null, rtBloomB = null;
   let rtW = 0, rtH = 0;
+  const maxMsaaSamples = Math.min(4, renderer.capabilities?.maxSamples || 0);
   const blackOccluderMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
   const blackBgColor = new THREE.Color(0x000000);
   const emitterBloomMats = new Map();
@@ -1066,6 +1206,13 @@ export function createGfxStudio(ctx) {
     uniforms: { tDiffuse: { value: null }, uStep: { value: new THREE.Vector2() } },
     vertexShader: VERT_POST,
     fragmentShader: FRAG_BLOOM_BLUR,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const fxaaMat = new THREE.ShaderMaterial({
+    uniforms: { tDiffuse: { value: null }, uInvRes: { value: new THREE.Vector2(1, 1) } },
+    vertexShader: VERT_POST,
+    fragmentShader: FRAG_FXAA,
     depthTest: false,
     depthWrite: false,
   });
@@ -1101,6 +1248,9 @@ export function createGfxStudio(ctx) {
       uTint: { value: 0 },
       uLut: { value: 0 },
       uBgGradient: { value: 0 },
+      uHasDepth: { value: 1 },
+      uBgHasSolid: { value: 0 },
+      uBgSolid: { value: new THREE.Color(0x20261e) },
       uBgTop: { value: new THREE.Color(0x1a1f18) },
       uBgBottom: { value: new THREE.Color(0x0a0c09) },
     },
@@ -1118,7 +1268,7 @@ export function createGfxStudio(ctx) {
     const ph = Math.max(2, Math.floor(h));
     if (rtScene && rtW === pw && rtH === ph) return;
     rtW = pw; rtH = ph;
-    rtScene?.dispose(); rtBloomSrc?.dispose(); rtBloomA?.dispose(); rtBloomB?.dispose();
+    rtScene?.dispose(); rtSceneMsaa?.dispose(); rtPost?.dispose(); rtBloomSrc?.dispose(); rtBloomA?.dispose(); rtBloomB?.dispose();
     const depthTexture = new THREE.DepthTexture(pw, ph);
     depthTexture.type = THREE.UnsignedIntType;
     rtScene = new THREE.WebGLRenderTarget(pw, ph, {
@@ -1127,6 +1277,19 @@ export function createGfxStudio(ctx) {
       magFilter: THREE.LinearFilter,
       depthBuffer: true,
       depthTexture,
+    });
+    rtSceneMsaa = maxMsaaSamples > 0 ? new THREE.WebGLRenderTarget(pw, ph, {
+      type: THREE.HalfFloatType,
+      samples: maxMsaaSamples,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      depthBuffer: true,
+    }) : null;
+    rtPost = new THREE.WebGLRenderTarget(pw, ph, {
+      type: THREE.UnsignedByteType,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      depthBuffer: false,
     });
     const bw = Math.max(2, Math.floor(pw / 2)), bh = Math.max(2, Math.floor(ph / 2));
     rtBloomSrc = new THREE.WebGLRenderTarget(bw, bh, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true });
@@ -1623,12 +1786,25 @@ export function createGfxStudio(ctx) {
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
     ensureRenderTargets(size.x, size.y);
 
-    // 1. Render Scene to HDR RenderTarget + DepthTexture
-    renderer.setRenderTarget(rtScene);
+    // 1. Render Scene to HDR RenderTarget (4x hardware MSAA when depth-buffer FX are off, depth target otherwise)
+    const needsDepth = gfx.ssao > 0 || gfx.dof > 0 || gfx.edgeOutline > 0 || gfx.lutPreset === 'thermal-flir';
+    const useMsaa = !needsDepth && !!rtSceneMsaa;
+    const activeSceneRT = useMsaa ? rtSceneMsaa : rtScene;
+    const prevBg = scene.background;
+    const prevClearAlpha = renderer.getClearAlpha();
+    if (useMsaa) {
+      scene.background = null;
+      renderer.setClearColor(0x000000, 0);
+    }
+    renderer.setRenderTarget(activeSceneRT);
     renderer.clear();
     renderer.render(scene, camera);
     if (gfx.shadingMode === 'wire-on-shaded') {
       renderWireOverlayPass();
+    }
+    if (useMsaa) {
+      scene.background = prevBg;
+      renderer.setClearAlpha(prevClearAlpha);
     }
 
     // 2. Render Bloom Passes if enabled
@@ -1637,7 +1813,7 @@ export function createGfxStudio(ctx) {
       if (selectiveEmissive) {
         renderEmissiveBloomSource();
       } else {
-        bloomExtractMat.uniforms.tDiffuse.value = rtScene.texture;
+        bloomExtractMat.uniforms.tDiffuse.value = activeSceneRT.texture;
         bloomExtractMat.uniforms.uThreshold.value = (gfx.bloomThreshold / 100) * 1.35;
         postQuad.material = bloomExtractMat;
         renderer.setRenderTarget(rtBloomA);
@@ -1662,11 +1838,14 @@ export function createGfxStudio(ctx) {
       }
     }
 
-    // 3. Render Master Uber-Post Shader Pass to Screen
+    // 3. Render Master Uber-Post Shader Pass -> rtPost, then FXAA 3.11 -> Screen
     const u = uberPostMat.uniforms;
-    u.tDiffuse.value = rtScene.texture;
+    u.tDiffuse.value = activeSceneRT.texture;
     u.tBloom.value = rtBloomA.texture;
     u.tDepth.value = rtScene.depthTexture;
+    u.uHasDepth.value = useMsaa ? 0 : 1;
+    u.uBgHasSolid.value = (useMsaa && prevBg && prevBg.isColor) ? 1 : 0;
+    if (prevBg && prevBg.isColor) u.uBgSolid.value.copy(prevBg);
     u.uResolution.value.set(size.x, size.y);
     u.uNear.value = camera.near;
     u.uFar.value = camera.far;
@@ -1699,6 +1878,14 @@ export function createGfxStudio(ctx) {
     u.uBgBottom.value.set(gfx.bgColorBottom);
 
     postQuad.material = uberPostMat;
+    renderer.setRenderTarget(rtPost);
+    renderer.clear();
+    renderer.render(postScene, postCamera);
+
+    // 4. Final FXAA 3.11 Anti-Aliasing Pass to Screen
+    fxaaMat.uniforms.tDiffuse.value = rtPost.texture;
+    fxaaMat.uniforms.uInvRes.value.set(1 / Math.max(1, size.x), 1 / Math.max(1, size.y));
+    postQuad.material = fxaaMat;
     renderer.setRenderTarget(null);
     renderer.render(postScene, postCamera);
   }
