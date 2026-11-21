@@ -1,13 +1,16 @@
 import http from 'node:http';
 import { execFile } from 'node:child_process';
 import { promises as fs, appendFileSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compileDesign, configuration, sessions, closeAllSessions, setEngineLogger } from './backend/engine.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
-const CONFIG_FILE = path.resolve(process.env.TRACE_CONFIG_FILE || path.join(ROOT, 'trace.config.json'));
+const IS_PACKAGED = process.env.TRACE_PACKAGED === '1';
+const USER_DATA_DIR = path.resolve(process.env.TRACE_DATA_DIR || (IS_PACKAGED ? path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'TraceFPGA') : ROOT));
+const CONFIG_FILE = path.resolve(process.env.TRACE_CONFIG_FILE || path.join(USER_DATA_DIR, 'trace.config.json'));
 function loadInitialHdlRoot() {
   if (process.env.HDL_ROOT) return path.resolve(process.env.HDL_ROOT);
   try {
@@ -18,13 +21,16 @@ function loadInitialHdlRoot() {
   } catch {}
   const sibling = path.resolve(ROOT, '..', 'HDL');
   try { if (statSync(sibling).isDirectory()) return sibling; } catch {}
-  return ROOT;
+  const docs = path.join(os.homedir(), 'Documents', 'fpga-lab');
+  try { if (IS_PACKAGED && statSync(docs).isDirectory()) return docs; } catch {}
+  return IS_PACKAGED ? path.join(os.homedir(), 'Documents') : ROOT;
 }
 let hdlRoot = loadInitialHdlRoot();
 async function persistConfig(patch) {
   let current = {};
   try { current = JSON.parse(await fs.readFile(CONFIG_FILE, 'utf8')); } catch {}
   const next = { ...current, ...patch };
+  await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
   await fs.writeFile(CONFIG_FILE, JSON.stringify(next, null, 2) + '\n', 'utf8');
 }
 async function setHdlRoot(dir) {
@@ -37,10 +43,11 @@ async function setHdlRoot(dir) {
   if (ownsLog) appendLogLine('info', 'app', `Changed Local HDL library folder to ${hdlRoot}`);
   return { ok: true, root: hdlRoot, groups: await hdlTree() };
 }
-const PORT = Number(process.env.PORT || 8044);
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.vcd': 'text/plain' };
+const REQUESTED_PORT = process.env.PORT !== undefined && process.env.PORT !== '' ? Number(process.env.PORT) : 8044;
+let activePort = REQUESTED_PORT || 8044;
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.vcd': 'text/plain', '.glb': 'model/gltf-binary', '.wasm': 'application/wasm' };
 const within = (root, full) => { const rel = path.relative(root, full); return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)); };
-const LOG_DIR = path.resolve(process.env.TRACE_LOG_DIR || path.join(ROOT, 'logs'));
+const LOG_DIR = path.resolve(process.env.TRACE_LOG_DIR || path.join(USER_DATA_DIR, 'logs'));
 const LOG_FILE = path.join(LOG_DIR, 'latest.log');
 const ACTION_LOG_FILE = path.join(LOG_DIR, 'actions.log');
 let logQueue = Promise.resolve(true), ownsLog = false, stopping = false;
@@ -553,9 +560,9 @@ async function hdlTree() {
 
 const server = http.createServer(async (req, res) => {
   try {
-    if (![`127.0.0.1:${PORT}`, `localhost:${PORT}`].includes(req.headers.host)) return send(res, 403, { error: 'Localhost requests only.' });
-    if (req.headers.origin && ![`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`].includes(req.headers.origin)) return send(res, 403, { error: 'Cross-origin access denied.' });
-    const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+    if (![`127.0.0.1:${activePort}`, `localhost:${activePort}`].includes(req.headers.host)) return send(res, 403, { error: 'Localhost requests only.' });
+    if (req.headers.origin && ![`http://127.0.0.1:${activePort}`, `http://localhost:${activePort}`].includes(req.headers.origin)) return send(res, 403, { error: 'Cross-origin access denied.' });
+    const url = new URL(req.url, `http://127.0.0.1:${activePort}`);
     if (url.pathname === '/api/health') {
       const cfg = await configuration().catch(e => ({ version: null, error: e.message }));
       return send(res, 200, { ok: !!cfg.version, app: 'trace-workbench', hdlRoot, backend: cfg.version, error: cfg.error, sessions: sessions.size, logFile: LOG_FILE, actionLogFile: ACTION_LOG_FILE });
@@ -671,6 +678,9 @@ const server = http.createServer(async (req, res) => {
     if (!within(PUBLIC, full)) return send(res, 403, 'Forbidden', 'text/plain');
     const actual = await fs.realpath(full).catch(() => null);
     if (!actual || !within(PUBLIC, actual)) return send(res, 404, 'Not found', 'text/plain');
+    if (IS_PACKAGED && /^\/(vendor|assets)\//.test(url.pathname)) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
     return send(res, 200, await fs.readFile(actual), MIME[path.extname(actual)] || 'application/octet-stream');
   } catch (e) {
     if (ownsLog && /^\/api\/(sim|hdl)\//.test(req.url || '')) {
@@ -679,11 +689,18 @@ const server = http.createServer(async (req, res) => {
     return send(res, 400, { error: e.message });
   }
 });
-const address = `http://127.0.0.1:${PORT}`;
+let address = `http://127.0.0.1:${activePort}`;
 function openBrowser() {
   if (process.env.OPEN_BROWSER === '1' && process.platform === 'win32') execFile('cmd.exe', ['/d', '/c', 'start', '', address], { windowsHide: true }, error => { if (error) console.error(`Open ${address} in your browser.`); });
 }
-server.listen(PORT, '127.0.0.1', () => { claimLog(`Trace workbench started at ${address} (Node ${process.version}, HDL root: ${hdlRoot})`); console.log(`Trace workbench: ${address}`); openBrowser(); });
+server.listen(REQUESTED_PORT, '127.0.0.1', () => {
+  activePort = server.address().port;
+  address = `http://127.0.0.1:${activePort}`;
+  claimLog(`Trace workbench started at ${address} (Node ${process.version}, HDL root: ${hdlRoot})`);
+  console.log(`TRACE_READY ${address}`);
+  console.log(`Trace workbench: ${address}`);
+  openBrowser();
+});
 server.on('error', async error => {
   if (error.code === 'EADDRINUSE') {
     const existing = await fetch(address + '/api/health', { signal: AbortSignal.timeout(3000) }).then(r => r.json()).catch(() => null);

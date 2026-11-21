@@ -31,3 +31,5 @@ desktop.ini
 # Future packaging and node dependencies
 node_modules/
 dist/
+packaging/webview2/
+packaging/build/

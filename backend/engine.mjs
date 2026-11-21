@@ -1,5 +1,5 @@
 import { spawn, execFile } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { promises as fs, existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,26 @@ import readline from 'node:readline';
 
 const exec = promisify(execFile);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const GHDL = process.env.GHDL_PATH || 'ghdl';
+function resolveGhdlRuntime() {
+  if (process.env.GHDL_PATH) {
+    const bin = path.resolve(process.env.GHDL_PATH);
+    const binDir = path.dirname(bin);
+    const prefix = path.resolve(binDir, '..', 'lib', 'ghdl');
+    return { ghdl: bin, binDir, prefix: existsSync(prefix) ? prefix : process.env.GHDL_PREFIX || '' };
+  }
+  const candidates = [
+    path.resolve(ROOT, '..', '..', 'runtime', 'ghdl', 'bin', 'ghdl.exe'),
+    path.resolve(ROOT, '..', 'runtime', 'ghdl', 'bin', 'ghdl.exe'),
+  ];
+  for (const bin of candidates) {
+    if (existsSync(bin)) {
+      const binDir = path.dirname(bin);
+      const prefix = path.resolve(binDir, '..', 'lib', 'ghdl');
+      return { ghdl: bin, binDir, prefix: existsSync(prefix) ? prefix : '' };
+    }
+  }
+  return { ghdl: 'ghdl', binDir: '', prefix: process.env.GHDL_PREFIX || '' };
+}
 let configPromise, engineLog = () => {};
 const activeCompiles = new Set();
 export const sessions = new Map();
@@ -25,22 +44,29 @@ export async function closeAllSessions() {
 
 export function configuration() {
   return configPromise ??= (async () => {
-    const options = { windowsHide: true, timeout: 30000, maxBuffer: 2e6 };
-    const version = (await exec(GHDL, ['--version'], options)).stdout.split(/\r?\n/)[0];
-    const include = (await exec(GHDL, ['--vpi-include-dir'], options)).stdout.trim();
-    const lib = (await exec(GHDL, ['--vpi-library-dir'], options)).stdout.trim();
-    const gcc = process.env.CC || (process.platform === 'win32' ? 'C:/msys64/ucrt64/bin/gcc.exe' : 'gcc');
-    const env = { ...process.env, PATH: [lib, path.dirname(gcc), process.env.PATH].join(path.delimiter) };
+    const rt = resolveGhdlRuntime();
+    const basePathParts = [rt.binDir, process.env.PATH].filter(Boolean);
+    const baseEnv = { ...process.env, PATH: basePathParts.join(path.delimiter), ...(rt.prefix ? { GHDL_PREFIX: rt.prefix } : {}) };
+    const options = { windowsHide: true, timeout: 30000, maxBuffer: 2e6, env: baseEnv };
+    const version = (await exec(rt.ghdl, ['--version'], options)).stdout.split(/\r?\n/)[0];
     const source = path.join(ROOT, 'bridge.c');
     const hash = createHash('sha256').update(await fs.readFile(source)).update(version).digest('hex').slice(0, 16);
     const plugin = path.join(ROOT, `bridge-${hash}.vpi`);
     const built = await fs.stat(plugin).catch(() => null);
+    let env = baseEnv;
     if (!built) {
+      const include = (await exec(rt.ghdl, ['--vpi-include-dir'], options)).stdout.trim();
+      const lib = (await exec(rt.ghdl, ['--vpi-library-dir'], options)).stdout.trim();
+      const gcc = process.env.CC || (process.platform === 'win32' ? 'C:/msys64/ucrt64/bin/gcc.exe' : 'gcc');
+      env = { ...baseEnv, PATH: [lib, path.dirname(gcc), baseEnv.PATH].filter(Boolean).join(path.delimiter) };
       engineLog('info', `Building VPI plugin ${path.basename(plugin)} with ${gcc}`);
       await exec(gcc, ['-shared', '-O2', '-Wall', `-I${include}`, source, `-L${lib}`, '-lghdlvpi', '-o', plugin], { ...options, env });
+    } else if (!rt.binDir) {
+      const lib = await exec(rt.ghdl, ['--vpi-library-dir'], options).then(r => r.stdout.trim()).catch(() => '');
+      if (lib) env = { ...baseEnv, PATH: [lib, baseEnv.PATH].filter(Boolean).join(path.delimiter) };
     }
     engineLog('info', `GHDL engine ready: ${version} (VPI: ${path.basename(plugin)})`);
-    return { version, plugin, env };
+    return { version, plugin, env, ghdl: rt.ghdl };
   })();
 }
 
@@ -98,17 +124,17 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
     if (!groups.size) throw new Error('No VHDL sources to compile. Open the sources referenced by the library manifest.');
     const options = { cwd: dir, env: cfg.env, windowsHide: true, timeout: 30000, maxBuffer: 2e6 };
     for (const [library, files] of groups) {
-      const r = await exec(GHDL, ['-i', `--std=${standard}`, '-fsynopsys', `--work=${library}`, ...files], options);
+      const r = await exec(cfg.ghdl, ['-i', `--std=${standard}`, '-fsynopsys', `--work=${library}`, ...files], options);
       if (r.stderr) diagnostics.push(r.stderr.trim());
     }
     if (!top) {
-      const result = await exec(GHDL, ['--find-top', `--std=${standard}`, '-fsynopsys', `--work=${topLibrary}`, `-P${dir}`], options);
+      const result = await exec(cfg.ghdl, ['--find-top', `--std=${standard}`, '-fsynopsys', `--work=${topLibrary}`, `-P${dir}`], options);
       const candidates = result.stdout.trim().split(/\s+/).filter(Boolean);
       if (candidates.length !== 1) throw new Error(`Select a top entity. Candidates: ${candidates.join(', ') || [...entities].join(', ')}`);
       top = candidates[0];
     }
     const flags = [`--std=${standard}`, '-fsynopsys', `--work=${topLibrary}`, `-P${dir}`];
-    const built = await exec(GHDL, ['-m', ...flags, top], options);
+    const built = await exec(cfg.ghdl, ['-m', ...flags, top], options);
     if (built.stderr) diagnostics.push(built.stderr.trim());
     const args = ['-r', ...flags, top];
     for (const [key, value] of Object.entries(generics)) {
@@ -122,7 +148,7 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
       args.push(`--sdf=${sdf.corner || 'typ'}=${sdf.instance}=timing.sdf`);
     }
     if (compileToken.cancelled) throw new Error('Simulation compilation cancelled.');
-    session = new EngineSession(spawn(GHDL, args, { cwd: dir, env: cfg.env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }), dir);
+    session = new EngineSession(spawn(cfg.ghdl, args, { cwd: dir, env: cfg.env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }), dir);
     const initial = await session.result();
     if (compileToken.cancelled) {
       await session.close();
