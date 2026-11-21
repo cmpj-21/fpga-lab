@@ -640,7 +640,7 @@ export function createIde(api) {
       filesRow.className = 'hr-files mono';
       filesRow.textContent = `${item.files?.join(', ') || 'No files'} · Top: ${item.top || 'auto'}`;
       openBtn.append(titleRow, filesRow);
-      openBtn.onclick = async () => {
+      openBtn.onclick = () => {
         try {
           const prevRecents = loadRecents();
           let prevStorage = null;
@@ -651,7 +651,7 @@ export function createIde(api) {
           captureBaseline(item.title, { prevRecents, prevStorage });
           showHome(false);
           api.markDirty();
-          await api.build(item.project.top || '');
+          api.toast(`Opened ${item.title}. Click Build design or Flash to compile.`);
         } catch (err) {
           api.toast(err.message, 'err');
         }
@@ -678,12 +678,9 @@ export function createIde(api) {
     view.classList.toggle('hidden', !visible);
     $('#btnHome')?.classList.toggle('active', visible);
   }
-  async function resumeWorkbench() {
+  function resumeWorkbench() {
     captureBaseline(projectTitle);
     showHome(false);
-    if (!S.sim && !S.building && !S.importing && S.sources.length) {
-      await api.build($('#topSelect')?.value || '');
-    }
   }
   function requestReturnHome({ focusWizard = false } = {}) {
     const view = $('#homeView');
@@ -769,7 +766,7 @@ export function createIde(api) {
     captureBaseline(name || cleanEntity, { prevRecents, prevStorage });
     showHome(false);
     api.markDirty();
-    await api.build(cleanEntity);
+    api.toast(`Loaded ${name || cleanEntity}. Click Build design or Flash to compile.`);
   }
   function populateHomeHdl(groups = []) {
     const container = $('#homeHdlList');

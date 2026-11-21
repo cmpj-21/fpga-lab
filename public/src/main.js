@@ -238,7 +238,8 @@ function setStatus() {
   const locked = S.building || S.importing || S.exporting;
   for (const input of $$('#pinBody input, #sdfControls input, #sdfControls select, .src-name, .src-x')) input.disabled = locked;
   $('#btnRun').disabled = $('#btnStep').disabled = locked || !S.power || !S.sim || S.sim.ended || S.dirty || S.error;
-  $('#btnElab').disabled = $('#btnReset').disabled = locked;
+  $('#btnElab').disabled = locked;
+  $('#btnReset').disabled = locked || !S.sim || S.dirty;
   if ($('#btnFlash')) $('#btnFlash').disabled = locked;
   $('#btnVcd').disabled = locked || !S.sim;
   for (const id of ['btnDemo', 'btnImport', 'dropZone', 'btnQsf', 'topSelect', 'standardSelect', 'topLibrary', 'genericInput', 'pwrToggle', 'btnPinReset', 'clearSdf', 'saveSource', 'progDrop', 'btnSaveProject', 'replayScope']) $('#' + id).disabled = locked;
@@ -258,7 +259,10 @@ function restoreProject(project) {
   if (!project || project.format !== 'trace-project' || project.version !== 1 || !Array.isArray(project.sources) || project.sources.length > 100 || !project.sources.every(s => s && typeof s.name === 'string' && typeof s.text === 'string' && /^[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i.test(s.name) && (!s.library || /^[a-z][a-z0-9_]*$/i.test(s.library))) || !['93','02','08'].includes(project.standard) || !/^[a-z][a-z0-9_]*$/i.test(project.topLibrary || 'work') || typeof project.generics !== 'string' || !Array.isArray(project.assignments) || !project.assignments.every(p => Array.isArray(p) && p.length === 2 && Number.isInteger(p[0]) && p[0] >= 1 && p[0] <= 144 && typeof p[1] === 'string') || (project.sdf && (typeof project.sdf.text !== 'string' || typeof project.sdf.instance !== 'string' || !['min','typ','max'].includes(project.sdf.corner)))) throw new Error('Invalid Trace project file.');
   S.sources = project.sources; S.assignments = new Map(project.assignments); S.sdf = project.sdf || null;
   $('#standardSelect').value = project.standard; $('#genericInput').value = project.generics; $('#topLibrary').value = project.topLibrary || 'work';
-  renderSources(); $('#topSelect').value = project.top || ''; renderSdf();
+  renderSources(); $('#topSelect').value = project.top || ''; renderSdf(); renderPins();
+  const topName = project.top || allEntities()[0] || S.sources[0]?.name || 'No design';
+  $('#designTitle').textContent = topName === DEMO_TOP ? 'Counter demo' : topName;
+  $('#designSubtitle').textContent = `Build needed · VHDL-${project.standard === '08' ? '2008' : project.standard === '93' ? '1993' : '2002'}`;
 }
 function download(text, name, type = 'text/plain') { const url = URL.createObjectURL(new Blob([text], { type })); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function renderSdf() { $('#sdfControls').classList.toggle('hidden', !S.sdf); $('#sdfName').textContent = S.sdf?.name || 'Timing annotation'; $('#sdfInstance').value = S.sdf?.instance || ''; $('#sdfCorner').value = S.sdf?.corner || 'typ'; }
@@ -582,7 +586,7 @@ function renderPins() {
     input.value = S.assignments.get(pin) ?? (SEG_NETS.includes(net) ? `seven_seg[${SEG_NETS.indexOf(net)}]` : net);
     input.setAttribute('aria-label', `${net} design port`); input.title = bound ? 'Mapped · changing this restarts the design' : 'Unmapped · enter a port or leave blank to disconnect';
     input.className = bound ? 'mapped' : 'unmapped'; input.disabled = S.building || S.importing;
-    input.onchange = async () => { S.assignments.set(pin, input.value.trim().toLowerCase()); saveProject(); if (S.vcd) { buildBindings(); renderPins(); board?.clearOutputs(); sampleOutputs(); } else { markDirty(); await build(); } };
+    input.onchange = () => { S.assignments.set(pin, input.value.trim().toLowerCase()); saveProject(); if (S.vcd) { buildBindings(); renderPins(); board?.clearOutputs(); sampleOutputs(); } else { markDirty(); renderPins(); toast('Pin mapping updated. Click Build design or Flash to compile.'); } };
     port.append(input);
     const td = document.createElement('td'); td.textContent = pin; tr.append(netCell, port, td); $('#pinBody').append(tr);
   }
@@ -683,7 +687,7 @@ async function loadFiles(files) {
     if (['sof','pof'].includes(extensions[0])) return await loadBitstream(await files[0].arrayBuffer(), files[0].name);
     const loaded = await Promise.all(files.map(async (file, i) => ({ name: file.name, text: await file.text(), ext: extensions[i] })));
     if (extensions[0] === 'vcd') return await loadVcd(loaded[0].text, loaded[0].name);
-    if (extensions[0] === 'json') { restoreProject(JSON.parse(loaded[0].text)); S.importing = false; markDirty(); return await build(); }
+    if (extensions[0] === 'json') { restoreProject(JSON.parse(loaded[0].text)); S.importing = false; renderPins(); markDirty(); toast('Project loaded. Click Build design or Flash to compile.'); return; }
     let changed = false, requestedTop;
     let nextSources = S.sources.map(s => ({ ...s }));
     const qsfFiles = loaded.filter(f => f.ext === 'qsf').map(f => ({ ...f, data: parseQsf(f.text) }));
@@ -716,7 +720,7 @@ async function loadFiles(files) {
     }
     S.importing = false;
     if (S.vcd && !loaded.some(f => f.ext !== 'qsf')) { buildBindings(); renderPins(); sampleOutputs(); saveProject(); }
-    else if (changed) { markDirty(); if (!loaded.some(f => f.ext === 'sdf')) await build(); }
+    else if (changed) { renderPins(); markDirty(); toast('Files loaded. Click Build design or Flash to compile.'); }
   } finally { S.importing = false; setStatus(); }
 }
 function importError(e) { log(e.message, 'error'); toast(e.message, 'err'); openTools('console'); }
@@ -830,31 +834,29 @@ function wire() {
   $('#btnRun').onclick = async () => {
     if (!S.power || S.building || S.importing || S.exporting) return;
     if (S.running) { pause(); return; }
-    if (ide?.hasUnsaved()) {
-      await ide.saveAndFlash();
-      if (S.error || !S.sim || S.sim.ended) return;
-    } else if (!S.sim || S.sim.ended || S.dirty || S.error) return;
+    if (ide?.hasUnsaved()) { markDirty(); return toast('Build design or Flash before running.', 'err'); }
+    if (!S.sim || S.sim.ended || S.dirty || S.error) return;
     if (!S.vcd && remainingSimCycles() <= 0) {
-      await build(S.sim.top);
-      if (S.error || !S.sim || S.sim.ended) return;
+      return toast('Reached 9 s capture window. Click Restart or Build design to continue.');
     }
     S.running = true; setStatus('Running'); lastFrame = performance.now();
   };
   $('#btnStep').onclick = async () => {
     if (!S.power || S.building || S.importing || S.exporting) return;
     pause();
-    if (ide?.hasUnsaved()) {
-      await ide.saveAndFlash();
-      if (S.error || !S.sim || S.sim.ended) return;
-    }
+    if (ide?.hasUnsaved()) { markDirty(); return toast('Build design or Flash before stepping.', 'err'); }
     advance(1);
   };
-  $('#btnReset').onclick = () => S.vcd ? loadVcd(S.vcd.text, S.sim.top) : build(S.sim?.top);
+  $('#btnReset').onclick = () => {
+    if (!S.sim) return;
+    if (S.vcd) loadVcd(S.vcd.text, S.sim.top);
+    else build(S.sim.top);
+  };
   $('#speed').oninput = e => { S.speed = Number(e.target.value); $('#rateLabel').textContent = `${(10 ** ((S.speed - 55) / 25)).toFixed(1).replace('.0', '')}×`; };
   $('#clkHz').onchange = e => { S.clkHz = Number(e.target.value); accumulator = 0; log(`Ideal clock: ${S.clkHz} Hz. Execution speed is limited by native simulation and display throughput.`); };
   $('#btnMute').onclick = () => { const muted = !audio.isMuted(); audio.setMuted(muted); if (!muted) audio.resume(); $('#btnMute').setAttribute('aria-pressed', String(muted)); $('#muteLabel').textContent = muted ? 'Sound off' : 'Sound on'; };
-  $('#btnElab').onclick = () => build(); $('#topSelect').onchange = () => build();
-  $('#btnDemo').onclick = () => { S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; S.assignments.clear(); S.sdf = null; $('#genericInput').value = ''; $('#topLibrary').value = 'work'; $('#standardSelect').value = '93'; renderSdf(); renderSources(); build(DEMO_TOP); };
+  $('#btnElab').onclick = () => build(); $('#topSelect').onchange = markDirty;
+  $('#btnDemo').onclick = () => { S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; S.assignments.clear(); S.sdf = null; $('#genericInput').value = ''; $('#topLibrary').value = 'work'; $('#standardSelect').value = '93'; renderSdf(); renderSources(); $('#topSelect').value = DEMO_TOP; $('#designTitle').textContent = 'Counter demo'; $('#designSubtitle').textContent = 'Build needed · VHDL-1993'; renderPins(); markDirty(); toast('Counter demo loaded. Click Build design or Flash to compile.'); };
   $('#btnSaveProject').onclick = () => { saveProject(); ide?.recordRecentProject(); ide?.captureBaseline(); download(JSON.stringify(projectData(), null, 2), 'trace-project.json', 'application/json'); toast('Project saved, including sources, libraries and pin mappings.'); };
   for (const id of ['standardSelect', 'topLibrary', 'genericInput', 'sdfInstance', 'sdfCorner']) $('#' + id).onchange = markDirty;
   $('#clearSdf').onclick = () => { S.sdf = null; renderSdf(); markDirty(); };
@@ -865,7 +867,7 @@ function wire() {
   $('#progDrop').onclick = () => $('#progFile').click(); $('#progFile').onchange = e => loadFiles([...e.target.files]).catch(importError);
   window.addEventListener('dragover', e => e.preventDefault()); window.addEventListener('drop', e => { e.preventDefault(); loadFiles([...e.dataTransfer.files]).catch(importError); });
   $('#libSearch').oninput = e => { const query = e.target.value.toLowerCase(); $$('.hdl-group').forEach(group => { let visible = false; group.querySelectorAll('.hdl-file').forEach(file => { const match = file.dataset.name.includes(query); file.hidden = !match; visible ||= match; }); group.hidden = !visible; if (query) group.classList.add('open'); }); };
-  $('#btnPinReset').onclick = () => { S.assignments.clear(); saveProject(); if (S.vcd) { buildBindings(); renderPins(); sampleOutputs(); } else { markDirty(); build(); } };
+  $('#btnPinReset').onclick = () => { S.assignments.clear(); saveProject(); if (S.vcd) { buildBindings(); renderPins(); sampleOutputs(); } else { markDirty(); renderPins(); toast('Pin map reset. Click Build design or Flash to compile.'); } };
   $$('.key-btn').forEach(button => {
     const net = button.dataset.key === 'reset' ? 'reset_btn' : button.dataset.key.replace('key', 's');
     button.onpointerdown = e => { if (button.disabled) return; e.preventDefault(); button.setPointerCapture(e.pointerId); keyInput(net, true); };
@@ -919,7 +921,7 @@ function wire() {
   window.addEventListener('keyup', e => { if (keys[e.key.toLowerCase()]) keyInput(keys[e.key.toLowerCase()], false); });
   window.addEventListener('blur', releaseKeys);
   document.addEventListener('visibilitychange', () => { if (document.hidden) { releaseKeys(); pause(); } });
-  $('#pwrToggle').onchange = async e => { S.power = e.target.checked; pause(); board?.setPower(S.power); if (!S.power) { releaseKeys(); board?.clearOutputs(); sampleOutputs(); } else if (S.sim && !S.vcd) await build(S.sim.top); else sampleOutputs(); syncKeys(); };
+  $('#pwrToggle').onchange = e => { S.power = e.target.checked; pause(); board?.setPower(S.power); if (!S.power) { releaseKeys(); board?.clearOutputs(); sampleOutputs(); } else sampleOutputs(); syncKeys(); setStatus(); };
   const camera = name => { board?.setCamera(name); $('#center').classList.toggle('closeup', ['leds','fpga','display','dtubes','io','macro_low'].includes(name)); if ($('#camPreset').querySelector(`option[value="${name}"]`)) $('#camPreset').value = name; if ($('#pmCamSelect')) $('#pmCamSelect').value = name; $$('[data-camera]').forEach(b => b.classList.toggle('active', b.dataset.camera === name)); };
   $$('[data-camera]').forEach(b => b.onclick = () => camera(b.dataset.camera)); $('#camPreset').onchange = e => camera(e.target.value);
   $('#btnViewSettings').onclick = () => { $('#deck').classList.toggle('hidden'); $('#btnViewSettings').setAttribute('aria-expanded', String(!$('#deck').classList.contains('hidden'))); };
@@ -1136,6 +1138,8 @@ async function boot() {
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);
   window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, get ide() { return ide; }, get actions() { return [...uiActions]; }, flushActions, build, advance, loadFiles, toggleDip, stopAllSimulations };
   try { const saved = localStorage.getItem('trace.project.v1'); if (saved) { const parsed = JSON.parse(saved); if (Array.isArray(parsed?.sources) && parsed.sources.length) restoreProject(parsed); } } catch (e) { importError(new Error(`Saved project could not be restored: ${e.message}`)); S.sources = []; renderSources(); setStatus(); return; }
+  S.dirty = true;
+  renderPins();
   ide.openFirst();
   ide.captureBaseline();
   ide.showHome(true);
