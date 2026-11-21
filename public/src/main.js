@@ -1481,7 +1481,38 @@ function wire() {
     $('#center').classList.toggle('bg-transparent', g.bgMode === 'transparent');
     const focalMm = Math.round(24 / (2 * Math.tan((g.fov * 0.5) * Math.PI / 180)));
     if ($('#pmReadout')) $('#pmReadout').textContent = `${focalMm}mm · ${g.fov}° · ${g.shadingMode.toUpperCase()}${g.dof > 0 ? ` · DoF ${g.dofFocus}mm` : ''}`;
+    syncAllRangeFills();
   }
+  function updateRangeFill(el) {
+    if (!el || el.type !== 'range') return;
+    const min = Number(el.min || 0), max = Number(el.max || 100), val = Number(el.value || 0);
+    const pct = max > min ? Math.max(0, Math.min(100, ((val - min) / (max - min)) * 100)) : 0;
+    el.style.setProperty('--fill', `${pct.toFixed(2)}%`);
+  }
+  function syncAllRangeFills() {
+    $$('input[type="range"]').forEach(updateRangeFill);
+  }
+  $$('input[type="range"]').forEach(el => {
+    const def = el.getAttribute('value') ?? el.defaultValue ?? el.value;
+    el.dataset.defaultValue = def;
+    if (!el.title) el.title = 'Double-click to reset to default';
+    else if (!/double-click/i.test(el.title)) el.title += ' (double-click to reset)';
+    updateRangeFill(el);
+    el.addEventListener('input', () => updateRangeFill(el));
+    el.addEventListener('change', () => updateRangeFill(el));
+    el.addEventListener('dblclick', e => {
+      e.preventDefault();
+      el.value = el.dataset.defaultValue;
+      updateRangeFill(el);
+      el.classList.remove('slider-reset-pop');
+      void el.offsetWidth;
+      el.classList.add('slider-reset-pop');
+      clearTimeout(el._popTimer);
+      el._popTimer = setTimeout(() => el.classList.remove('slider-reset-pop'), 220);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  });
   $$('[data-gfx]').forEach(el => {
     const handler = () => {
       const k = el.dataset.gfx;
