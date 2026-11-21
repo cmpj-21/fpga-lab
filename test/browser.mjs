@@ -66,11 +66,11 @@ try {
   await send('Browser.grantPermissions', { origin: base, permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite'] }, false);
   await send('Emulation.setFocusEmulationEnabled', { enabled: true });
   await send('Page.navigate', { url: base + '/' }); await idle();
-  check(await evaluate('!!__lab.board && __lab.state.sim.backend.startsWith("GHDL")'), 'browser compiled design with native backend and WebGL board');
+  check(await evaluate('!document.querySelector("#homeView").classList.contains("hidden") && !__lab.state.sim && document.querySelectorAll("#homeStarterGrid .home-starter-item").length===4'), 'app starts at the IDE Home interface without compiling in the background');
+  await click('#homeContinueBtn'); await idle();
+  check(await evaluate('!!__lab.board && __lab.state.sim.backend.startsWith("GHDL")'), 'entering workbench compiles design with native backend and WebGL board');
   check(await evaluate('__lab.board.model.children.length===41 && ["p1","p2","p3"].every(n=>__lab.board.model.getObjectByName(n)) && !__lab.board.model.getObjectByName("p4")'), 'Blender asset contains the corrected three-header layout');
   check(await evaluate(`(async()=>{const T=await import('three');const size=new T.Box3().setFromObject(__lab.board.model.getObjectByName('pcb')).getSize(new T.Vector3());return Math.abs(size.x-136)<.01&&Math.abs(size.z-106)<.01&&Math.abs(size.y-1.6)<.01;})()`), 'imported PCB preserves 136 by 106 by 1.6 mm model dimensions');
-  check(await evaluate('!document.querySelector("#homeView").classList.contains("hidden") && document.querySelectorAll("#homeStarterGrid .home-starter-item").length===4'), 'app starts at the IDE Home interface with project wizard and starter templates');
-  await click('#homeContinueBtn');
   check(await evaluate('document.querySelector("#homeView").classList.contains("hidden") && document.documentElement.scrollWidth === innerWidth'), 'desktop has no horizontal overflow');
   await screenshot('overhaul-desktop.png');
   const checkNavigation = async (activeIds, message) => {
@@ -237,7 +237,8 @@ try {
   await send('DOM.setFileInputFiles', { nodeId: fileInput.nodeId, files: [path.join(profile, 'trace-project.json')] }); await idle();
   check(await evaluate('__lab.state.sim.top==="dut" && !__lab.state.error'), 'file picker reloads an actual saved project through its change handler');
   const reloaded = new Promise(resolve => { onLoad = resolve; }); await send('Page.reload'); await reloaded; await idle();
-  check(await evaluate('__lab.state.sim.top==="dut" && __lab.state.bindings.led1.offset===3 && document.querySelector("#genericInput").value==="W=5"'), 'page reload restores and recompiles saved project');
+  await click('#homeContinueBtn'); await idle();
+  check(await evaluate('__lab.state.sim.top==="dut" && __lab.state.bindings.led1.offset===3 && document.querySelector("#genericInput").value==="W=5"'), 'page reload restores and recompiles saved project upon entering workbench');
 
   const replay = `$timescale 1 ns $end
 $scope module tb $end $scope module dut $end

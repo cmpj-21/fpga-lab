@@ -1139,7 +1139,7 @@ async function boot() {
   ide.openFirst();
   ide.captureBaseline();
   ide.showHome(true);
+  setStatus();
   await fetch('/api/sim/close-all', { method: 'POST' }).catch(() => {});
-  await build();
 }
 boot();
