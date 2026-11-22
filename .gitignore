@@ -2,6 +2,7 @@
 logs/
 *.log
 trace.config.json
+trace.state.json
 
 # Large simulation waveforms
 *.vcd
