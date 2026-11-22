@@ -918,7 +918,6 @@ export const DEFAULT_SETTINGS = {
   termCursorStyle: 'block',
   termCursorBlink: true,
   watchExternalFiles: true,
-  startupUnmuted: false,
   masterVolume: 50,
 };
 

@@ -31,7 +31,9 @@ export function setMuted(m) {
 export function setVolume(pct) {
   const norm = Math.max(0, Math.min(1, (Number(pct) || 0) / 100));
   masterVolume = norm;
-  if (master && !muted) master.gain.setTargetAtTime(masterVolume, ctx.currentTime, 0.02);
+  muted = norm <= 0;
+  if (master) master.gain.setTargetAtTime(muted ? 0 : masterVolume, ctx.currentTime, 0.02);
+  if (muted) stopBuzzer();
 }
 export function getVolume() { return Math.round(masterVolume * 100); }
 export function isMuted() { return muted; }

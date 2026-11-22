@@ -2234,7 +2234,6 @@ function syncSettingsUI() {
     try { skip = localStorage.getItem('trace.skipHomeExitConfirm') === '1'; } catch {}
     $('#setConfirmHomeExit').checked = !skip;
   }
-  if ($('#setStartupUnmuted')) $('#setStartupUnmuted').checked = !!appSettings.startupUnmuted;
   if ($('#setMasterVolume')) { $('#setMasterVolume').value = String(appSettings.masterVolume ?? 50); if ($('#setVolumeVal')) $('#setVolumeVal').textContent = `${appSettings.masterVolume ?? 50}%`; }
   const gfx = board?.getGfx?.();
   if (gfx && $('#setGfxQuality')) $('#setGfxQuality').value = gfx.quality || 'high';
@@ -2392,12 +2391,9 @@ function wireSettingsAndThemes() {
   });
 
   // Audio & 3D Board settings
-  $('#setStartupUnmuted')?.addEventListener('change', e => {
-    appSettings.startupUnmuted = e.target.checked;
-    applyAllSettings();
-  });
   $('#setMasterVolume')?.addEventListener('input', e => {
     appSettings.masterVolume = Number(e.target.value);
+    if (appSettings.masterVolume > 0) audio.resume();
     applyAllSettings();
   });
   $('#setGfxQuality')?.addEventListener('change', e => {
@@ -2438,6 +2434,7 @@ function wire() {
     if (!S.vcd && remainingSimCycles() <= 0) {
       return toast('Reached simulation time limit. Click Restart to continue from 0 ns.');
     }
+    if ((appSettings.masterVolume ?? 50) > 0) audio.resume();
     S.running = true; setStatus(); lastFrame = performance.now();
     recordLogEvent('info', `Simulation started (${S.sim.top}, clock=${S.clkHz} Hz)`);
   };
@@ -2450,7 +2447,6 @@ function wire() {
   $('#btnReset').onclick = restartSimulation;
   $('#speed').oninput = e => { S.speed = Number(e.target.value); $('#rateLabel').textContent = `${(10 ** ((S.speed - 55) / 25)).toFixed(1).replace('.0', '')}×`; };
   $('#clkHz').onchange = e => { S.clkHz = Number(e.target.value); accumulator = 0; saveProject(); log(`Ideal clock: ${S.clkHz} Hz. Execution speed is limited by native simulation and display throughput.`); };
-  $('#btnMute').onclick = () => { const muted = !audio.isMuted(); audio.setMuted(muted); if (!muted) audio.resume(); $('#btnMute').setAttribute('aria-pressed', String(muted)); $('#muteLabel').textContent = muted ? 'Sound off' : 'Sound on'; };
   $('#btnElab').onclick = () => ide ? ide.saveAndCompile() : build(); $('#topSelect').onchange = markDirty;
   $('#btnDemo').onclick = async () => { await stopAllSimulations(); ide?.closeDiskTabs?.(); S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; S.assignments.clear(); S.discoveredPorts = []; S.compiledAssignments = new Map(); S.compiledHash = ''; S.flashedHash = ''; S.projectDir = null; S.projectName = 'Counter demo'; S.sdf = null; $('#genericInput').value = ''; $('#topLibrary').value = 'work'; $('#standardSelect').value = '93'; renderSdf(); renderSources(); $('#topSelect').value = DEMO_TOP; $('#designTitle').textContent = 'Counter demo'; $('#designSubtitle').textContent = 'Build needed · VHDL-1993'; renderPins(); syncProjectSaveUI(); ide?.refreshProjectTree?.(); markDirty(); toast('Counter demo loaded. Click Compile when ready.'); };
   $('#btnOpenPinoutRef')?.addEventListener('click', () => openTools('pinout'));
@@ -2913,12 +2909,10 @@ async function boot() {
   await hydrateDiskState();
   matchMedia('(max-width: 1000px)').addEventListener('change', syncNavigation);
   syncNavigation();
-  audio.setMuted(!appSettings.startupUnmuted);
   audio.setVolume(appSettings.masterVolume);
-  if (appSettings.startupUnmuted && $('#muteLabel')) {
-    $('#btnMute')?.setAttribute('aria-pressed', 'false');
-    $('#muteLabel').textContent = 'Sound on';
-  }
+  const unlockAudio = () => { if ((appSettings.masterVolume ?? 50) > 0) audio.resume(); window.removeEventListener('pointerdown', unlockAudio); window.removeEventListener('keydown', unlockAudio); };
+  window.addEventListener('pointerdown', unlockAudio, { passive: true });
+  window.addEventListener('keydown', unlockAudio, { passive: true });
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
   try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { trackUiAction('3D', $('#view3d'), `${pressed ? 'press' : 'release'} ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.65); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames'), $('#waveScrollTrack'), $('#waveScrollThumb'));
