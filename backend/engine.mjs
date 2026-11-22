@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { randomUUID, createHash } from 'node:crypto';
 import readline from 'node:readline';
+import { compileSynthVerilogToModule } from './rtlCompiler.mjs';
 
 const exec = promisify(execFile);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -165,9 +166,15 @@ async function spawnFromSpec(spec, compileToken = null) {
       throw new Error('Simulation compilation cancelled.');
     }
     const top = spec.top.toLowerCase();
+    let hasAscendingPort = false;
     for (const signal of session.schema.signals) {
-      signal.driveable = [1, 3].includes(signal.direction) && signal.name.startsWith(top + '.') && !signal.name.slice(top.length + 1).includes('.');
+      const isTopPort = signal.name.startsWith(top + '.') && !signal.name.slice(top.length + 1).includes('.');
+      signal.driveable = [1, 3].includes(signal.direction) && isTopPort;
+      if (isTopPort && signal.width > 1 && Number.isInteger(signal.left) && Number.isInteger(signal.right) && signal.left < signal.right) {
+        hasAscendingPort = true;
+      }
     }
+    session.rtlCode = !hasAscendingPort ? (spec.rtlCode || null) : null;
     sessions.set(session.id, session);
     return {
       id: session.id,
@@ -179,6 +186,7 @@ async function spawnFromSpec(spec, compileToken = null) {
       diagnostics: [...spec.diagnostics],
       buildHash: spec.buildHash,
       cached: !!spec.cached,
+      hasRtl: !!session.rtlCode,
       ...session.schema,
       ...initial,
     };
@@ -321,9 +329,33 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
       }
     }
 
+    const trySynthRtl = async (workDir, extraFlags) => {
+      try {
+        const res = await exec(cfg.ghdl, ['synth', ...extraFlags, '--out=verilog', resolvedTop, ...genericArgs], {
+          cwd: workDir, env: cfg.env, windowsHide: true, timeout: 12000, maxBuffer: 4e6, signal: compileToken.controller.signal,
+        });
+        return res.stdout ? compileSynthVerilogToModule(res.stdout) : null;
+      } catch {
+        return null;
+      }
+    };
+
     const runFlags = [`--std=${standard}`, '-fsynopsys', '-fexplicit', `--work=${topLibrary}`, `--workdir=${cacheDir}`, `-P${cacheDir}`];
+    let rtlCode = null;
+    if (!sdf) {
+      const cachedRtlPath = path.join(cacheDir, 'rtl.mjs');
+      if (!genericArgs.length) {
+        rtlCode = await fs.readFile(cachedRtlPath, 'utf8').catch(() => null);
+      }
+      if (!rtlCode) {
+        rtlCode = await trySynthRtl(cacheDir, runFlags);
+        if (rtlCode && !genericArgs.length) {
+          await fs.writeFile(cachedRtlPath, rtlCode, 'utf8').catch(() => {});
+        }
+      }
+    }
     const runArgs = ['-r', ...runFlags, resolvedTop, ...genericArgs, `--vpi=${cfg.plugin}`, '--assert-level=error', '--stop-delta=10000'];
-    const spec = { cfg, runArgs, cacheDir, dataFiles, sdf, top: resolvedTop, topLibrary, standard, entities: [...entities], diagnostics: cachedDiagnostics, buildHash, cached };
+    const spec = { cfg, runArgs, cacheDir, dataFiles, sdf, top: resolvedTop, topLibrary, standard, entities: [...entities], diagnostics: cachedDiagnostics, buildHash, cached, rtlCode };
     return await spawnFromSpec(spec, compileToken);
   } catch (error) {
     throw new Error(error.stderr || error.message);

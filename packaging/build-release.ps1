@@ -176,6 +176,7 @@ if (Test-Path (Join-Path $repoRoot 'TUTORIAL.md')) {
   Copy-Item (Join-Path $repoRoot 'TUTORIAL.md') (Join-Path $stageDir 'app\TUTORIAL.md') -Force
 }
 Copy-Item (Join-Path $repoRoot 'backend\engine.mjs') (Join-Path $stageDir 'app\backend\engine.mjs') -Force
+Copy-Item (Join-Path $repoRoot 'backend\rtlCompiler.mjs') (Join-Path $stageDir 'app\backend\rtlCompiler.mjs') -Force
 Copy-Item $conptyExe (Join-Path $stageDir 'app\backend\conpty_host.exe') -Force
 Copy-Item $bridgeSrc (Join-Path $stageDir 'app\backend\bridge.c') -Force
 Copy-Item $vpiOut (Join-Path $stageDir "app\backend\$(Split-Path -Leaf $vpiOut)") -Force

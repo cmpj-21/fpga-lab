@@ -3,6 +3,7 @@ let ctx = null;
 let master = null;
 let muted = false;
 let buzzerOsc = null, buzzerFilters = null, buzzerGain = null, buzzerStopTimer = null, buzzerWave = null;
+let workletNode = null, workletLoading = null, workletGain = null;
 
 function ensure() {
   if (ctx) return ctx;
@@ -18,6 +19,7 @@ function ensure() {
 export function resume() {
   const c = ensure();
   if (c && c.state === 'suspended') c.resume();
+  ensureWorklet();
 }
 
 export function setMuted(m) {
@@ -26,6 +28,48 @@ export function setMuted(m) {
   if (m) stopBuzzer();
 }
 export function isMuted() { return muted; }
+export function sampleRate() { return ctx?.sampleRate || 48000; }
+
+function createBuzzerChain(c, srcNode, gainVal) {
+  const hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 240; hp.Q.value = 0.7;
+  const peak = c.createBiquadFilter(); peak.type = 'peaking'; peak.frequency.value = 2250; peak.Q.value = 2.0; peak.gain.value = 9;
+  const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 5600; lp.Q.value = 0.8;
+  const g = c.createGain();
+  g.gain.value = gainVal;
+  srcNode.connect(hp); hp.connect(peak); peak.connect(lp); lp.connect(g); g.connect(master);
+  return { filters: [hp, peak, lp], gain: g };
+}
+
+async function ensureWorklet() {
+  const c = ensure();
+  if (!c || !c.audioWorklet) return null;
+  if (workletNode) return workletNode;
+  if (!workletLoading) {
+    workletLoading = c.audioWorklet.addModule('/src/ui/buzzer-worklet.js')
+      .then(() => {
+        if (!c || workletNode) return workletNode;
+        const node = new AudioWorkletNode(c, 'trace-buzzer-worklet', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
+        const chain = createBuzzerChain(c, node, 0.085);
+        workletGain = chain.gain;
+        workletNode = node;
+        return node;
+      })
+      .catch(() => null);
+  }
+  return workletLoading;
+}
+
+export function pushBuzzerPcm(chunk) {
+  if (!chunk || !chunk.length || muted) return;
+  const c = ensure();
+  if (!c) return;
+  if (c.state === 'suspended') c.resume();
+  if (workletNode) {
+    workletNode.port.postMessage(chunk, [chunk.buffer]);
+  } else {
+    ensureWorklet();
+  }
+}
 
 function env(gainNode, t0, peak, dur) {
   gainNode.gain.setValueAtTime(0.0001, t0);
@@ -92,18 +136,15 @@ export function startBuzzer(freq = 2048) {
   buzzerOsc.frequency.setValueAtTime(f, t);
 
   // 12mm PCB electromagnetic/piezo buzzer acoustic body: bass rolloff, ~2.25 kHz diaphragm resonance, gentle HF rolloff
-  const hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 240; hp.Q.value = 0.7;
-  const peak = c.createBiquadFilter(); peak.type = 'peaking'; peak.frequency.value = 2250; peak.Q.value = 2.0; peak.gain.value = 9;
-  const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 5600; lp.Q.value = 0.8;
-  buzzerFilters = [hp, peak, lp];
-
-  buzzerGain = c.createGain();
+  const chain = createBuzzerChain(c, buzzerOsc, 0.0001);
+  buzzerFilters = chain.filters;
+  buzzerGain = chain.gain;
   buzzerGain.gain.setValueAtTime(0.0001, t);
   buzzerGain.gain.setTargetAtTime(0.055, t, 0.008);
-  buzzerOsc.connect(hp); hp.connect(peak); peak.connect(lp); lp.connect(buzzerGain); buzzerGain.connect(master);
   buzzerOsc.start(t);
 }
 export function stopBuzzer() {
+  if (workletNode) workletNode.port.postMessage({ type: 'flush' });
   if (!buzzerOsc || !ctx) return;
   const t = ctx.currentTime;
   if (buzzerStopTimer) { clearTimeout(buzzerStopTimer); buzzerStopTimer = null; }

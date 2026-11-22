@@ -566,6 +566,7 @@ async function closeSession(sim) { if (sim?.id) await api(`/api/sim/${sim.id}`, 
 async function stopAllSimulations() {
   pause();
   releaseKeys();
+  clearRtlRunner();
   ++S.generation;
   S.pending = [];
   S.building = false;
@@ -613,6 +614,7 @@ async function build(top = $('#topSelect').value, { quiet = false } = {}) {
   if (S.sdf) { S.sdf.instance = $('#sdfInstance').value.trim(); S.sdf.corner = $('#sdfCorner').value; if (!S.sdf.instance) return toast('Enter / for the top level, or a child instance path such as /u1.', 'err'); }
   try { S.generics = parseGenerics($('#genericInput').value); } catch (e) { return toast(e.message, 'err'); }
   pause(); S.building = true; S.error = false; const generation = ++S.generation; setStatus();
+  clearRtlRunner();
   S.pending = []; await closeSession(S.sim); S.sim = null; S.vcd = null;
   board?.clearOutputs(); sampleOutputs();
   try {
@@ -674,6 +676,123 @@ function attachSignalShortNames(result) {
     signal.short = signal.name.startsWith(result.top + '.') ? signal.name.slice(result.top.length + 1) : signal.name;
   }
 }
+let rtlRunner = null;
+let rtlSignalMap = [];
+let rtlInputMap = new Map();
+let rtlIdleBeep = null;
+
+function clearRtlRunner() {
+  rtlRunner = null;
+  rtlSignalMap = [];
+  rtlInputMap.clear();
+  rtlIdleBeep = null;
+}
+
+async function initRtlRunnerForSim() {
+  clearRtlRunner();
+  if (!S.sim?.hasRtl || S.vcd) return false;
+  try {
+    const mod = await import(`/api/sim/${S.sim.id}/rtl.mjs`);
+    const beepBind = S.bindings.beep;
+    const beepPortName = (beepBind && beepBind.bit === null) ? beepBind.signal.short : '';
+    const runner = mod.createRunner(beepPortName);
+    const sigByShort = new Map();
+    S.sim.signals.forEach((s, idx) => sigByShort.set(s.short.toLowerCase(), idx));
+    const map = [];
+    runner.meta.observed.forEach((obs, obsIdx) => {
+      const sigIdx = sigByShort.get(obs.name.toLowerCase());
+      if (sigIdx !== undefined) map.push({ obsIdx, sigIdx, width: obs.width });
+    });
+    for (const inp of runner.meta.inputs) {
+      const sigIdx = sigByShort.get(inp.name.toLowerCase());
+      if (sigIdx !== undefined) rtlInputMap.set(S.sim.signals[sigIdx].id, inp.name);
+    }
+    rtlRunner = runner;
+    rtlSignalMap = map;
+    return true;
+  } catch {
+    clearRtlRunner();
+    return false;
+  }
+}
+
+function syncAllInputsToRtl() {
+  if (!rtlRunner) return;
+  for (const [id, name] of rtlInputMap.entries()) {
+    const raw = S.inputs[id];
+    if (typeof raw === 'string' && raw.length) {
+      const num = parseInt(raw.replace(/[^01]/g, '0'), 2) >>> 0;
+      rtlRunner.setInput(name, num);
+    }
+  }
+  const beepBind = S.bindings.beep;
+  rtlRunner.setBeepPort(beepBind && beepBind.bit === null ? beepBind.signal.short : '');
+}
+
+function runRtlStepBatch(cycles, wallDt = 0) {
+  if (!rtlRunner || !S.sim) return;
+  const trueCycleFs = 1e15 / S.clkHz;
+  if (cycles > 0) {
+    const maxCycles = trueCycleFs > 0 ? Math.max(0, Math.floor((MAX_SIM_FS - S.time) / trueCycleFs)) : Infinity;
+    if (maxCycles <= 0) {
+      pause();
+      log('Reached 64-bit simulation time ceiling (~5 hours at 1 fs). Click Restart to continue from 0 ns.', 'info');
+      toast('Reached simulation time limit. Click Restart to continue from 0 ns.');
+      return;
+    }
+    if (cycles > maxCycles) cycles = maxCycles;
+  }
+  const startTimeFs = S.time;
+  const tickFs = 10 ** (15 + (S.sim.precision ?? -15));
+  const hasScalarBeep = !!(S.bindings.beep && S.bindings.beep.bit === null);
+  let audioOut = null;
+  if (cycles > 0 && S.running && hasScalarBeep && !audio.isMuted() && wallDt > 0) {
+    const aSamples = Math.max(1, Math.min(4096, Math.round(wallDt * audio.sampleRate())));
+    audioOut = new Float32Array(aSamples);
+  }
+  const res = rtlRunner.runBatch(cycles, cycles > 64 ? 96 : Math.max(1, cycles), audioOut);
+  const template = S.sim.signals.map(s => S.values.get(s.short) ?? S.inputs[s.id] ?? '0'.repeat(s.width));
+  for (const [id] of rtlInputMap.entries()) {
+    const sig = S.sim.signals.find(s => s.id === id);
+    if (sig && S.inputs[id]) {
+      const idx = S.sim.signals.indexOf(sig);
+      if (idx !== -1) template[idx] = S.inputs[id];
+    }
+  }
+  const samples = res.samples.map(snap => {
+    const row = template.slice();
+    for (let k = 0; k < rtlSignalMap.length; k++) {
+      const m = rtlSignalMap[k];
+      const v = snap.vals[m.obsIdx] >>> 0;
+      row[m.sigIdx] = m.width === 1 ? (v & 1 ? '1' : '0') : v.toString(2).padStart(m.width, '0');
+    }
+    const ticks = Math.round((startTimeFs + snap.offset * trueCycleFs) / tickFs);
+    return { time: String(ticks), values: row };
+  });
+  S.cycles += res.cyclesRun;
+  if (audioOut && hasScalarBeep) {
+    let minV = 2, maxV = -2;
+    for (let i = 0; i < audioOut.length; i++) {
+      const v = audioOut[i];
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
+    const acMoving = (maxV - minV) > 0.05;
+    const steadyDcHigh = !acMoving && minV > 0.9 && rtlIdleBeep === '0';
+    if (steadyDcHigh) {
+      audio.startBuzzer(2048);
+      buzzerState.sounding = true;
+    } else {
+      audio.pushBuzzerPcm(audioOut);
+      buzzerState.sounding = acMoving;
+    }
+    board?.setBuzzer(buzzerState.sounding);
+    consume({ samples }, trueCycleFs, true);
+  } else {
+    consume({ samples }, trueCycleFs, false);
+  }
+}
+
 async function applyInitialFlashedState({ preserveWaves = false } = {}) {
   const prevVis = preserveWaves ? new Map(waves.signals.map(s => [s.name, !!s.visible])) : null;
   const prevExp = preserveWaves ? new Map(waves.signals.map(s => [s.name, !!s.expanded])) : null;
@@ -702,7 +821,12 @@ async function applyInitialFlashedState({ preserveWaves = false } = {}) {
       const value = bits.join(''); S.inputs[signal.id] = value; S.pending.push({ id: signal.id, value });
     }
   }
-  if (!S.sim.ended && S.pending.length) {
+  if (await initRtlRunnerForSim()) {
+    syncAllInputsToRtl();
+    S.pending.length = 0;
+    runRtlStepBatch(0, 0);
+    rtlIdleBeep = /[1H]/.test(boardValue('beep')) ? '1' : /[0L]/.test(boardValue('beep')) ? '0' : null;
+  } else if (!S.sim.ended && S.pending.length) {
     S.busy = true;
     try {
       const initial = await api(`/api/sim/${S.sim.id}/step`, { cycles: 0, inputs: S.pending.splice(0), clock: clockId(), halfPeriod: halfPeriod() });
@@ -963,7 +1087,7 @@ function waveFollowSpan() {
   return Math.max(cycleFs * 40, Math.min(cycleFs * 250, effectiveCyclesPerSec * 0.25 * cycleFs));
 }
 let lastWaveDraw = 0;
-function consume(result, stepFs = 0) {
+function consume(result, stepFs = 0, skipLegacyBuzzer = false) {
   result.logs?.forEach(m => log(m, /warning/i.test(m) ? 'warning' : 'info'));
   const list = result.samples || [];
   const burstStartTimeFs = S.time;
@@ -990,7 +1114,7 @@ function consume(result, stepFs = 0) {
     }
     uartSample();
   }
-  if (list.length > 0) updateBuzzerFromSamples(list, burstStartCycles, burstStartTimeFs, stepFs);
+  if (list.length > 0 && !skipLegacyBuzzer) updateBuzzerFromSamples(list, burstStartCycles, burstStartTimeFs, stepFs);
   if (S.running && list.length > 1) {
     sampleNonDisplayOutputs();
     const anySeen = seenInBurst.some(Boolean);
@@ -1052,6 +1176,7 @@ async function advance(cycles = 1, wallSec = 0) {
   if (!Number.isInteger(cycles) || cycles < 0) return;
   if (!S.sim || S.sim.ended || S.dirty || S.error || !S.power || S.busy || S.building || S.importing || S.exporting) return;
   if (S.vcd) { stepPlayback(cycles); return; }
+  if (rtlRunner) { runRtlStepBatch(cycles, wallSec); return; }
   const ticksPerSec = 10 ** -(S.sim.precision ?? -15);
   const stepHalfPeriod = (wallSec > 0 && cycles > 0)
     ? String(Math.max(1, Math.round((0.5 * wallSec * ticksPerSec) / cycles)))
@@ -1106,7 +1231,14 @@ async function advance(cycles = 1, wallSec = 0) {
 function setInput(id, value) {
   if (!S.power || S.vcd || S.building || S.importing || S.exporting || S.dirty || S.error || !S.sim || !S.flashed || S.sim.ended || S.inputs[id] === value) return;
   clearMuxDisplayState();
-  S.inputs[id] = value; S.pending.push({ id, value }); syncKeys();
+  S.inputs[id] = value; syncKeys();
+  if (rtlRunner) {
+    const inpName = rtlInputMap.get(id);
+    if (inpName) rtlRunner.setInput(inpName, parseInt(value.replace(/[^01]/g, '0'), 2) >>> 0);
+    if (!S.running) runRtlStepBatch(0, 0);
+    return;
+  }
+  S.pending.push({ id, value });
   if (!S.running) advance(0);
 }
 function isNetActive(net) {
@@ -1695,7 +1827,7 @@ async function loadBitstream(buffer, name) {
 }
 async function loadVcd(text, name) {
   const vcd = parseVcd(text);
-  pause(); ++S.generation; await closeSession(S.sim);
+  pause(); ++S.generation; clearRtlRunner(); await closeSession(S.sim);
   const scopes = [...new Set(vcd.vars.map(v => v.scope))];
   const score = scope => vcd.vars.filter(v => v.scope === scope && (Object.hasOwn(NET_PIN, v.shortName.toLowerCase()) || v.shortName.toLowerCase() === 'seven_seg')).length;
   scopes.sort((a, b) => score(b) - score(a) || a.split('.').length - b.split('.').length);
@@ -2194,19 +2326,31 @@ function frame(now) {
       else sampleDisplayOnly();
     }
     const rate = 10 ** ((S.speed - 55) / 25);
-    const maxPerFrame = S.clkHz >= 10000 ? adaptiveMaxCycles : 4096;
-    const stepWall = dt * rate;
-    wallTimeAccum = Math.min(0.25 * rate, wallTimeAccum + stepWall);
-    accumulator += S.clkHz * stepWall;
-    accumulator = Math.min(accumulator, maxPerFrame * 2);
-    if (!S.busy) {
-      let cycles = Math.min(maxPerFrame, Math.floor(accumulator));
-      if (cycles > 1) cycles |= 1;
+    if (rtlRunner && !S.vcd) {
+      const frameDt = Math.min(0.04, dt);
+      const stepWall = frameDt * rate;
+      accumulator += S.clkHz * stepWall;
+      accumulator = Math.min(accumulator, 5000000);
+      const cycles = Math.min(2500000, Math.floor(accumulator));
       if (Number.isInteger(cycles) && cycles > 0) {
-        const wallSec = wallTimeAccum;
-        wallTimeAccum = 0;
         accumulator = Math.max(0, accumulator - cycles);
-        advance(cycles, wallSec);
+        runRtlStepBatch(cycles, frameDt);
+      }
+    } else {
+      const maxPerFrame = S.clkHz >= 10000 ? adaptiveMaxCycles : 4096;
+      const stepWall = dt * rate;
+      wallTimeAccum = Math.min(0.25 * rate, wallTimeAccum + stepWall);
+      accumulator += S.clkHz * stepWall;
+      accumulator = Math.min(accumulator, maxPerFrame * 2);
+      if (!S.busy) {
+        let cycles = Math.min(maxPerFrame, Math.floor(accumulator));
+        if (cycles > 1) cycles |= 1;
+        if (Number.isInteger(cycles) && cycles > 0) {
+          const wallSec = wallTimeAccum;
+          wallTimeAccum = 0;
+          accumulator = Math.max(0, accumulator - cycles);
+          advance(cycles, wallSec);
+        }
       }
     }
   }

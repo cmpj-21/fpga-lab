@@ -1199,10 +1199,14 @@ const server = http.createServer(async (req, res) => {
       if (openCount > 0) appendLogLine('info', 'engine', `Stopped and closed ${openCount} active simulation session(s)`);
       return send(res, 200, { ok: true });
     }
-    const match = url.pathname.match(/^\/api\/sim\/([a-f0-9-]+)(?:\/(step|vcd|close|restart))?$/);
+    const match = url.pathname.match(/^\/api\/sim\/([a-f0-9-]+)(?:\/(step|vcd|close|restart|rtl\.mjs))?$/);
     if (match) {
       const session = sessions.get(match[1]);
       if (!session) return send(res, 404, { error: 'Simulation session ended. Build the design again.' });
+      if (match[2] === 'rtl.mjs' && req.method === 'GET') {
+        if (!session.rtlCode) return send(res, 404, 'RTL kernel not available.', 'text/plain');
+        return send(res, 200, session.rtlCode, 'text/javascript; charset=utf-8', { 'Cache-Control': 'no-store' });
+      }
       if (req.method === 'DELETE' || (match[2] === 'close' && req.method === 'POST')) {
         await session.close();
         appendLogLine('info', 'engine', `Closed simulation session ${match[1].slice(0, 8)}`);
