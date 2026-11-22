@@ -346,7 +346,7 @@ function setStatus() {
   $('#btnRun').classList.toggle('running', S.running); $('#runLabel').textContent = S.running ? 'Pause' : 'Run';
   $('#btnRun').setAttribute('aria-label', S.running ? 'Pause simulation' : 'Run simulation');
   const locked = S.building || S.importing || S.exporting;
-  for (const input of $$('#pinBody input, #sdfControls input, #sdfControls select, .src-name, .src-x')) input.disabled = locked;
+  for (const input of $$('#pinBody input, #pinBody .pin-pick-btn, #sdfControls input, #sdfControls select, .src-name, .src-x')) input.disabled = locked;
   $('#btnRun').disabled = $('#btnStep').disabled = locked || !S.power || !S.sim || (!S.flashed && !S.vcd) || S.sim.ended || S.dirty || S.error;
   $('#btnElab').disabled = locked;
   $('#btnReset').disabled = locked || !S.sim || (!S.flashed && !S.vcd) || S.dirty;
@@ -434,21 +434,24 @@ function syncProjectSaveUI() {
     $('#projectRootSummary').title = saved ? `Project folder: ${S.projectDir}\nRight-click for folder actions` : 'Unsaved workspace (File → Save Project As… to save on disk)';
   }
 }
-async function saveProjectToDisk({ saveAs = false, quiet = false } = {}) {
+async function saveProjectToDisk({ saveAs = false, quiet = false, dir: overrideDir = null, autoSubfolder = '' } = {}) {
   if (!S.sources.length) { toast('Add VHDL source files before saving.', 'err'); return false; }
   if (ide && !ide.validateLibraries()) return false;
   ide?.commitAll();
   renderSources();
-  let dir = saveAs ? null : S.projectDir;
+  let dir = overrideDir || (saveAs ? null : S.projectDir);
   if (!dir) {
     try {
+      const slugFallback = (S.projectName || $('#topSelect')?.value || S.sources[0]?.name.replace(/\.[^.]+$/, '') || 'fpga_project')
+        .trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'fpga_project';
       const picked = ide?.openFileBrowserModal
         ? await ide.openFileBrowserModal({
             mode: 'folder',
             title: 'Choose FPGA Project Folder',
             eyebrow: 'SAVE PROJECT TO DISK',
             initialDir: S.projectDir || currentHdlRoot || '',
-            confirmText: 'Select Folder',
+            autoSubfolder: autoSubfolder || (saveAs && !S.projectDir ? slugFallback : ''),
+            confirmText: 'Save Project Here',
           })
         : await api('/api/project/pick-folder', { initialDir: S.projectDir || '' });
       if (picked.cancelled || !picked.dir) return false;
@@ -2829,7 +2832,7 @@ function wire() {
     if (mod && !e.altKey && e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); saveProjectToDisk({ saveAs: false }); return; }
     if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); ide?.saveActiveFile(); return; }
     if (!mod && !e.altKey && !e.shiftKey && e.key === 'F7') { e.preventDefault(); ide?.saveAndCompile(); return; }
-    if (mod && !e.altKey && e.key.toLowerCase() === 'b') { e.preventDefault(); flashToBoard(); return; }
+    if (mod && !e.altKey && e.key.toLowerCase() === 'b') { e.preventDefault(); ide?.saveAndFlash ? ide.saveAndFlash() : flashToBoard(); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'e') { e.preventDefault(); ide?.setEditorPaneOpen(!$('#sourceDialog')?.open); return; }
     if (!mod && e.altKey && e.key.toLowerCase() === 'b') { e.preventDefault(); ide?.setBoardPaneOpen(!ide.boardOpen); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'o') { e.preventDefault(); $('#fileInput').click(); return; }
@@ -3209,7 +3212,7 @@ async function boot() {
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
   try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { trackUiAction('3D', $('#view3d'), `${pressed ? 'press' : 'release'} ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.65); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames'), $('#waveScrollTrack'), $('#waveScrollThumb'));
-  ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, restartSimulation, restoreSavedCompileState, renderSources, openTools, openBottomTab, syncNavigation, projectData, saveProject, persistAppState, prepareExit, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations, reloadQsfText, openSettings: tab => openSettingsModal(tab), toggleScheme });
+  ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, restartSimulation, restoreSavedCompileState, renderSources, openTools, openBottomTab, syncNavigation, projectData, saveProject, persistAppState, prepareExit, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations, reloadQsfText, getHdlRoot: () => currentHdlRoot, openSettings: tab => openSettingsModal(tab), toggleScheme });
   applyTheme(activeThemeId);
   wire();
   wireSettingsAndThemes();

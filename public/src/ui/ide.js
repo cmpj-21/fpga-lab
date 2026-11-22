@@ -214,6 +214,24 @@ end architecture rtl;
   return template(`${entity}.vhd`);
 }
 
+function buildStarterAssignments(kind) {
+  const fullBoard = [
+    [23, 'clk'], [25, 'reset_btn'],
+    [88, 's1'], [89, 's2'], [90, 's3'], [91, 's4'],
+    [87, 'led1'], [86, 'led2'], [85, 'led3'], [84, 'led4'],
+    [133, 'dtube1'], [135, 'dtube2'], [136, 'dtube3'], [137, 'dtube4'],
+    [128, 'seven_seg[0]'], [121, 'seven_seg[1]'], [125, 'seven_seg[2]'], [129, 'seven_seg[3]'],
+    [132, 'seven_seg[4]'], [126, 'seven_seg[5]'], [124, 'seven_seg[6]'], [127, 'seven_seg[7]'],
+    [110, 'beep'],
+  ];
+  if (kind === 'counter') return [...fullBoard, [114, 'uart_txd']];
+  if (kind === 'board_io') return fullBoard;
+  if (kind === 'keys_leds') return [[88, 's1'], [89, 's2'], [90, 's3'], [91, 's4'], [87, 'led1'], [86, 'led2'], [85, 'led3'], [84, 'led4']];
+  if (kind === 'buzzer') return [[23, 'clk'], [25, 'reset_btn'], [88, 's1'], [110, 'beep'], [87, 'led1']];
+  if (kind === 'uart_tx') return [[23, 'clk'], [25, 'reset_btn'], [88, 's1'], [114, 'uart_txd'], [87, 'led1']];
+  return [];
+}
+
 export function parseDiagnostics(text) {
   const found = [];
   for (const raw of String(text || '').split(/\r?\n/)) {
@@ -820,14 +838,27 @@ export function createIde(api) {
       return false;
     }
   }
-  function saveAndCompile() {
+  async function ensureSavedBeforeRunAction(verb = 'compiling') {
+    if (!S.projectDir && S.sources.length && api.saveProjectToDisk) {
+      const saved = await api.saveProjectToDisk({ saveAs: true });
+      if (!saved) {
+        api.toast(`Save the project folder first before ${verb}.`, 'err');
+        return false;
+      }
+    }
+    return true;
+  }
+  async function saveAndCompile() {
     if (S.building || S.importing || S.exporting) return false;
     if (!validateLibraries()) return false;
-    commitAll(); api.renderSources(); api.markDirty();
+    commitAll(); api.renderSources();
+    if (!(await ensureSavedBeforeRunAction('compiling'))) return false;
+    api.markDirty();
     return api.build();
   }
-  function saveAndFlash() {
+  async function saveAndFlash() {
     if (S.building || S.importing || S.exporting) return false;
+    if (!(await ensureSavedBeforeRunAction('flashing'))) return false;
     return api.flashToBoard ? api.flashToBoard() : saveAndCompile();
   }
   function syncFromSources() {
@@ -1905,31 +1936,47 @@ export function createIde(api) {
         sources.push({ name: raw, text: template(raw), library: 'work' });
       }
     }
+    const hdlRoot = api.getHdlRoot?.() || '';
+    const picked = await openFileBrowserModal({
+      mode: 'folder',
+      title: `Choose Folder for "${name || cleanEntity}"`,
+      eyebrow: 'NEW FPGA PROJECT LOCATION',
+      initialDir: hdlRoot,
+      autoSubfolder: cleanEntity,
+      confirmText: 'Create Project Here',
+    });
+    if (!picked || picked.cancelled || !picked.dir) return;
+
+    $('#newProjectDialog')?.close();
+    await api.stopAllSimulations?.();
     for (const tabName of [...docs.keys()]) closeTab(tabName, true);
     virtualDirs.clear(); expandedDirs.clear(); diskTree = null; selectedNode = null;
+    const assignments = buildStarterAssignments(templateKind);
     const project = {
       format: 'trace-project',
       version: 1,
       sources,
-      assignments: [],
+      assignments,
       top: cleanEntity,
       topLibrary: 'work',
       standard,
       generics: '',
       sdf: null,
-      projectDir: null,
+      projectDir: picked.dir,
       projectName: name || cleanEntity,
     };
-    $('#newProjectDialog')?.close();
     api.restoreProject(project);
     for (const src of sources) openFile(src.name, { focus: false });
     openFile(fileName);
+    await api.saveProjectToDisk?.({ dir: picked.dir, quiet: true });
     captureBaseline(name || cleanEntity, { prevRecents, prevStorage });
     api.syncProjectSaveUI?.();
     showHome(false);
     api.markDirty();
-    api.toast(`Created ${name || cleanEntity} (${sources.length} file${sources.length === 1 ? '' : 's'}). Click Build & Compile when ready.`);
-    api.logEvent?.('info', `Project created: ${name || cleanEntity} (top=${cleanEntity}, std=VHDL-${standard}, files=${sources.map(s => s.name).join(', ')})`);
+    api.toast(assignments.length
+      ? `Created ${name || cleanEntity} with ${assignments.length} default pins mapped. Click Build & Compile when ready.`
+      : `Created ${name || cleanEntity} (${sources.length} file${sources.length === 1 ? '' : 's'}). Click Build & Compile when ready.`);
+    api.logEvent?.('info', `Project created: ${name || cleanEntity} in ${picked.dir} (top=${cleanEntity}, std=VHDL-${standard}, pins=${assignments.length})`);
   }
   function populateHomeHdl(groups = []) {
     const container = $('#homeHdlList');
@@ -2036,7 +2083,18 @@ export function createIde(api) {
     selectedPath: '',
     selectedType: '',
     extensions: null,
+    autoSubfolder: '',
+    createdDir: '',
   };
+
+  function resolveAutoFolderPath(baseDir) {
+    const raw = String(baseDir || '').trim().replace(/[\\/]+$/, '');
+    if (!raw || fbState.mode !== 'folder' || !fbState.autoSubfolder) return baseDir;
+    if (fbState.createdDir && raw.toLowerCase() === fbState.createdDir.toLowerCase()) return raw;
+    const baseName = baseNameOf(raw.replace(/\\/g, '/')).toLowerCase();
+    if (baseName === fbState.autoSubfolder.toLowerCase()) return raw;
+    return `${raw}\\${fbState.autoSubfolder}`;
+  }
 
   function fmtBytes(bytes) {
     if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
@@ -2178,12 +2236,13 @@ export function createIde(api) {
       };
       listHost.append(tr);
     }
+    const effectiveFolder = fbState.mode === 'folder' ? resolveAutoFolderPath(fbState.selectedPath || fbState.curDir) : '';
     if (fbState.mode === 'folder' && $('#fbFileNameInput')) {
-      $('#fbFileNameInput').value = fbState.selectedPath || fbState.curDir;
+      $('#fbFileNameInput').value = effectiveFolder;
     }
     if ($('#fbSelectionHint')) {
       $('#fbSelectionHint').textContent = fbState.mode === 'folder'
-        ? `Target: ${fbState.selectedPath || fbState.curDir}`
+        ? `Target: ${effectiveFolder}`
         : fbState.selectedPath ? baseNameOf(fbState.selectedPath.replace(/\\/g, '/')) : '';
     }
   }
@@ -2192,7 +2251,7 @@ export function createIde(api) {
     try {
       let targetPath = '';
       if (fbState.mode === 'folder') {
-        targetPath = ($('#fbFileNameInput')?.value || '').trim() || fbState.selectedPath || fbState.curDir;
+        targetPath = ($('#fbFileNameInput')?.value || '').trim() || resolveAutoFolderPath(fbState.selectedPath || fbState.curDir);
       } else if (fbState.mode === 'save-file') {
         const fname = ($('#fbFileNameInput')?.value || '').trim();
         if (!fname) { api.toast('Enter a file name first.', 'err'); return; }
@@ -2230,6 +2289,7 @@ export function createIde(api) {
     defaultName = '',
     confirmText = 'Select',
     extensions = null,
+    autoSubfolder = '',
   } = {}) {
     const dlg = $('#fileBrowserDialog');
     if (!dlg) return Promise.resolve({ cancelled: true });
@@ -2240,6 +2300,8 @@ export function createIde(api) {
     }
     fbState.mode = mode;
     fbState.extensions = extensions;
+    fbState.autoSubfolder = autoSubfolder || '';
+    fbState.createdDir = '';
     fbState.selectedPath = '';
     fbState.selectedType = '';
     if ($('#fbEyebrow')) $('#fbEyebrow').textContent = eyebrow;
@@ -2803,7 +2865,7 @@ export function createIde(api) {
     }
     if ($('#saveFileBtn')) $('#saveFileBtn').onclick = () => saveActiveFile();
     $('#saveSource').onclick = saveAndCompile;
-    if ($('#btnFlash')) $('#btnFlash').onclick = () => api.flashToBoard?.();
+    if ($('#btnFlash')) $('#btnFlash').onclick = saveAndFlash;
     $('#btnWordWrap')?.addEventListener('click', () => toggleWordWrap());
     syncWordWrapUI();
     $$('#mdModeSwitch [data-md-mode]').forEach(btn => {
@@ -2839,6 +2901,7 @@ export function createIde(api) {
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.error || 'Could not create folder.');
         $('#fbMkdirForm')?.classList.add('hidden');
+        fbState.createdDir = data.dir;
         await fbNavigate(data.dir);
         api.toast(`Created folder "${data.name}".`, 'ok');
       } catch (err) {
