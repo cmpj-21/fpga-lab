@@ -2649,13 +2649,6 @@ export function createIde(api) {
       requestAnimationFrame(() => activeTerm()?.xterm?.focus());
     });
     $('#termNewTabBtn')?.addEventListener('click', () => createTerminalTab());
-    $('#termClearBtn')?.addEventListener('click', () => {
-      const term = activeTerm();
-      if (!term) return;
-      term.xterm?.clear();
-      sendTermWrite(term, term.shell === 'cmd' ? 'cls\r' : 'cls\r');
-      term.xterm?.focus();
-    });
     $('#termCopyBtn')?.addEventListener('click', async () => {
       const term = activeTerm();
       if (!term?.xterm) return;
