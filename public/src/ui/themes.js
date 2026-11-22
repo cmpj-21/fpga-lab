@@ -911,7 +911,7 @@ export const DEFAULT_SETTINGS = {
   editorAutoIndent: true,
   waveTimeUnit: 'auto',
   waveMaxSamples: 40000,
-  waveFollow: true,
+  defaultWaveMode: 'fit',
   defaultStandard: '93',
   defaultClkHz: 50000000,
   termFontSize: 12,

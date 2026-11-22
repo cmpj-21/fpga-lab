@@ -14,7 +14,13 @@ export class WaveViewer {
     this.dpr = Math.min(devicePixelRatio || 1, 2);
     this.setTheme();
     new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
-    canvas.addEventListener('pointerdown', e => { this.drag = { x: e.clientX, start: this.tStart, end: this.tEnd }; canvas.setPointerCapture(e.pointerId); this.onNavigate?.(); });
+    canvas.addEventListener('pointerdown', e => {
+      canvas.setPointerCapture(e.pointerId);
+      const allowed = this.canPan ? this.canPan() : true;
+      if (!allowed) { this.drag = null; this.onLockedAction?.('pan'); return; }
+      this.drag = { x: e.clientX, start: this.tStart, end: this.tEnd };
+      this.onNavigate?.();
+    });
     canvas.addEventListener('pointermove', e => {
       const rect = canvas.getBoundingClientRect(); const fraction = (e.clientX - rect.left) / rect.width;
       this.cursorT = Math.max(0, this.tStart + fraction * (this.tEnd - this.tStart));
@@ -33,6 +39,7 @@ export class WaveViewer {
       track.addEventListener('pointerdown', e => {
         if (e.button !== 0) return;
         e.preventDefault();
+        if (this.canPan && !this.canPan()) { this.onLockedAction?.('pan'); return; }
         this.onNavigate?.();
         const rect = track.getBoundingClientRect();
         const { total, span, scrollable, maxLeft } = this.scrollMetrics();
@@ -62,28 +69,34 @@ export class WaveViewer {
         track.addEventListener(ev, () => { this.scrollDrag = null; thumb.classList.remove('dragging'); });
       }
       track.addEventListener('keydown', e => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+        e.preventDefault();
+        if (this.canPan && !this.canPan()) { this.onLockedAction?.('pan'); return; }
         const { span, scrollable } = this.scrollMetrics();
-        if (e.key === 'ArrowLeft') { e.preventDefault(); this.onNavigate?.(); this.tStart = Math.max(0, this.tStart - span * 0.2); this.tEnd = this.tStart + span; this.draw(); }
-        else if (e.key === 'ArrowRight') { e.preventDefault(); this.onNavigate?.(); this.tStart = Math.min(scrollable, this.tStart + span * 0.2); this.tEnd = this.tStart + span; this.draw(); }
-        else if (e.key === 'Home') { e.preventDefault(); this.onNavigate?.(); this.tStart = 0; this.tEnd = span; this.draw(); }
-        else if (e.key === 'End') { e.preventDefault(); this.onNavigate?.(); this.tStart = Math.max(0, this.lastTime - span); this.tEnd = this.tStart + span; this.draw(); }
+        if (e.key === 'ArrowLeft') { this.onNavigate?.(); this.tStart = Math.max(0, this.tStart - span * 0.2); this.tEnd = this.tStart + span; this.draw(); }
+        else if (e.key === 'ArrowRight') { this.onNavigate?.(); this.tStart = Math.min(scrollable, this.tStart + span * 0.2); this.tEnd = this.tStart + span; this.draw(); }
+        else if (e.key === 'Home') { this.onNavigate?.(); this.tStart = 0; this.tEnd = span; this.draw(); }
+        else if (e.key === 'End') { this.onNavigate?.(); this.tStart = Math.max(0, this.lastTime - span); this.tEnd = this.tStart + span; this.draw(); }
       });
     }
     canvas.addEventListener('wheel', e => {
       const isHorizontalPan = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY);
       if (e.ctrlKey) {
         e.preventDefault();
-        this.onNavigate?.();
         const rect = canvas.getBoundingClientRect();
         const span = this.tEnd - this.tStart;
         const cursorT = this.tStart + ((e.clientX - rect.left) / rect.width) * span;
         const lineFactor = e.deltaMode === 1 ? 20 : e.deltaMode === 2 ? rect.height : 1;
-        const dy = e.deltaY * lineFactor;
-        this.zoom(Math.exp(dy * 0.005), cursorT);
+        const factor = Math.exp((e.deltaY * lineFactor) * 0.005);
+        if (this.onCustomZoom) { this.onCustomZoom(factor, cursorT); return; }
+        if (this.canZoom && !this.canZoom()) { this.onLockedAction?.('zoom'); return; }
+        this.onNavigate?.();
+        this.zoom(factor, cursorT);
         return;
       }
       if (isHorizontalPan) {
         e.preventDefault();
+        if (this.canPan && !this.canPan()) { this.onLockedAction?.('pan'); return; }
         this.onNavigate?.();
         const rect = canvas.getBoundingClientRect();
         const span = this.tEnd - this.tStart;

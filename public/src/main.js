@@ -28,16 +28,19 @@ import {
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
-const S = { sources: [], sim: null, flashed: false, compiledHash: '', flashedHash: '', projectDir: null, projectName: '', running: false, power: true, building: false, busy: false, clkHz: 50000000, speed: 55, time: 0, inputs: {}, assignments: new Map(), compiledAssignments: new Map(), discoveredPorts: [], bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0 };
+const S = { sources: [], sim: null, flashed: false, compiledHash: '', flashedHash: '', projectDir: null, projectName: '', running: false, power: true, building: false, busy: false, clkHz: 50000000, speed: 55, time: 0, inputs: {}, assignments: new Map(), compiledAssignments: new Map(), discoveredPorts: [], bindings: {}, values: new Map(), pending: [], generation: 0, cycles: 0, vcd: null, standard: '93', generics: {}, topLibrary: 'work', dirty: false, error: false, importing: false, truthBusy: false, exporting: false, keys: {}, dip: 0, waveMode: 'fit', followZoomFactor: 1 };
 let board, waves, ide, toastTimer, sourceIndex, consoleCount = 0, logFile = '', actionLogFile = '', currentHdlRoot = '', reportCount = 0;
 let lastFrame = performance.now(), accumulator = 0, wallTimeAccum = 0, lastDraw = 0;
 let actionSeq = 0, lastErrorSeq = 0, lastErrorMsg = '', actionFlushTimer = 0, eventFlushTimer = 0, stateFlushTimer = 0;
+let manualStepping = false, lastWaveLockToast = 0;
 const uart = new UartReceiver();
 const reported = new Map();
 const uiActions = [], pendingActions = [], pendingEvents = [];
 let pendingStatePatch = null;
 let appSettings = loadStoredSettings();
 let customThemes = loadStoredCustomThemes();
+let projectWaveModes = {};
+try { projectWaveModes = JSON.parse(localStorage.getItem('trace.projectWaveModes.v1') || '{}') || {}; } catch { projectWaveModes = {}; }
 let activeThemeId = normalizeThemeId(document.documentElement.dataset.theme) || 'trace-dark';
 let customDraft = null;
 
@@ -230,7 +233,7 @@ function trackUiAction(kind, el, detail = '') {
     recordActionLine(`#${id} ${kind.padEnd(8)} ${target} -> BLOCKED (0ms) [reason:control disabled | status:${before.status} | view:${before.view}]`);
     return;
   }
-  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnTruthCopy|#btnTruthExport|#saveFileBtn|#btnRefreshExplorer|#homeConfirmSave|#psSave|#btnVcd|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#btnChangeHdlRoot|#homeChangeHdlRoot|#waveZoomIn|#waveZoomOut|#waveFit|#btnResetView|#btnCenterComp|#ciCenter|#ciPins|#btnOpenPinoutRef|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
+  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnTruthCopy|#btnTruthExport|#saveFileBtn|#btnRefreshExplorer|#homeConfirmSave|#psSave|#btnVcd|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#btnChangeHdlRoot|#homeChangeHdlRoot|#waveZoomIn|#waveZoomOut|#waveModeGroup|#btnResetView|#btnCenterComp|#ciCenter|#ciPins|#btnOpenPinoutRef|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
   setTimeout(async () => {
     await new Promise(r => requestAnimationFrame(r));
     const waitStart = performance.now();
@@ -361,7 +364,6 @@ function setStatus() {
 function pause() {
   S.running = false; accumulator = 0; wallTimeAccum = 0; clearMuxDisplayState(); resetBuzzerTracker(false); sampleOutputs(); setStatus();
   if (waves && !$('#app')?.classList.contains('no-waves')) {
-    if ($('#waveFollow')?.checked && S.time > 0) waves.follow(S.time, waveFollowSpan());
     waves.draw();
   }
 }
@@ -414,6 +416,8 @@ function projectData() {
     flashedHash: S.flashedHash || '',
     compiledAssignments: [...S.compiledAssignments],
     discoveredPorts: S.discoveredPorts || [],
+    waveMode: S.waveMode || 'fit',
+    followZoomFactor: S.followZoomFactor || 1,
   };
 }
 function syncProjectSaveUI() {
@@ -504,6 +508,12 @@ async function openProjectFromDiskPath(targetPath = '', { promptIfInWorkbench = 
     restoreProject(result.project);
     S.projectDir = result.dir;
     S.projectName = result.projectName;
+    const remembered = projectWaveModes[result.dir.toLowerCase()];
+    if (remembered && ['follow', 'fit', 'free'].includes(remembered.waveMode)) {
+      S.waveMode = remembered.waveMode;
+      S.followZoomFactor = Number(remembered.followZoomFactor) > 0 ? Number(remembered.followZoomFactor) : 1;
+      syncWaveModeUI();
+    }
     saveProject();
     ide?.updateTermCwd?.(S.projectDir);
     ide?.openFirst();
@@ -544,6 +554,10 @@ function restoreProject(project) {
   } else {
     S.clkHz = Number($('#clkHz')?.value) || 50000000;
   }
+  const mode = ['follow', 'fit', 'free'].includes(project.waveMode) ? project.waveMode : (appSettings.defaultWaveMode || 'fit');
+  S.waveMode = mode;
+  S.followZoomFactor = Number.isFinite(Number(project.followZoomFactor)) && Number(project.followZoomFactor) > 0 ? Number(project.followZoomFactor) : 1;
+  syncWaveModeUI();
   renderSources(); $('#topSelect').value = (project.top || '').toLowerCase(); renderSdf(); renderPins(); syncProjectSaveUI();
   const topName = project.top || allEntities()[0] || S.sources[0]?.name || 'No design';
   $('#designTitle').textContent = S.projectName || (topName === DEMO_TOP ? 'Counter demo' : topName);
@@ -816,7 +830,6 @@ async function applyInitialFlashedState({ preserveWaves = false } = {}) {
   const prevVis = preserveWaves ? new Map(waves.signals.map(s => [s.name, !!s.visible])) : null;
   const prevExp = preserveWaves ? new Map(waves.signals.map(s => [s.name, !!s.expanded])) : null;
   S.time = 0; S.cycles = 0; S.inputs = {}; S.values.clear(); S.pending = [];
-  if ($('#waveFollow')) $('#waveFollow').checked = true;
   buildBindings();
   buildWaves(prevVis, prevExp);
   renderVirtualInputs();
@@ -858,7 +871,9 @@ async function applyInitialFlashedState({ preserveWaves = false } = {}) {
   if ($('#waveCursor')) $('#waveCursor').textContent = 'Cursor —';
   syncKeys();
   setStatus();
-  waves.fit();
+  if (S.waveMode === 'follow' && S.time > 0) waves.follow(S.time, autoFollowSpan());
+  else if (S.waveMode === 'fit') waves.fit();
+  else waves.draw();
 }
 async function restartSimulation() {
   if (!S.sim || S.building || S.importing || S.exporting) return;
@@ -1092,19 +1107,142 @@ function sampleOutputs() {
   sampleNonDisplayOutputs();
   sampleDisplayOnly();
 }
-function waveFollowSpan() {
-  const rate = 10 ** ((S.speed - 55) / 25);
-  if (S.running) {
-    return Math.max(1e12, Math.min(2.5e15 * rate, Math.max(S.time, 2e14)));
+let cachedVhdlTimeScaleKey = '';
+let cachedVhdlTimeScaleFs = 0;
+
+function extractVhdlTimeHintFs() {
+  const key = S.sources.map(s => `${s.name}\0${s.text.length}\0${s.text.slice(0, 120)}`).join('|');
+  if (key === cachedVhdlTimeScaleKey) return cachedVhdlTimeScaleFs;
+  cachedVhdlTimeScaleKey = key;
+  const unitMult = { fs: 1, ps: 1e3, ns: 1e6, us: 1e9, ms: 1e12, sec: 1e15, s: 1e15 };
+  const matches = [];
+  for (const src of S.sources) {
+    if (!/\.(vhd|vhdl)$/i.test(src.name)) continue;
+    const text = src.text.replace(/--[^\n]*/g, ' ');
+    const re = /\b(\d+(?:\.\d+)?)\s*(fs|ps|ns|us|ms|sec|s)\b/gi;
+    let m;
+    while ((m = re.exec(text)) && matches.length < 64) {
+      const val = Number(m[1]) * (unitMult[m[2].toLowerCase()] || 0);
+      if (val > 0 && Number.isFinite(val)) matches.push(val);
+    }
   }
-  const cycleFs = 1e15 / S.clkHz;
-  const maxPerFrame = S.clkHz >= 100000 ? 4096 : 512;
-  const effectiveCyclesPerSec = Math.min(maxPerFrame * 30, S.clkHz * rate);
-  if (clockId() === -1) {
-    return Math.max(cycleFs * 12, effectiveCyclesPerSec * 2.5 * cycleFs);
-  }
-  return Math.max(cycleFs * 40, Math.min(cycleFs * 250, effectiveCyclesPerSec * 0.25 * cycleFs));
+  if (!matches.length) { cachedVhdlTimeScaleFs = 0; return 0; }
+  matches.sort((a, b) => a - b);
+  cachedVhdlTimeScaleFs = matches[Math.floor(matches.length * 0.5)];
+  return cachedVhdlTimeScaleFs;
 }
+
+function estimateSignalCadenceFs() {
+  const sigs = waves?.signals || [];
+  const deltas = [];
+  for (const sig of sigs) {
+    const short = sig.name.split('.').pop()?.toLowerCase() || '';
+    if (short === 'clk' || short === 'clock') continue;
+    const samples = sig.samples;
+    if (!samples || samples.length < 2) continue;
+    const start = Math.max(1, samples.length - 64);
+    for (let i = start; i < samples.length; i++) {
+      const d = samples[i].t - samples[i - 1].t;
+      if (d > 0) deltas.push(d);
+    }
+  }
+  if (!deltas.length) return 0;
+  deltas.sort((a, b) => a - b);
+  return deltas[Math.floor(deltas.length * 0.5)];
+}
+
+function autoFollowSpan() {
+  const cycleFs = 1e15 / Math.max(1, S.clkHz || 50000000);
+  const cadenceFs = estimateSignalCadenceFs();
+  const vhdlHintFs = extractVhdlTimeHintFs();
+  const zoomMult = S.followZoomFactor || 1;
+  const unitBase = { fs: 100, ps: 1e5, ns: 1e8, us: 1e11, ms: 1e14, s: 2e15 };
+
+  let baseSpan;
+  if (cadenceFs > 0) {
+    baseSpan = cadenceFs * 32;
+  } else if (S.clkHz <= 10000) {
+    baseSpan = cycleFs * 20;
+  } else if (vhdlHintFs > 0) {
+    baseSpan = vhdlHintFs * 20;
+  } else if (waves?.timeUnit && waves.timeUnit !== 'auto' && unitBase[waves.timeUnit]) {
+    baseSpan = unitBase[waves.timeUnit];
+  } else {
+    baseSpan = S.time > 0 && S.time < 5000 * cycleFs ? cycleFs * 40 : 2e14;
+  }
+
+  const minSpan = Math.max(cycleFs * 8, 1e4);
+  const maxSpan = 6e16;
+  return Math.max(minSpan, Math.min(maxSpan, baseSpan * zoomMult));
+}
+
+function syncWaveModeUI() {
+  const mode = S.waveMode || 'fit';
+  $$('#waveModeGroup [data-wave-mode]').forEach(btn => {
+    const active = btn.dataset.waveMode === mode;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-checked', String(active));
+  });
+  $('#waveZoomIn')?.classList.toggle('wave-locked-ctl', mode === 'fit');
+  $('#waveZoomOut')?.classList.toggle('wave-locked-ctl', mode === 'fit');
+  const tip = mode === 'free'
+    ? 'Drag thumb or click track to scroll across waveform timeline'
+    : `Viewport locked in ${mode === 'fit' ? 'Fit' : 'Follow'} mode — switch to Free to pan manually`;
+  if ($('#waveScrollWrap')) $('#waveScrollWrap').title = tip;
+}
+
+function persistProjectWaveMode() {
+  if (S.projectDir) {
+    projectWaveModes[S.projectDir.toLowerCase()] = { waveMode: S.waveMode, followZoomFactor: S.followZoomFactor || 1 };
+    try { localStorage.setItem('trace.projectWaveModes.v1', JSON.stringify(projectWaveModes)); } catch {}
+    persistAppState({ projectWaveModes });
+  }
+  saveProject();
+}
+
+function setWaveMode(nextMode, { save = true, resetFollowZoom = true } = {}) {
+  const mode = ['follow', 'fit', 'free'].includes(nextMode) ? nextMode : 'fit';
+  const wasSame = S.waveMode === mode;
+  S.waveMode = mode;
+  if (mode === 'follow' && resetFollowZoom && wasSame) S.followZoomFactor = 1;
+  syncWaveModeUI();
+  if (waves) {
+    if (mode === 'fit') waves.fit();
+    else if (mode === 'follow') {
+      if (S.time > 0) waves.follow(S.time, autoFollowSpan());
+      else waves.fit();
+    }
+    waves.draw();
+  }
+  if (save) persistProjectWaveMode();
+}
+
+function notifyWaveLocked(actionKind) {
+  const now = performance.now();
+  if (now - lastWaveLockToast < 2400) return;
+  lastWaveLockToast = now;
+  const modeLabel = S.waveMode === 'fit' ? 'Fit' : 'Follow';
+  const msg = actionKind === 'zoom' && S.waveMode === 'fit'
+    ? 'Locked in Fit mode — switch to Free to zoom or pan.'
+    : `Locked in ${modeLabel} mode — switch to Free to pan manually.`;
+  toast(msg);
+}
+
+function zoomWaveform(factor, cursorT) {
+  if (S.waveMode === 'fit') {
+    notifyWaveLocked('zoom');
+    return;
+  }
+  if (S.waveMode === 'follow') {
+    S.followZoomFactor = Math.max(0.05, Math.min(20, (S.followZoomFactor || 1) * factor));
+    if (S.time > 0) waves?.follow(S.time, autoFollowSpan());
+    waves?.draw();
+    persistProjectWaveMode();
+    return;
+  }
+  waves?.zoom(factor, cursorT);
+}
+
 let lastWaveDraw = 0;
 function consume(result, stepFs = 0, skipLegacyBuzzer = false) {
   result.logs?.forEach(m => log(m, /warning/i.test(m) ? 'warning' : 'info'));
@@ -1165,7 +1303,10 @@ function consume(result, stepFs = 0, skipLegacyBuzzer = false) {
   const wavesVisible = !$('#app')?.classList.contains('no-waves');
   if (wavesVisible && (!S.running || now - lastWaveDraw >= 40)) {
     lastWaveDraw = now;
-    if ($('#waveFollow').checked && S.time > 0) waves.follow(S.time, waveFollowSpan());
+    if (S.running || manualStepping) {
+      if (S.waveMode === 'follow' && S.time > 0) waves.follow(S.time, autoFollowSpan());
+      else if (S.waveMode === 'fit') waves.fit();
+    }
     waves.draw();
   }
   for (const input of $$('#virtualInputs input')) {
@@ -1867,7 +2008,11 @@ function stepPlayback(count) {
     waves.push(S.time, S.values); sampleOutputs(); uartSample();
   }
   $('#roTime').textContent = fmtTime(S.time); $('#replayPosition').textContent = `${S.vcd.index} / ${S.vcd.data.events.length} timestamps`;
-  if ($('#waveFollow').checked) { waves.fit(); waves.cursorT = S.time; } waves.draw();
+  if (S.running || manualStepping) {
+    if (S.waveMode === 'follow' && S.time > 0) { waves.follow(S.time, autoFollowSpan()); waves.cursorT = S.time; }
+    else if (S.waveMode === 'fit') { waves.fit(); waves.cursorT = S.time; }
+  }
+  waves.draw();
   if (S.vcd.index >= S.vcd.data.events.length) { S.sim.ended = true; pause(); }
 }
 async function exportVcd() {
@@ -2050,7 +2195,7 @@ function applyAllSettings({ persist = true } = {}) {
   applyTheme(activeThemeId);
   waves?.setTimeUnit?.(appSettings.waveTimeUnit || 'auto');
   if ($('#waveTimeUnit')) $('#waveTimeUnit').value = appSettings.waveTimeUnit || 'auto';
-  if ($('#waveFollow')) $('#waveFollow').checked = appSettings.waveFollow !== false;
+  syncWaveModeUI();
   waves?.setMaxSamples?.(appSettings.waveMaxSamples);
   ide?.applyEditorOptions?.({
     fontSize: appSettings.editorFontSize,
@@ -2219,7 +2364,7 @@ function syncSettingsUI() {
   if ($('#setEditorAutoIndent')) $('#setEditorAutoIndent').checked = appSettings.editorAutoIndent !== false;
   if ($('#setWaveCanvasMode')) $('#setWaveCanvasMode').value = appSettings.waveCanvasMode || 'always-dark';
   if ($('#setWaveUnit')) $('#setWaveUnit').value = appSettings.waveTimeUnit || 'auto';
-  if ($('#setWaveFollow')) $('#setWaveFollow').checked = appSettings.waveFollow !== false;
+  if ($('#setDefaultWaveMode')) $('#setDefaultWaveMode').value = appSettings.defaultWaveMode || 'fit';
   if ($('#setWaveMaxSamples')) $('#setWaveMaxSamples').value = String(appSettings.waveMaxSamples || 40000);
   if ($('#setDefaultClk')) $('#setDefaultClk').value = String(appSettings.defaultClkHz || 50000000);
   if ($('#setDefaultStd')) $('#setDefaultStd').value = appSettings.defaultStandard || '93';
@@ -2366,7 +2511,7 @@ function wireSettingsAndThemes() {
   // Waveforms & Simulator settings
   $('#setWaveCanvasMode')?.addEventListener('change', e => { appSettings.waveCanvasMode = e.target.value; applyAllSettings(); });
   $('#setWaveUnit')?.addEventListener('change', e => { appSettings.waveTimeUnit = e.target.value; applyAllSettings(); });
-  $('#setWaveFollow')?.addEventListener('change', e => { appSettings.waveFollow = e.target.checked; applyAllSettings(); });
+  $('#setDefaultWaveMode')?.addEventListener('change', e => { appSettings.defaultWaveMode = e.target.value; applyAllSettings(); });
   $('#setWaveMaxSamples')?.addEventListener('change', e => { appSettings.waveMaxSamples = Number(e.target.value); applyAllSettings(); });
   $('#setDefaultClk')?.addEventListener('change', e => {
     appSettings.defaultClkHz = Number(e.target.value);
@@ -2442,13 +2587,14 @@ function wire() {
     if (!S.power || S.building || S.importing || S.exporting) return;
     pause();
     if (ide?.hasUnsaved()) { markDirty(); return toast('Compile and flash your design before stepping.', 'err'); }
-    advance(1);
+    manualStepping = true;
+    try { await advance(1); } finally { manualStepping = false; }
   };
   $('#btnReset').onclick = restartSimulation;
   $('#speed').oninput = e => { S.speed = Number(e.target.value); $('#rateLabel').textContent = `${(10 ** ((S.speed - 55) / 25)).toFixed(1).replace('.0', '')}×`; };
   $('#clkHz').onchange = e => { S.clkHz = Number(e.target.value); accumulator = 0; saveProject(); log(`Ideal clock: ${S.clkHz} Hz. Execution speed is limited by native simulation and display throughput.`); };
   $('#btnElab').onclick = () => ide ? ide.saveAndCompile() : build(); $('#topSelect').onchange = markDirty;
-  $('#btnDemo').onclick = async () => { await stopAllSimulations(); ide?.closeDiskTabs?.(); S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; S.assignments.clear(); S.discoveredPorts = []; S.compiledAssignments = new Map(); S.compiledHash = ''; S.flashedHash = ''; S.projectDir = null; S.projectName = 'Counter demo'; S.sdf = null; $('#genericInput').value = ''; $('#topLibrary').value = 'work'; $('#standardSelect').value = '93'; renderSdf(); renderSources(); $('#topSelect').value = DEMO_TOP; $('#designTitle').textContent = 'Counter demo'; $('#designSubtitle').textContent = 'Build needed · VHDL-1993'; renderPins(); syncProjectSaveUI(); ide?.refreshProjectTree?.(); markDirty(); toast('Counter demo loaded. Click Compile when ready.'); };
+  $('#btnDemo').onclick = async () => { await stopAllSimulations(); ide?.closeDiskTabs?.(); S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; S.assignments.clear(); S.discoveredPorts = []; S.compiledAssignments = new Map(); S.compiledHash = ''; S.flashedHash = ''; S.projectDir = null; S.projectName = 'Counter demo'; S.sdf = null; S.waveMode = appSettings.defaultWaveMode || 'fit'; S.followZoomFactor = 1; syncWaveModeUI(); $('#genericInput').value = ''; $('#topLibrary').value = 'work'; $('#standardSelect').value = '93'; renderSdf(); renderSources(); $('#topSelect').value = DEMO_TOP; $('#designTitle').textContent = 'Counter demo'; $('#designSubtitle').textContent = 'Build needed · VHDL-1993'; renderPins(); syncProjectSaveUI(); ide?.refreshProjectTree?.(); markDirty(); toast('Counter demo loaded. Click Compile when ready.'); };
   $('#btnOpenPinoutRef')?.addEventListener('click', () => openTools('pinout'));
   $('#pinoutSearch')?.addEventListener('input', () => renderPinoutRef());
   for (const id of ['standardSelect', 'topLibrary', 'genericInput', 'sdfInstance', 'sdfCorner']) $('#' + id).onchange = markDirty;
@@ -2790,10 +2936,19 @@ function wire() {
       toast(`Clipboard image copy unavailable; downloaded ${shot.width}×${shot.height} image instead.`);
     }
   };
-  $('#btnVcd').onclick = exportVcd; $('#waveZoomIn').onclick = () => { $('#waveFollow').checked = false; waves.zoom(1 / 1.4); }; $('#waveZoomOut').onclick = () => { $('#waveFollow').checked = false; waves.zoom(1.4); }; $('#waveFit').onclick = () => { $('#waveFollow').checked = false; waves.fit(); };
-  $('#waveFollow').onchange = () => { if ($('#waveFollow').checked && S.time > 0) { waves.follow(S.time, waveFollowSpan()); waves.draw(); } };
-  if ($('#waveTimeUnit')) $('#waveTimeUnit').onchange = e => waves.setTimeUnit(e.target.value);
-  waves.onCursor = time => $('#waveCursor').textContent = time === null ? 'Cursor —' : `Cursor ${fmtTime(time, waves.timeUnit)}`; waves.onNavigate = () => $('#waveFollow').checked = false;
+  $('#btnVcd').onclick = exportVcd;
+  $('#waveZoomIn').onclick = () => zoomWaveform(1 / 1.4);
+  $('#waveZoomOut').onclick = () => zoomWaveform(1.4);
+  $$('#waveModeGroup [data-wave-mode]').forEach(btn => {
+    btn.onclick = () => setWaveMode(btn.dataset.waveMode);
+  });
+  if ($('#waveTimeUnit')) $('#waveTimeUnit').onchange = e => { waves.setTimeUnit(e.target.value); if (S.waveMode === 'follow' && S.time > 0) { waves.follow(S.time, autoFollowSpan()); waves.draw(); } };
+  waves.canPan = () => S.waveMode === 'free';
+  waves.canZoom = () => S.waveMode === 'free';
+  waves.onCustomZoom = (factor, cursorT) => zoomWaveform(factor, cursorT);
+  waves.onLockedAction = kind => notifyWaveLocked(kind);
+  waves.onCursor = time => $('#waveCursor').textContent = time === null ? 'Cursor —' : `Cursor ${fmtTime(time, waves.timeUnit)}`;
+  syncWaveModeUI();
   $('#btnLibrary').onclick = () => toggleLeft('library');
   if ($('#btnChangeHdlRoot')) $('#btnChangeHdlRoot').onclick = changeHdlRoot;
   if ($('#homeChangeHdlRoot')) $('#homeChangeHdlRoot').onclick = changeHdlRoot;
@@ -2879,6 +3034,10 @@ async function hydrateDiskState() {
       appSettings = { ...DEFAULT_SETTINGS, ...st.settings };
       saveStoredSettings(appSettings);
     }
+    if (st.projectWaveModes && typeof st.projectWaveModes === 'object') {
+      projectWaveModes = { ...projectWaveModes, ...st.projectWaveModes };
+      try { localStorage.setItem('trace.projectWaveModes.v1', JSON.stringify(projectWaveModes)); } catch {}
+    }
     if (st.layout && typeof st.layout === 'object') {
       try { localStorage.setItem('trace.layout.v1', JSON.stringify(st.layout)); } catch {}
     }
@@ -2907,6 +3066,7 @@ async function prepareExit() {
 }
 async function boot() {
   await hydrateDiskState();
+  S.waveMode = appSettings.defaultWaveMode || 'fit';
   matchMedia('(max-width: 1000px)').addEventListener('change', syncNavigation);
   syncNavigation();
   audio.setVolume(appSettings.masterVolume);

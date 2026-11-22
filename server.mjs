@@ -555,6 +555,8 @@ async function saveProjectToFolder({ dir, projectName, project }) {
     flashedHash: typeof project.flashedHash === 'string' ? project.flashedHash : '',
     compiledAssignments: Array.isArray(project.compiledAssignments) ? project.compiledAssignments : [],
     discoveredPorts: Array.isArray(project.discoveredPorts) ? project.discoveredPorts : [],
+    waveMode: ['follow', 'fit', 'free'].includes(project.waveMode) ? project.waveMode : 'fit',
+    followZoomFactor: Number.isFinite(Number(project.followZoomFactor)) && Number(project.followZoomFactor) > 0 ? Number(project.followZoomFactor) : 1,
   };
   qsfLines.push('', `# TRACE_META: ${JSON.stringify(meta)}`, '');
   await fs.writeFile(path.join(targetDir, qpfName), qpfBody, 'utf8');
@@ -684,6 +686,8 @@ async function openProjectFromDisk(inputPath) {
     flashedHash: typeof parsed.meta?.flashedHash === 'string' ? parsed.meta.flashedHash : '',
     compiledAssignments: Array.isArray(parsed.meta?.compiledAssignments) ? parsed.meta.compiledAssignments : [],
     discoveredPorts: Array.isArray(parsed.meta?.discoveredPorts) ? parsed.meta.discoveredPorts : [],
+    waveMode: ['follow', 'fit', 'free'].includes(parsed.meta?.waveMode) ? parsed.meta.waveMode : undefined,
+    followZoomFactor: Number.isFinite(Number(parsed.meta?.followZoomFactor)) && Number(parsed.meta?.followZoomFactor) > 0 ? Number(parsed.meta.followZoomFactor) : undefined,
   };
   const projectName = parsed.meta?.projectName || path.basename(qsfName, '.qsf');
   appendLogLine('info', 'app', `Opened project "${projectName}" from ${dir} (${sources.length} source(s), ${parsed.pins.length} pin(s))`);
