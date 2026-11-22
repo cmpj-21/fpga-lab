@@ -7,7 +7,7 @@ import { createGfxStudio } from './gfxStudio.js';
 
 export async function createBoard3D(canvas, opts = {}) {
   const asset = await new GLTFLoader().loadAsync('/assets/rz-easyfpga-a2.2.glb');
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
@@ -252,7 +252,7 @@ export async function createBoard3D(canvas, opts = {}) {
     camera.updateProjectionMatrix();
   }
   function setQuality(quality) {
-    const config = { low: [1, 512], medium: [1.5, 1024], high: [1.75, 2048], ultra: [2.25, 4096], extreme: [2.75, 4096] }[quality] || [1.75, 2048];
+    const config = { low: [1, 512], medium: [1.15, 1024], high: [1.25, 1024], ultra: [1.75, 2048], extreme: [2.25, 4096] }[quality] || [1.25, 1024];
     if (studio) studio.gfx.quality = quality;
     const scale = studio ? THREE.MathUtils.clamp(studio.gfx.resScale / 100, 0.25, 2.5) : 1;
     renderer.setPixelRatio(Math.min((devicePixelRatio || 1) * scale, config[0] * scale));

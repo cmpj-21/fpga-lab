@@ -55,7 +55,7 @@ export const DEFAULT_GFX = {
   bgColor: '#1a1f18',
   bgColorBottom: '#0a0c09',
   // Post-Processing & Color Grading
-  bloom: 34,
+  bloom: 0,
   bloomThreshold: 92,
   bloomRadius: 55,
   ssao: 0,
@@ -1188,7 +1188,7 @@ export function createGfxStudio(ctx) {
   // Post-Processing Render Targets & Fullscreen Quad
   let rtScene = null, rtSceneMsaa = null, rtPost = null, rtBloomSrc = null, rtBloomA = null, rtBloomB = null;
   let rtW = 0, rtH = 0;
-  const maxMsaaSamples = Math.min(4, renderer.capabilities?.maxSamples || 0);
+  const maxMsaaSamples = Math.min(2, renderer.capabilities?.maxSamples || 0);
   const blackOccluderMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
   const blackBgColor = new THREE.Color(0x000000);
   const emitterBloomMats = new Map();
@@ -1291,7 +1291,7 @@ export function createGfxStudio(ctx) {
       magFilter: THREE.LinearFilter,
       depthBuffer: false,
     });
-    const bw = Math.max(2, Math.floor(pw / 2)), bh = Math.max(2, Math.floor(ph / 2));
+    const bw = Math.max(2, Math.floor(pw / 4)), bh = Math.max(2, Math.floor(ph / 4));
     rtBloomSrc = new THREE.WebGLRenderTarget(bw, bh, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true });
     rtBloomA = new THREE.WebGLRenderTarget(bw, bh, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
     rtBloomB = new THREE.WebGLRenderTarget(bw, bh, { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
@@ -1321,10 +1321,10 @@ export function createGfxStudio(ctx) {
   function syncQualityAndResolution() {
     const qMap = {
       low: [1, 512],
-      medium: [1.5, 1024],
-      high: [1.75, 2048],
-      ultra: [2.25, 4096],
-      extreme: [2.75, 4096],
+      medium: [1.15, 1024],
+      high: [1.25, 1024],
+      ultra: [1.75, 2048],
+      extreme: [2.25, 4096],
     };
     const [baseRatio, shadowRes] = qMap[gfx.quality] || qMap.high;
     const scale = THREE.MathUtils.clamp(gfx.resScale / 100, 0.25, 2.5);
@@ -1606,6 +1606,7 @@ export function createGfxStudio(ctx) {
     return LED_THEMES[gfx.ledTheme] || LED_THEMES.default;
   }
 
+  const ledCoreCol = new THREE.Color(0xfff4d8);
   function updateLedsAndSegments(now, state) {
     const pal = getLedPalette();
     const powerOn = stagePose.enabled ? stagePose.pwr : state.power;
@@ -1622,7 +1623,7 @@ export function createGfxStudio(ctx) {
       led.mesh.material.emissive.setHex(isPwr ? pal.pwrEm : pal.em);
       if (active) {
         const coreMix = Math.min(0.45, 0.14 + ledOverdrive * 0.22);
-        led.mesh.material.emissive.lerp(new THREE.Color(0xfff4d8), coreMix);
+        led.mesh.material.emissive.lerp(ledCoreCol, coreMix);
       }
       led.mesh.material.emissiveIntensity = active ? 1.45 + ledGlowNorm * 3.1 + ledOverdrive * 2.2 : 0;
       led.mesh.material.color.setHex(isPwr ? (active ? pal.pwrOn : 0x183520) : (active ? pal.on : pal.off));
@@ -1633,7 +1634,9 @@ export function createGfxStudio(ctx) {
         if (pl) {
           pl.light.position.set(tmpWorldPos.x, tmpWorldPos.y + 3.0, tmpWorldPos.z);
           pl.light.color.setHex(isPwr ? pal.pwrEm : pal.em);
-          pl.light.intensity = active && bleed > 0 ? bleed * (1.1 + ledGlowNorm * 3.6) : 0;
+          const nextInt = active && bleed > 0 ? bleed * (1.1 + ledGlowNorm * 3.6) : 0;
+          pl.light.intensity = nextInt;
+          pl.light.visible = nextInt > 0.001;
         }
         if (halo) {
           const haloStrength = active && ledGlowNorm > 0.01 ? Math.min(1, 0.28 + ledGlowNorm * 0.56) : 0;
@@ -1676,7 +1679,9 @@ export function createGfxStudio(ctx) {
         if (dLight) {
           dLight.position.set(tmpWorldPos.x, tmpWorldPos.y + 4.2, tmpWorldPos.z);
           dLight.color.setHex(pal.em);
-          dLight.intensity = bleed > 0 && digLitBits > 0 ? bleed * litFrac * (1.2 + segGlowNorm * 3.2) : 0;
+          const nextDInt = bleed > 0 && digLitBits > 0 ? bleed * litFrac * (1.2 + segGlowNorm * 3.2) : 0;
+          dLight.intensity = nextDInt;
+          dLight.visible = nextDInt > 0.001;
         }
         if (dHalo) {
           const haloStrength = powerOn && digLitBits > 0 && segGlowNorm > 0.01 ? Math.min(0.72, (0.14 + litFrac * 0.34) * (0.45 + segGlowNorm * 0.72)) : 0;
@@ -1807,25 +1812,20 @@ export function createGfxStudio(ctx) {
       renderer.setClearAlpha(prevClearAlpha);
     }
 
-    // 2. Render Bloom Passes if enabled
+    // 2. Render Bloom Passes if enabled (quarter-res HDR extraction + 2-stage separable Gaussian blur)
     if (gfx.bloom > 0) {
-      const selectiveEmissive = gfx.shadingMode === 'pbr' && gfx.bloomThreshold >= 70;
-      if (selectiveEmissive) {
-        renderEmissiveBloomSource();
-      } else {
-        bloomExtractMat.uniforms.tDiffuse.value = activeSceneRT.texture;
-        bloomExtractMat.uniforms.uThreshold.value = (gfx.bloomThreshold / 100) * 1.35;
-        postQuad.material = bloomExtractMat;
-        renderer.setRenderTarget(rtBloomA);
-        renderer.render(postScene, postCamera);
-      }
+      bloomExtractMat.uniforms.tDiffuse.value = activeSceneRT.texture;
+      bloomExtractMat.uniforms.uThreshold.value = (gfx.bloomThreshold / 100) * 1.35;
+      postQuad.material = bloomExtractMat;
+      renderer.setRenderTarget(rtBloomA);
+      renderer.render(postScene, postCamera);
 
-      const radiusScale = 0.65 + (gfx.bloomRadius / 100) * 2.6;
+      const radiusScale = 0.7 + (gfx.bloomRadius / 100) * 2.4;
       const bw = rtBloomA.width, bh = rtBloomA.height;
-      const passes = [1.0, 2.2, 4.0, 6.8];
+      const passes = [1.3, 3.6];
       for (let i = 0; i < passes.length; i++) {
         const spread = passes[i] * radiusScale;
-        bloomBlurMat.uniforms.tDiffuse.value = (i === 0 && selectiveEmissive) ? rtBloomSrc.texture : rtBloomA.texture;
+        bloomBlurMat.uniforms.tDiffuse.value = rtBloomA.texture;
         bloomBlurMat.uniforms.uStep.value.set(spread / bw, 0);
         postQuad.material = bloomBlurMat;
         renderer.setRenderTarget(rtBloomB);
@@ -1838,7 +1838,7 @@ export function createGfxStudio(ctx) {
       }
     }
 
-    // 3. Render Master Uber-Post Shader Pass -> rtPost, then FXAA 3.11 -> Screen
+    // 3. Render Master Uber-Post Shader Pass (directly to screen when 4x MSAA is active; otherwise via rtPost + FXAA 3.11)
     const u = uberPostMat.uniforms;
     u.tDiffuse.value = activeSceneRT.texture;
     u.tBloom.value = rtBloomA.texture;
@@ -1878,11 +1878,17 @@ export function createGfxStudio(ctx) {
     u.uBgBottom.value.set(gfx.bgColorBottom);
 
     postQuad.material = uberPostMat;
+    if (useMsaa) {
+      renderer.setRenderTarget(null);
+      renderer.clear();
+      renderer.render(postScene, postCamera);
+      return;
+    }
     renderer.setRenderTarget(rtPost);
     renderer.clear();
     renderer.render(postScene, postCamera);
 
-    // 4. Final FXAA 3.11 Anti-Aliasing Pass to Screen
+    // 4. Final FXAA 3.11 Anti-Aliasing Pass to Screen (when depth FX disabled hardware MSAA)
     fxaaMat.uniforms.tDiffuse.value = rtPost.texture;
     fxaaMat.uniforms.uInvRes.value.set(1 / Math.max(1, size.x), 1 / Math.max(1, size.y));
     postQuad.material = fxaaMat;
