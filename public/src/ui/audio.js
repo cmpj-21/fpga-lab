@@ -2,7 +2,7 @@
 let ctx = null;
 let master = null;
 let muted = false;
-let buzzerOsc = null, buzzerGain = null;
+let buzzerOsc = null, buzzerFilter = null, buzzerGain = null, buzzerStopTimer = null;
 
 function ensure() {
   if (ctx) return ctx;
@@ -67,26 +67,46 @@ export function tick() {
   osc.start(t); osc.stop(t + 0.04);
 }
 
-export function startBuzzer() {
-  const c = ensure(); if (!c || muted || buzzerOsc) return;
+export function startBuzzer(freq = 2048) {
+  const c = ensure(); if (!c || muted) return;
   const t = c.currentTime;
+  const f = Math.max(55, Math.min(6000, Number(freq) || 2048));
+  const cutoff = Math.max(900, Math.min(4800, f * 2.4));
+  if (buzzerStopTimer) { clearTimeout(buzzerStopTimer); buzzerStopTimer = null; }
+  if (buzzerOsc && buzzerGain && buzzerFilter) {
+    buzzerOsc.frequency.setTargetAtTime(f, t, 0.008);
+    buzzerFilter.frequency.setTargetAtTime(cutoff, t, 0.015);
+    buzzerGain.gain.cancelScheduledValues(t);
+    buzzerGain.gain.setTargetAtTime(0.075, t, 0.008);
+    return;
+  }
   buzzerOsc = c.createOscillator();
+  buzzerFilter = c.createBiquadFilter();
   buzzerGain = c.createGain();
   buzzerOsc.type = 'square';
-  buzzerOsc.frequency.value = 2048;
+  buzzerOsc.frequency.setValueAtTime(f, t);
+  buzzerFilter.type = 'lowpass';
+  buzzerFilter.frequency.setValueAtTime(cutoff, t);
+  buzzerFilter.Q.value = 1.2;
   buzzerGain.gain.setValueAtTime(0.0001, t);
-  buzzerGain.gain.setTargetAtTime(0.07, t, 0.01);
-  const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2048; bp.Q.value = 3;
-  buzzerOsc.connect(bp); bp.connect(buzzerGain); buzzerGain.connect(master);
+  buzzerGain.gain.setTargetAtTime(0.075, t, 0.008);
+  buzzerOsc.connect(buzzerFilter); buzzerFilter.connect(buzzerGain); buzzerGain.connect(master);
   buzzerOsc.start(t);
 }
 export function stopBuzzer() {
   if (!buzzerOsc || !ctx) return;
   const t = ctx.currentTime;
-  buzzerGain.gain.setTargetAtTime(0.0001, t, 0.02);
-  const o = buzzerOsc;
-  o.stop(t + 0.1);
-  buzzerOsc = null; buzzerGain = null;
+  if (buzzerStopTimer) { clearTimeout(buzzerStopTimer); buzzerStopTimer = null; }
+  buzzerGain.gain.cancelScheduledValues(t);
+  buzzerGain.gain.setTargetAtTime(0.0001, t, 0.018);
+  const o = buzzerOsc, g = buzzerGain, flt = buzzerFilter;
+  buzzerStopTimer = setTimeout(() => {
+    buzzerStopTimer = null;
+    if (buzzerOsc !== o) return;
+    try { o.stop(); } catch {}
+    try { o.disconnect(); flt.disconnect(); g.disconnect(); } catch {}
+    buzzerOsc = null; buzzerFilter = null; buzzerGain = null;
+  }, 80);
 }
 
 export function chime() {

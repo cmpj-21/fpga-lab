@@ -340,7 +340,7 @@ function setStatus() {
   syncKeys();
 }
 function pause() {
-  S.running = false; accumulator = 0; wallTimeAccum = 0; clearMuxDisplayState(); audio.stopBuzzer(); sampleOutputs(); setStatus();
+  S.running = false; accumulator = 0; wallTimeAccum = 0; clearMuxDisplayState(); resetBuzzerTracker(false); sampleOutputs(); setStatus();
   if (waves && !$('#app')?.classList.contains('no-waves')) {
     if ($('#waveFollow')?.checked && S.time > 0) waves.follow(S.time, waveFollowSpan());
     waves.draw();
@@ -686,6 +686,7 @@ async function applyInitialFlashedState({ preserveWaves = false } = {}) {
   renderTruthInputs();
   uart.reset(); $('#uartOut').replaceChildren();
   board?.clearOutputs();
+  resetBuzzerTracker(true);
   consume(S.sim);
   for (const signal of S.sim.signals.filter(s => s.driveable && !S.sim.ended)) {
     const bits = Array(signal.width).fill(signal.direction === 3 ? 'Z' : '0');
@@ -830,6 +831,103 @@ function sampleDisplayOnly() {
   let byte = 0; SEG_NETS.forEach((net, b) => { if (/[0L]/.test(boardValue(net))) byte |= 1 << b; });
   DIGIT_NETS.forEach((net, i) => board?.setSegDigit(i, byte, active && /[0L]/.test(boardValue(net))));
 }
+const buzzerState = {
+  idleLevel: null,
+  lastLevel: null,
+  lastEdgeCycle: null,
+  lastHalfPeriodCycles: null,
+  lastToggleMs: 0,
+  lastToggleIntervalMs: 0,
+  consecutiveEdges: 0,
+  freqHz: 2048,
+  sounding: false,
+};
+function resetBuzzerTracker(full = true) {
+  if (full) {
+    buzzerState.idleLevel = null;
+    buzzerState.lastLevel = null;
+  }
+  buzzerState.lastEdgeCycle = null;
+  buzzerState.lastHalfPeriodCycles = null;
+  buzzerState.lastToggleMs = 0;
+  buzzerState.lastToggleIntervalMs = 0;
+  buzzerState.consecutiveEdges = 0;
+  buzzerState.freqHz = 2048;
+  buzzerState.sounding = false;
+  audio.stopBuzzer();
+}
+function updateBuzzerFromSamples(samples, burstStartCycles, burstStartTimeFs, stepFs) {
+  const bound = S.bindings.beep;
+  if (!bound || !S.power || !S.sim) {
+    buzzerState.sounding = false;
+    board?.setBuzzer(false);
+    audio.stopBuzzer();
+    return;
+  }
+  const now = performance.now();
+  const precExp = 15 + (S.sim.precision ?? -15);
+  const sigIdx = S.sim.signals.indexOf(bound.signal);
+  if (sigIdx !== -1) {
+    for (let idx = 0; idx < samples.length; idx++) {
+      const sample = samples[idx];
+      const ch = (sample.values[sigIdx] ?? 'U')[bound.offset] ?? 'U';
+      const lvl = /[1H]/.test(ch) ? '1' : /[0L]/.test(ch) ? '0' : null;
+      if (lvl === null) continue;
+      if (buzzerState.idleLevel === null && burstStartCycles === 0) buzzerState.idleLevel = lvl;
+      const sampleTimeFs = Number(sample.time) * (10 ** precExp);
+      const sampleCycle = burstStartCycles + (stepFs > 0 ? Math.max(0, (sampleTimeFs - burstStartTimeFs) / stepFs) : 0);
+      if (buzzerState.lastLevel !== null && lvl !== buzzerState.lastLevel) {
+        const edgeGapMs = buzzerState.lastToggleMs ? (now - buzzerState.lastToggleMs) : 0;
+        if (buzzerState.lastEdgeCycle !== null) {
+          const hp = sampleCycle - buzzerState.lastEdgeCycle;
+          if (hp > 0) {
+            const prevHp = buzzerState.lastHalfPeriodCycles;
+            const periodCycles = prevHp !== null ? (hp + prevHp) : (2 * hp);
+            const rawFreq = S.clkHz / periodCycles;
+            const symmetric = prevHp === null || (Math.max(hp, prevHp) / Math.min(hp, prevHp) <= 3.5);
+            if (rawFreq >= 40 && rawFreq <= 12000 && symmetric) {
+              buzzerState.freqHz = rawFreq;
+              buzzerState.consecutiveEdges = Math.max(2, buzzerState.consecutiveEdges + 1);
+            } else if (rawFreq > 12000 && symmetric) {
+              buzzerState.freqHz = 2048;
+              buzzerState.consecutiveEdges += 1;
+            } else {
+              buzzerState.freqHz = 2048;
+              buzzerState.consecutiveEdges = 1;
+            }
+            buzzerState.lastHalfPeriodCycles = hp;
+          }
+        }
+        buzzerState.lastEdgeCycle = sampleCycle;
+        if (edgeGapMs > 0 && edgeGapMs < 1500) buzzerState.lastToggleIntervalMs = edgeGapMs;
+        buzzerState.lastToggleMs = now;
+      }
+      buzzerState.lastLevel = lvl;
+    }
+  }
+  const sinceToggle = now - buzzerState.lastToggleMs;
+  const holdMs = Math.max(80, Math.min(450, (buzzerState.lastToggleIntervalMs || 140) * 2.5));
+  let sounding = false;
+  let freq = buzzerState.freqHz;
+  if (S.running) {
+    if (buzzerState.consecutiveEdges >= 2 && sinceToggle <= holdMs) {
+      sounding = true;
+    } else if (buzzerState.consecutiveEdges === 1 && sinceToggle <= 55) {
+      sounding = true;
+      freq = 2048;
+    } else if (buzzerState.lastLevel === '1' && buzzerState.idleLevel !== '1' && (buzzerState.consecutiveEdges === 0 || sinceToggle > holdMs)) {
+      sounding = true;
+      freq = 2048;
+    } else if (sinceToggle > 600) {
+      buzzerState.consecutiveEdges = 0;
+      buzzerState.lastHalfPeriodCycles = null;
+    }
+  }
+  buzzerState.sounding = sounding;
+  board?.setBuzzer(sounding);
+  if (sounding) audio.startBuzzer(freq);
+  else audio.stopBuzzer();
+}
 function sampleNonDisplayOutputs() {
   const active = S.power;
   LED_NETS.forEach((net, i) => {
@@ -838,8 +936,9 @@ function sampleNonDisplayOutputs() {
     indicator.title = `${net.toUpperCase()}: ${!active ? 'power off' : value + (on ? ' · on' : ' · off/unknown')}`;
     indicator.setAttribute('aria-label', indicator.title);
   });
-  const beep = active && /[1H]/.test(boardValue('beep')); board?.setBuzzer(beep);
-  if (beep && S.running) audio.startBuzzer(); else audio.stopBuzzer();
+  const beep = active && (S.running ? buzzerState.sounding : /[1H]/.test(boardValue('beep')) && buzzerState.idleLevel !== '1');
+  board?.setBuzzer(beep);
+  if (!S.running || !active) audio.stopBuzzer();
   $$('#ciNets [data-ci-net]').forEach(el => {
     const val = S.power ? boardValue(el.dataset.ciNet) : '—';
     el.textContent = val;
@@ -864,9 +963,11 @@ function waveFollowSpan() {
   return Math.max(cycleFs * 40, Math.min(cycleFs * 250, effectiveCyclesPerSec * 0.25 * cycleFs));
 }
 let lastWaveDraw = 0;
-function consume(result) {
+function consume(result, stepFs = 0) {
   result.logs?.forEach(m => log(m, /warning/i.test(m) ? 'warning' : 'info'));
   const list = result.samples || [];
+  const burstStartTimeFs = S.time;
+  const burstStartCycles = S.cycles;
   const seenInBurst = [null, null, null, null];
   let sawMultiDigit = null;
   let lastDisplayFrame = null;
@@ -889,6 +990,7 @@ function consume(result) {
     }
     uartSample();
   }
+  if (list.length > 0) updateBuzzerFromSamples(list, burstStartCycles, burstStartTimeFs, stepFs);
   if (S.running && list.length > 1) {
     sampleNonDisplayOutputs();
     const anySeen = seenInBurst.some(Boolean);
@@ -982,7 +1084,7 @@ async function advance(cycles = 1, wallSec = 0) {
       const batchCycles = isLast ? cycles : 0;
       const result = await api(`/api/sim/${S.sim.id}/step`, { cycles: batchCycles, stride: batchCycles > 64 ? stride : 1, halfPeriod: stepHalfPeriod, clock: clockId(), inputs: batches[i] });
       if (generation !== S.generation) return;
-      consume(result);
+      consume(result, stepFs);
       if (S.sim.ended) break;
     }
     S.cycles += cycles;
