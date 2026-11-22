@@ -340,7 +340,7 @@ function setStatus() {
   syncKeys();
 }
 function pause() {
-  S.running = false; accumulator = 0; wallTimeAccum = 0; displayFrameQueue.length = 0; audio.stopBuzzer(); sampleOutputs(); setStatus();
+  S.running = false; accumulator = 0; wallTimeAccum = 0; clearMuxDisplayState(); audio.stopBuzzer(); sampleOutputs(); setStatus();
   if (waves && !$('#app')?.classList.contains('no-waves')) {
     if ($('#waveFollow')?.checked && S.time > 0) waves.follow(S.time, waveFollowSpan());
     waves.draw();
@@ -782,12 +782,20 @@ function boardValue(net) {
   const value = S.values.get(bound.signal.short) ?? 'U';
   return value[bound.offset] ?? 'U';
 }
-const displayFrameQueue = [];
+const muxSlots = [null, null, null, null];
+const muxAge = [0, 0, 0, 0];
+let muxCursor = 0;
+let multiDigitFrame = null;
+function clearMuxDisplayState() {
+  muxSlots.fill(null);
+  muxAge.fill(0);
+  multiDigitFrame = null;
+}
 function captureDisplayFrame() {
   let segByte = 0; SEG_NETS.forEach((net, b) => { if (/[0L]/.test(boardValue(net))) segByte |= 1 << b; });
   let digitMask = 0; DIGIT_NETS.forEach((net, i) => { if (/[0L]/.test(boardValue(net))) digitMask |= 1 << i; });
   let ledMask = 0; LED_NETS.forEach((net, i) => { if (/[0L]/.test(boardValue(net))) ledMask |= 1 << i; });
-  return { segByte, digitMask, ledMask, key: (digitMask << 12) | (segByte << 4) | ledMask };
+  return { segByte, digitMask, ledMask };
 }
 function applyDisplayFrame(f) {
   const active = S.power;
@@ -803,7 +811,7 @@ function sampleDisplayOnly() {
   let byte = 0; SEG_NETS.forEach((net, b) => { if (/[0L]/.test(boardValue(net))) byte |= 1 << b; });
   DIGIT_NETS.forEach((net, i) => board?.setSegDigit(i, byte, active && /[0L]/.test(boardValue(net))));
 }
-function sampleOutputs() {
+function sampleNonDisplayOutputs() {
   const active = S.power;
   LED_NETS.forEach((net, i) => {
     const value = boardValue(net), on = active && /[0L]/.test(value), indicator = $(`[data-led="${i}"]`);
@@ -811,7 +819,6 @@ function sampleOutputs() {
     indicator.title = `${net.toUpperCase()}: ${!active ? 'power off' : value + (on ? ' · on' : ' · off/unknown')}`;
     indicator.setAttribute('aria-label', indicator.title);
   });
-  sampleDisplayOnly();
   const beep = active && /[1H]/.test(boardValue('beep')); board?.setBuzzer(beep);
   if (beep && S.running) audio.startBuzzer(); else audio.stopBuzzer();
   $$('#ciNets [data-ci-net]').forEach(el => {
@@ -819,6 +826,10 @@ function sampleOutputs() {
     el.textContent = val;
     el.classList.toggle('hi', /[1H]/.test(val));
   });
+}
+function sampleOutputs() {
+  sampleNonDisplayOutputs();
+  sampleDisplayOnly();
 }
 function waveFollowSpan() {
   const rate = 10 ** ((S.speed - 55) / 25);
@@ -837,6 +848,9 @@ let lastWaveDraw = 0;
 function consume(result) {
   result.logs?.forEach(m => log(m, /warning/i.test(m) ? 'warning' : 'info'));
   const list = result.samples || [];
+  const seenInBurst = [null, null, null, null];
+  let sawMultiDigit = null;
+  let lastDisplayFrame = null;
   for (let idx = 0; idx < list.length; idx++) {
     const sample = list[idx];
     S.time = Number(sample.time) * 10 ** (15 + (S.sim?.precision ?? -15));
@@ -844,17 +858,42 @@ function consume(result) {
     waves.push(S.time, S.values);
     if (S.running && list.length > 1) {
       const df = captureDisplayFrame();
-      if (displayFrameQueue.at(-1)?.key !== df.key) {
-        displayFrameQueue.push(df);
-        if (displayFrameQueue.length > 12) displayFrameQueue.shift();
+      lastDisplayFrame = df;
+      if (df.digitMask !== 0) {
+        if ((df.digitMask & (df.digitMask - 1)) === 0) {
+          const d = 31 - Math.clz32(df.digitMask);
+          if (d >= 0 && d < 4) seenInBurst[d] = df;
+        } else {
+          sawMultiDigit = df;
+        }
       }
     }
-    if (idx === list.length - 1) sampleOutputs();
-    else sampleDisplayOnly();
     uartSample();
   }
-  if (S.running && displayFrameQueue.length) {
-    applyDisplayFrame(displayFrameQueue.shift());
+  if (S.running && list.length > 1) {
+    sampleNonDisplayOutputs();
+    const anySeen = seenInBurst.some(Boolean);
+    if (!anySeen && !sawMultiDigit && (!lastDisplayFrame || lastDisplayFrame.digitMask === 0)) {
+      clearMuxDisplayState();
+      sampleDisplayOnly();
+    } else if (sawMultiDigit) {
+      multiDigitFrame = sawMultiDigit;
+      muxSlots.fill(null);
+      muxAge.fill(0);
+    } else {
+      multiDigitFrame = null;
+      for (let d = 0; d < 4; d++) {
+        if (seenInBurst[d]) {
+          muxSlots[d] = seenInBurst[d];
+          muxAge[d] = 0;
+        } else if (muxSlots[d]) {
+          muxAge[d]++;
+          if (muxAge[d] > 6) muxSlots[d] = null;
+        }
+      }
+    }
+  } else if (list.length > 0) {
+    sampleOutputs();
   }
   if (result.ended) { S.sim.ended = true; S.pending = []; pause(); log('Testbench completed normally. Its final waveform is ready to export.'); }
   $('#roTime').textContent = fmtTime(S.time);
@@ -945,7 +984,7 @@ async function advance(cycles = 1, wallSec = 0) {
 }
 function setInput(id, value) {
   if (!S.power || S.vcd || S.building || S.importing || S.exporting || S.dirty || S.error || !S.sim || !S.flashed || S.sim.ended || S.inputs[id] === value) return;
-  displayFrameQueue.length = 0;
+  clearMuxDisplayState();
   S.inputs[id] = value; S.pending.push({ id, value }); syncKeys();
   if (!S.running) advance(0);
 }
@@ -1995,7 +2034,21 @@ function frame(now) {
   requestAnimationFrame(frame); const dt = Math.max(0, Math.min(.1, (now - lastFrame) / 1000)); lastFrame = now;
   if (now - lastDraw > 250) { $('#roFps').textContent = board ? Math.round(board.fps) : '—'; lastDraw = now; }
   if (S.running) {
-    if (displayFrameQueue.length) applyDisplayFrame(displayFrameQueue.shift());
+    if (multiDigitFrame) {
+      applyDisplayFrame(multiDigitFrame);
+    } else {
+      let nextFrame = null;
+      for (let step = 1; step <= 4; step++) {
+        const idx = (muxCursor + step) % 4;
+        if (muxSlots[idx]) {
+          muxCursor = idx;
+          nextFrame = muxSlots[idx];
+          break;
+        }
+      }
+      if (nextFrame) applyDisplayFrame(nextFrame);
+      else sampleDisplayOnly();
+    }
     const rate = 10 ** ((S.speed - 55) / 25);
     const maxPerFrame = S.clkHz >= 10000 ? adaptiveMaxCycles : 4096;
     const stepWall = dt * rate;
@@ -2003,11 +2056,12 @@ function frame(now) {
     accumulator += S.clkHz * stepWall;
     accumulator = Math.min(accumulator, maxPerFrame * 2);
     if (!S.busy) {
-      const cycles = Math.min(maxPerFrame, Math.floor(accumulator));
+      let cycles = Math.min(maxPerFrame, Math.floor(accumulator));
+      if (cycles > 1) cycles |= 1;
       if (Number.isInteger(cycles) && cycles > 0) {
         const wallSec = wallTimeAccum;
         wallTimeAccum = 0;
-        accumulator -= cycles;
+        accumulator = Math.max(0, accumulator - cycles);
         advance(cycles, wallSec);
       }
     }
