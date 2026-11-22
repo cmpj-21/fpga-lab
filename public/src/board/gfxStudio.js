@@ -1015,6 +1015,15 @@ export function createGfxStudio(ctx) {
   const tmpBox = new THREE.Box3();
   const tmpWorldPos = new THREE.Vector3();
   const glowHaloTex = makeGlowHaloTexture();
+  function getLocalGeomCenter(mesh) {
+    if (!mesh?.geometry) return new THREE.Vector3();
+    if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+    return mesh.geometry.boundingBox
+      ? mesh.geometry.boundingBox.getCenter(new THREE.Vector3())
+      : new THREE.Vector3();
+  }
+  const ledLocalCenters = leds.map(l => getLocalGeomCenter(l.mesh));
+  const digitLocalCenters = segments.map(seg => getLocalGeomCenter(seg.meshes[6]));
   const ledPointLights = leds.map(l => {
     const pos = tmpBox.setFromObject(l.mesh).getCenter(new THREE.Vector3());
     const pl = new THREE.PointLight(l.id === 'pwrled' ? 0x39d66b : 0xff2921, 0, 32, 1.6);
@@ -1646,7 +1655,8 @@ export function createGfxStudio(ctx) {
       const pl = ledPointLights[i];
       const halo = ledHalos[i];
       if (pl || halo) {
-        led.mesh.getWorldPosition(tmpWorldPos);
+        led.mesh.updateWorldMatrix(true, false);
+        tmpWorldPos.copy(ledLocalCenters[i]).applyMatrix4(led.mesh.matrixWorld);
         if (pl) {
           pl.light.position.set(tmpWorldPos.x, tmpWorldPos.y + 3.0, tmpWorldPos.z);
           pl.light.color.setHex(isPwr ? pal.pwrEm : pal.em);
@@ -1694,7 +1704,8 @@ export function createGfxStudio(ctx) {
       const dLight = digitPointLights[d];
       const dHalo = digitHalos[d];
       if (dLight || dHalo) {
-        digit.meshes[6].getWorldPosition(tmpWorldPos);
+        digit.meshes[6].updateWorldMatrix(true, false);
+        tmpWorldPos.copy(digitLocalCenters[d]).applyMatrix4(digit.meshes[6].matrixWorld);
         const litFrac = digLitBits / 7;
         if (dLight) {
           dLight.position.set(tmpWorldPos.x, tmpWorldPos.y + 4.2, tmpWorldPos.z);
@@ -1704,14 +1715,14 @@ export function createGfxStudio(ctx) {
           dLight.visible = nextDInt > 0.001;
         }
         if (dHalo) {
-          const haloStrength = powerOn && digLitBits > 0 && segGlowNorm > 0.01 ? Math.min(0.72, (0.14 + litFrac * 0.34) * (0.45 + segGlowNorm * 0.72)) : 0;
+          const haloStrength = powerOn && digLitBits > 0 && segGlowNorm > 0.01 ? Math.min(0.86, (0.22 + litFrac * 0.42) * (0.48 + segGlowNorm * 0.75)) : 0;
           dHalo.visible = haloStrength > 0.005;
           if (dHalo.visible) {
             dHalo.position.set(tmpWorldPos.x, tmpWorldPos.y + 1.8, tmpWorldPos.z);
             dHalo.material.color.setHex(pal.em);
             dHalo.material.opacity = haloStrength;
-            const sc = 0.82 + Math.min(1.6, segGlowNorm) * 0.32;
-            dHalo.scale.set(17 * sc, 21 * sc, 1);
+            const sc = 0.82 + Math.min(1.6, segGlowNorm) * 0.34;
+            dHalo.scale.set(19 * sc, 23 * sc, 1);
           }
         }
       }
