@@ -10,6 +10,21 @@ import { WaveViewer } from './ui/waves.js';
 import { DEMO_SRC, DEMO_NAME, DEMO_TOP } from './ui/demo.js';
 import { createIde, parseDiagnostics } from './ui/ide.js';
 import * as audio from './ui/audio.js';
+import {
+  THEME_PRESETS,
+  TOKEN_GROUPS,
+  DEFAULT_SETTINGS,
+  normalizeThemeId,
+  findThemePreset,
+  getAllThemes,
+  resolveThemeSpec,
+  normalizeCssHex,
+  applyThemeToDocument,
+  loadStoredSettings,
+  saveStoredSettings,
+  loadStoredCustomThemes,
+  saveStoredCustomThemes,
+} from './ui/themes.js';
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -21,6 +36,10 @@ const uart = new UartReceiver();
 const reported = new Map();
 const uiActions = [], pendingActions = [], pendingEvents = [];
 let pendingStatePatch = null;
+let appSettings = loadStoredSettings();
+let customThemes = loadStoredCustomThemes();
+let activeThemeId = normalizeThemeId(document.documentElement.dataset.theme) || 'trace-dark';
+let customDraft = null;
 
 function flushState(useBeacon = false) {
   if (!pendingStatePatch) return;
@@ -1916,22 +1935,500 @@ function closeBottomDock() {
 function openTools(name = lastBottomTab) {
   openBottomTab(name || 'console');
 }
-function applyTheme(theme) {
-  const dark = theme === 'dark';
-  document.documentElement.dataset.theme = theme;
-  $('#btnTheme').classList.toggle('active', dark);
-  $('#btnTheme').setAttribute('aria-pressed', String(dark));
-  $('#btnTheme').title = dark ? 'Switch to light mode' : 'Switch to dark mode';
-  $('meta[name="theme-color"]').content = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+function applyResolvedThemeVisuals(spec) {
+  applyThemeToDocument(spec, appSettings);
+  const dark = spec.scheme === 'dark';
+  $('#btnTheme')?.classList.toggle('active', dark);
+  $('#btnTheme')?.setAttribute('aria-pressed', String(dark));
+  if ($('#btnTheme')) $('#btnTheme').title = `Color theme: ${spec.name}`;
+  if ($('#homeThemeBtn')) $('#homeThemeBtn').title = `Color theme: ${spec.name}`;
+  const waveEl = $('#waves');
+  if (waveEl) {
+    const waveBg = spec.tokens['--wave-bg'] || '';
+    const isWaveDark = appSettings.waveCanvasMode === 'always-dark' || (appSettings.waveCanvasMode === 'follow-theme' ? dark : /^#0[0-9]|^#1[0-9]|^#2[0-9]/i.test(waveBg));
+    waveEl.dataset.waveDark = isWaveDark ? '1' : '0';
+  }
   board?.setTheme();
   if (waves) { waves.setTheme(); renderSignalChips(); }
+  ide?.applyTerminalOptions?.({ themeMode: appSettings.termThemeMode });
+  if ($('#tpActiveName')) $('#tpActiveName').textContent = spec.name;
+  syncThemeCardsSelection();
+}
+function applyTheme(themeId = activeThemeId, { save = false } = {}) {
+  const targetId = normalizeThemeId(themeId) || activeThemeId || 'trace-dark';
+  const spec = resolveThemeSpec(targetId, customThemes, appSettings);
+  activeThemeId = spec.id;
+  applyResolvedThemeVisuals(spec);
+  if (save) {
+    try { localStorage.setItem('trace.theme', spec.id); } catch {}
+    persistAppState({ theme: spec.id });
+  }
+  return spec;
+}
+function toggleScheme() {
+  const cur = resolveThemeSpec(activeThemeId, customThemes, appSettings);
+  const pairs = {
+    'trace-dark': 'trace-light', 'trace-light': 'trace-dark',
+    'quartus-dark': 'quartus-light', 'quartus-light': 'quartus-dark',
+    'solarized-dark': 'solarized-light', 'solarized-light': 'solarized-dark',
+  };
+  const next = pairs[cur.id] || (cur.scheme === 'dark' ? 'trace-light' : 'trace-dark');
+  applyTheme(next, { save: true });
+  renderThemePopover();
+}
+function syncThemeCardsSelection() {
+  $$('.tp-item[data-theme-id], .theme-card[data-theme-id]').forEach(el => {
+    el.classList.toggle('active', el.dataset.themeId === activeThemeId);
+  });
+}
+function closeThemePopover() {
+  $('#themePopover')?.classList.add('hidden');
+}
+function openThemePopover(anchorEl) {
+  const pop = $('#themePopover');
+  if (!pop) return;
+  renderThemePopover();
+  pop.classList.remove('hidden');
+  const homeOpen = !!($('#homeView') && !$('#homeView').classList.contains('hidden'));
+  const anchor = anchorEl || (homeOpen ? $('#homeThemeBtn') : $('#btnTheme'));
+  const rect = anchor?.getBoundingClientRect();
+  if (rect) {
+    const pw = pop.offsetWidth || 270;
+    const ph = pop.offsetHeight || 360;
+    let left = homeOpen ? Math.min(rect.left, window.innerWidth - pw - 12) : rect.right + 8;
+    let top = homeOpen ? rect.bottom + 8 : Math.min(rect.top, window.innerHeight - ph - 12);
+    left = Math.max(8, Math.min(left, window.innerWidth - pw - 8));
+    top = Math.max(8, Math.min(top, window.innerHeight - ph - 8));
+    pop.style.left = `${left}px`;
+    pop.style.top = `${top}px`;
+  }
+}
+function renderThemePopover() {
+  const list = $('#tpList');
+  if (!list) return;
+  list.replaceChildren();
+  const all = getAllThemes(customThemes);
+  const byCat = new Map();
+  for (const t of all) {
+    const cat = t.category || 'Themes';
+    if (!byCat.has(cat)) byCat.set(cat, []);
+    byCat.get(cat).push(t);
+  }
+  for (const [cat, items] of byCat) {
+    const hdr = document.createElement('div');
+    hdr.className = 'tp-cat';
+    hdr.textContent = cat;
+    list.append(hdr);
+    for (const t of items) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `tp-item${t.id === activeThemeId ? ' active' : ''}`;
+      btn.dataset.themeId = t.id;
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = t.name;
+      const swWrap = document.createElement('span');
+      swWrap.className = 'tp-swatches';
+      for (const k of ['--bg', '--surface', '--accent', '--tk-kw']) {
+        const sw = document.createElement('i');
+        sw.className = 'tp-sw';
+        sw.style.background = t.tokens[k] || '#888';
+        swWrap.append(sw);
+      }
+      btn.append(nameSpan, swWrap);
+      btn.onclick = () => {
+        applyTheme(t.id, { save: true });
+        renderThemePopover();
+      };
+      list.append(btn);
+    }
+  }
+  const activeSpec = resolveThemeSpec(activeThemeId, customThemes, appSettings);
+  if ($('#tpActiveName')) $('#tpActiveName').textContent = activeSpec.name;
+}
+function applyAllSettings({ persist = true } = {}) {
+  saveStoredSettings(appSettings);
+  applyTheme(activeThemeId);
+  waves?.setTimeUnit?.(appSettings.waveTimeUnit || 'auto');
+  if ($('#waveTimeUnit')) $('#waveTimeUnit').value = appSettings.waveTimeUnit || 'auto';
+  if ($('#waveFollow')) $('#waveFollow').checked = appSettings.waveFollow !== false;
+  waves?.setMaxSamples?.(appSettings.waveMaxSamples);
+  ide?.applyEditorOptions?.({
+    fontSize: appSettings.editorFontSize,
+    tabSize: appSettings.editorTabSize,
+    autoIndent: appSettings.editorAutoIndent,
+    highlightLine: appSettings.editorHighlightLine,
+  });
+  ide?.applyTerminalOptions?.({
+    fontSize: appSettings.termFontSize,
+    cursorStyle: appSettings.termCursorStyle,
+    cursorBlink: appSettings.termCursorBlink,
+    themeMode: appSettings.termThemeMode,
+  });
+  ide?.setWatchExternalEnabled?.(appSettings.watchExternalFiles !== false);
+  audio.setVolume(appSettings.masterVolume);
+  syncSettingsUI();
+  if (persist) persistAppState({ settings: appSettings });
+}
+function openSettingsModal(tab = '') {
+  closeThemePopover();
+  const dlg = $('#settingsDialog');
+  if (!dlg) return;
+  if (tab) switchSettingsTab(tab);
+  renderSettingsThemes();
+  syncSettingsUI();
+  if (!dlg.open) dlg.showModal();
+}
+function switchSettingsTab(tabId) {
+  $$('.set-nav-btn').forEach(b => b.classList.toggle('active', b.dataset.settab === tabId));
+  $$('.set-pane').forEach(p => p.classList.toggle('active', p.dataset.setpane === tabId));
+}
+function renderSettingsThemes() {
+  const grid = $('#themePresetGrid');
+  if (!grid) return;
+  grid.replaceChildren();
+  const all = getAllThemes(customThemes);
+  for (const t of all) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `theme-card${t.id === activeThemeId ? ' active' : ''}`;
+    card.dataset.themeId = t.id;
+    const top = document.createElement('div');
+    top.className = 'tc-top';
+    const title = document.createElement('strong');
+    title.textContent = t.name;
+    const tag = document.createElement('span');
+    tag.className = 'tc-tag mono';
+    tag.textContent = t.isCustom ? `CUSTOM · ${t.scheme}` : t.scheme;
+    top.append(title, tag);
+    const desc = document.createElement('span');
+    desc.className = 'tc-desc';
+    desc.textContent = t.description || (t.isCustom ? 'User customized workbench palette.' : '');
+    const sw = document.createElement('div');
+    sw.className = 'tc-swatches';
+    for (const k of ['--bg', '--surface', '--accent', '--tk-kw', '--tk-ty', '--wave-c0']) {
+      const bar = document.createElement('span');
+      bar.style.background = t.tokens[k] || '#888';
+      sw.append(bar);
+    }
+    card.append(top, desc, sw);
+    card.onclick = () => {
+      applyTheme(t.id, { save: true });
+      if (t.isCustom) loadThemeIntoCustomDraft(t);
+      syncSettingsUI();
+    };
+    grid.append(card);
+  }
+  const cloneSel = $('#ctCloneSelect');
+  if (cloneSel) {
+    cloneSel.replaceChildren(...all.map(t => new Option(`${t.name} (${t.scheme})`, t.id)));
+    cloneSel.value = findThemePreset(activeThemeId, customThemes)?.id || THEME_PRESETS[0].id;
+  }
+}
+function loadThemeIntoCustomDraft(themeObj) {
+  const src = resolveThemeSpec(themeObj?.id || activeThemeId, customThemes, { ...appSettings, waveCanvasMode: 'follow-theme', termThemeMode: 'follow-theme' });
+  const existingCustom = themeObj?.isCustom ? themeObj : null;
+  customDraft = {
+    id: existingCustom ? existingCustom.id : null,
+    name: existingCustom ? existingCustom.name : `${src.name} Custom`,
+    scheme: existingCustom ? existingCustom.scheme : src.scheme,
+    tokens: { ...src.baseTokens },
+  };
+  if ($('#ctName')) $('#ctName').value = customDraft.name;
+  if ($('#ctScheme')) $('#ctScheme').value = customDraft.scheme;
+  $('#ctDeleteBtn')?.classList.toggle('hidden', !existingCustom);
+  if ($('#customStudioBadge')) {
+    $('#customStudioBadge').textContent = existingCustom ? `Editing saved theme "${existingCustom.name}"` : `Draft based on ${src.name}`;
+  }
+  renderCustomTokenGroups();
+}
+function previewCustomDraftLive() {
+  if (!customDraft) return;
+  const resolved = resolveThemeSpec('__draft__', [{
+    id: customDraft.id || '__draft__',
+    name: customDraft.name || 'Custom Preview',
+    scheme: customDraft.scheme === 'light' ? 'light' : 'dark',
+    tokens: customDraft.tokens,
+  }], appSettings);
+  applyResolvedThemeVisuals(resolved);
+}
+function renderCustomTokenGroups() {
+  const host = $('#ctGroups');
+  if (!host || !customDraft) return;
+  host.replaceChildren();
+  for (const grp of TOKEN_GROUPS) {
+    const box = document.createElement('div');
+    box.className = 'ct-group';
+    const title = document.createElement('div');
+    title.className = 'ct-group-title';
+    title.textContent = grp.title;
+    const grid = document.createElement('div');
+    grid.className = 'ct-grid';
+    for (const item of grp.items) {
+      const row = document.createElement('label');
+      row.className = 'ct-row';
+      const lbl = document.createElement('span');
+      lbl.textContent = item.label;
+      const inputs = document.createElement('div');
+      inputs.className = 'ct-inputs';
+      const hex = document.createElement('input');
+      hex.type = 'text';
+      hex.className = 'ct-hex';
+      hex.spellcheck = false;
+      const currentVal = customDraft.tokens[item.key] || '#888888';
+      const cleanHex = normalizeCssHex(currentVal, '#888888');
+      hex.value = cleanHex;
+      const picker = document.createElement('input');
+      picker.type = 'color';
+      picker.value = cleanHex;
+      const onTokenEdit = val => {
+        const nextHex = normalizeCssHex(val, cleanHex);
+        customDraft.tokens[item.key] = nextHex;
+        picker.value = nextHex;
+        hex.value = nextHex;
+        if (item.key.startsWith('--wave-') && appSettings.waveCanvasMode === 'always-dark') {
+          appSettings.waveCanvasMode = 'custom';
+          saveStoredSettings(appSettings);
+          syncSettingsUI();
+          toast('Waveform Canvas switched to Custom Theme Wave Palette for live preview.');
+        }
+        if (item.key.startsWith('--term-') && appSettings.termThemeMode === 'always-dark' && customDraft.scheme === 'light') {
+          appSettings.termThemeMode = 'follow-theme';
+          saveStoredSettings(appSettings);
+          syncSettingsUI();
+        }
+        previewCustomDraftLive();
+      };
+      picker.addEventListener('input', e => onTokenEdit(e.target.value));
+      hex.addEventListener('change', e => onTokenEdit(e.target.value));
+      inputs.append(hex, picker);
+      row.append(lbl, inputs);
+      grid.append(row);
+    }
+    box.append(title, grid);
+    host.append(box);
+  }
+}
+function syncSettingsUI() {
+  const modeLabelMap = { 'always-dark': 'Scope Canvas: Dark', 'follow-theme': 'Scope Canvas: Follow', 'custom': 'Scope Canvas: Custom' };
+  if ($('#setToggleWaveCanvas')) $('#setToggleWaveCanvas').textContent = modeLabelMap[appSettings.waveCanvasMode] || 'Scope Canvas: Dark';
+  if ($('#setEditorFont')) $('#setEditorFont').value = appSettings.editorFontFamily;
+  if ($('#setEditorFontSize')) { $('#setEditorFontSize').value = String(appSettings.editorFontSize); if ($('#setEditorFontVal')) $('#setEditorFontVal').textContent = `${appSettings.editorFontSize}px`; }
+  if ($('#setEditorTabSize')) $('#setEditorTabSize').value = String(appSettings.editorTabSize);
+  if ($('#setEditorWrap')) $('#setEditorWrap').checked = localStorage.getItem('trace.wordWrap') === '1';
+  if ($('#setEditorHighlightLine')) $('#setEditorHighlightLine').checked = appSettings.editorHighlightLine !== false;
+  if ($('#setEditorAutoIndent')) $('#setEditorAutoIndent').checked = appSettings.editorAutoIndent !== false;
+  if ($('#setWaveCanvasMode')) $('#setWaveCanvasMode').value = appSettings.waveCanvasMode || 'always-dark';
+  if ($('#setWaveUnit')) $('#setWaveUnit').value = appSettings.waveTimeUnit || 'auto';
+  if ($('#setWaveFollow')) $('#setWaveFollow').checked = appSettings.waveFollow !== false;
+  if ($('#setWaveMaxSamples')) $('#setWaveMaxSamples').value = String(appSettings.waveMaxSamples || 40000);
+  if ($('#setDefaultClk')) $('#setDefaultClk').value = String(appSettings.defaultClkHz || 50000000);
+  if ($('#setDefaultStd')) $('#setDefaultStd').value = appSettings.defaultStandard || '93';
+  if ($('#setTermThemeMode')) $('#setTermThemeMode').value = appSettings.termThemeMode || 'always-dark';
+  if ($('#setTermFontSize')) { $('#setTermFontSize').value = String(appSettings.termFontSize || 12); if ($('#setTermFontVal')) $('#setTermFontVal').textContent = `${appSettings.termFontSize || 12}px`; }
+  if ($('#setTermCursorStyle')) $('#setTermCursorStyle').value = appSettings.termCursorStyle || 'block';
+  if ($('#setTermCursorBlink')) $('#setTermCursorBlink').checked = appSettings.termCursorBlink !== false;
+  if ($('#setWatchExternal')) $('#setWatchExternal').checked = appSettings.watchExternalFiles !== false;
+  if ($('#setHdlRootPath')) $('#setHdlRootPath').textContent = currentHdlRoot || '—';
+  if ($('#setConfirmHomeExit')) {
+    let skip = false;
+    try { skip = localStorage.getItem('trace.skipHomeExitConfirm') === '1'; } catch {}
+    $('#setConfirmHomeExit').checked = !skip;
+  }
+  if ($('#setStartupUnmuted')) $('#setStartupUnmuted').checked = !!appSettings.startupUnmuted;
+  if ($('#setMasterVolume')) { $('#setMasterVolume').value = String(appSettings.masterVolume ?? 50); if ($('#setVolumeVal')) $('#setVolumeVal').textContent = `${appSettings.masterVolume ?? 50}%`; }
+  const gfx = board?.getGfx?.();
+  if (gfx && $('#setGfxQuality')) $('#setGfxQuality').value = gfx.quality || 'high';
+  if ($('#glow') && $('#setBoardGlow')) {
+    $('#setBoardGlow').value = $('#glow').value;
+    if ($('#setGlowVal')) $('#setGlowVal').textContent = `${$('#glow').value}%`;
+  }
+}
+function wireSettingsAndThemes() {
+  $$('.set-nav-btn').forEach(btn => btn.addEventListener('click', () => switchSettingsTab(btn.dataset.settab)));
+  $('#btnSettings')?.addEventListener('click', () => openSettingsModal());
+  $('#homeSettingsBtn')?.addEventListener('click', () => openSettingsModal());
+  $('#tpOpenCustomizer')?.addEventListener('click', () => openSettingsModal('themes'));
+  $('#setNewCustomBtn')?.addEventListener('click', () => {
+    const studio = $('#customThemeStudio');
+    if (studio) studio.open = true;
+    loadThemeIntoCustomDraft(findThemePreset(activeThemeId, customThemes));
+    studio?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  });
+  $('#customThemeStudio')?.addEventListener('toggle', e => {
+    if (e.target.open && !customDraft) loadThemeIntoCustomDraft(findThemePreset(activeThemeId, customThemes));
+  });
+  $('#setToggleWaveCanvas')?.addEventListener('click', () => {
+    const order = ['always-dark', 'follow-theme', 'custom'];
+    const idx = order.indexOf(appSettings.waveCanvasMode || 'always-dark');
+    appSettings.waveCanvasMode = order[(idx + 1) % order.length];
+    applyAllSettings();
+  });
+  $('#ctCloneSelect')?.addEventListener('change', e => {
+    const picked = findThemePreset(e.target.value, customThemes);
+    if (picked) {
+      loadThemeIntoCustomDraft({ ...picked, isCustom: false });
+      previewCustomDraftLive();
+    }
+  });
+  $('#ctName')?.addEventListener('input', e => { if (customDraft) customDraft.name = e.target.value; });
+  $('#ctScheme')?.addEventListener('change', e => {
+    if (customDraft) {
+      customDraft.scheme = e.target.value === 'light' ? 'light' : 'dark';
+      previewCustomDraftLive();
+    }
+  });
+  $('#ctApplyLiveBtn')?.addEventListener('click', () => {
+    previewCustomDraftLive();
+    toast('Live preview applied.');
+  });
+  $('#ctSaveBtn')?.addEventListener('click', () => {
+    if (!customDraft) loadThemeIntoCustomDraft(findThemePreset(activeThemeId, customThemes));
+    const name = ($('#ctName')?.value || customDraft.name || 'My Custom Theme').trim().slice(0, 48);
+    const id = customDraft.id || `custom-${Date.now().toString(36)}`;
+    const savedObj = {
+      id,
+      name,
+      category: 'Custom',
+      isCustom: true,
+      scheme: $('#ctScheme')?.value === 'light' ? 'light' : 'dark',
+      description: 'User customized theme.',
+      tokens: { ...customDraft.tokens },
+    };
+    const idx = customThemes.findIndex(t => t.id === id);
+    if (idx >= 0) customThemes[idx] = savedObj;
+    else customThemes.push(savedObj);
+    saveStoredCustomThemes(customThemes);
+    persistAppState({ customThemes });
+    customDraft.id = id;
+    customDraft.name = name;
+    applyTheme(id, { save: true });
+    renderSettingsThemes();
+    loadThemeIntoCustomDraft(savedObj);
+    toast(`Saved custom theme "${name}".`, 'ok');
+  });
+  $('#ctDeleteBtn')?.addEventListener('click', () => {
+    if (!customDraft?.id) return;
+    const doomedId = customDraft.id;
+    customThemes = customThemes.filter(t => t.id !== doomedId);
+    saveStoredCustomThemes(customThemes);
+    persistAppState({ customThemes });
+    if (activeThemeId === doomedId) applyTheme('trace-dark', { save: true });
+    renderSettingsThemes();
+    loadThemeIntoCustomDraft(findThemePreset(activeThemeId, customThemes));
+    toast('Deleted custom theme.');
+  });
+  $('#ctExportBtn')?.addEventListener('click', () => {
+    const src = customDraft || resolveThemeSpec(activeThemeId, customThemes, appSettings);
+    const payload = {
+      traceThemeVersion: 1,
+      name: ($('#ctName')?.value || src.name || 'custom-theme').trim(),
+      scheme: ($('#ctScheme')?.value || src.scheme || 'dark'),
+      tokens: customDraft ? customDraft.tokens : src.baseTokens,
+    };
+    download(JSON.stringify(payload, null, 2), `${payload.name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-') || 'trace-theme'}.json`, 'application/json');
+    toast('Exported theme JSON.');
+  });
+  $('#ctImportBtn')?.addEventListener('click', () => $('#ctImportFile')?.click());
+  $('#ctImportFile')?.addEventListener('change', async e => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      if (!parsed || typeof parsed.tokens !== 'object') throw new Error('Invalid theme JSON format.');
+      const imported = {
+        id: `custom-${Date.now().toString(36)}`,
+        name: String(parsed.name || file.name.replace(/\.json$/i, '')).slice(0, 48),
+        category: 'Custom',
+        isCustom: true,
+        scheme: parsed.scheme === 'light' ? 'light' : 'dark',
+        description: 'Imported custom theme.',
+        tokens: { ...THEME_PRESETS[parsed.scheme === 'light' ? 1 : 0].tokens, ...parsed.tokens },
+      };
+      customThemes.push(imported);
+      saveStoredCustomThemes(customThemes);
+      persistAppState({ customThemes });
+      applyTheme(imported.id, { save: true });
+      renderSettingsThemes();
+      loadThemeIntoCustomDraft(imported);
+      if ($('#customThemeStudio')) $('#customThemeStudio').open = true;
+      toast(`Imported theme "${imported.name}".`, 'ok');
+    } catch (err) { toast(err.message || 'Could not import theme JSON.', 'err'); }
+  });
+
+  // Editor settings
+  $('#setEditorFont')?.addEventListener('change', e => { appSettings.editorFontFamily = e.target.value; applyAllSettings(); });
+  $('#setEditorFontSize')?.addEventListener('input', e => { appSettings.editorFontSize = Number(e.target.value); applyAllSettings(); });
+  $('#setEditorTabSize')?.addEventListener('change', e => { appSettings.editorTabSize = Number(e.target.value); applyAllSettings(); });
+  $('#setEditorWrap')?.addEventListener('change', e => { ide?.toggleWordWrap?.(e.target.checked); });
+  $('#setEditorHighlightLine')?.addEventListener('change', e => { appSettings.editorHighlightLine = e.target.checked; applyAllSettings(); });
+  $('#setEditorAutoIndent')?.addEventListener('change', e => { appSettings.editorAutoIndent = e.target.checked; applyAllSettings(); });
+
+  // Waveforms & Simulator settings
+  $('#setWaveCanvasMode')?.addEventListener('change', e => { appSettings.waveCanvasMode = e.target.value; applyAllSettings(); });
+  $('#setWaveUnit')?.addEventListener('change', e => { appSettings.waveTimeUnit = e.target.value; applyAllSettings(); });
+  $('#setWaveFollow')?.addEventListener('change', e => { appSettings.waveFollow = e.target.checked; applyAllSettings(); });
+  $('#setWaveMaxSamples')?.addEventListener('change', e => { appSettings.waveMaxSamples = Number(e.target.value); applyAllSettings(); });
+  $('#setDefaultClk')?.addEventListener('change', e => {
+    appSettings.defaultClkHz = Number(e.target.value);
+    if ($('#clkHz')) { $('#clkHz').value = String(appSettings.defaultClkHz); $('#clkHz').dispatchEvent(new Event('change')); }
+    applyAllSettings();
+  });
+  $('#setDefaultStd')?.addEventListener('change', e => {
+    appSettings.defaultStandard = e.target.value;
+    if ($('#standardSelect')) $('#standardSelect').value = appSettings.defaultStandard;
+    applyAllSettings();
+  });
+
+  // Terminal & Workspace settings
+  $('#setTermThemeMode')?.addEventListener('change', e => { appSettings.termThemeMode = e.target.value; applyAllSettings(); });
+  $('#setTermFontSize')?.addEventListener('input', e => { appSettings.termFontSize = Number(e.target.value); applyAllSettings(); });
+  $('#setTermCursorStyle')?.addEventListener('change', e => { appSettings.termCursorStyle = e.target.value; applyAllSettings(); });
+  $('#setTermCursorBlink')?.addEventListener('change', e => { appSettings.termCursorBlink = e.target.checked; applyAllSettings(); });
+  $('#setWatchExternal')?.addEventListener('change', e => { appSettings.watchExternalFiles = e.target.checked; applyAllSettings(); });
+  $('#setChangeHdlRootBtn')?.addEventListener('click', () => changeHdlRoot());
+  $('#setConfirmHomeExit')?.addEventListener('change', e => {
+    ide?.setSkipHomeExitConfirm?.(!e.target.checked);
+  });
+
+  // Audio & 3D Board settings
+  $('#setStartupUnmuted')?.addEventListener('change', e => {
+    appSettings.startupUnmuted = e.target.checked;
+    applyAllSettings();
+  });
+  $('#setMasterVolume')?.addEventListener('input', e => {
+    appSettings.masterVolume = Number(e.target.value);
+    applyAllSettings();
+  });
+  $('#setGfxQuality')?.addEventListener('change', e => {
+    if ($('#quality')) { $('#quality').value = e.target.value; $('#quality').dispatchEvent(new Event('change')); }
+  });
+  $('#setBoardGlow')?.addEventListener('input', e => {
+    if ($('#glow')) { $('#glow').value = e.target.value; $('#glow').dispatchEvent(new Event('input')); }
+    if ($('#setGlowVal')) $('#setGlowVal').textContent = `${e.target.value}%`;
+  });
+  $('#setResetAllBtn')?.addEventListener('click', () => {
+    appSettings = { ...DEFAULT_SETTINGS };
+    applyAllSettings();
+    applyTheme('trace-dark', { save: true });
+    renderSettingsThemes();
+    toast('Restored default preferences.');
+  });
+
+  // Close theme popover on outside click / Escape
+  document.addEventListener('click', e => {
+    const pop = $('#themePopover');
+    if (!pop || pop.classList.contains('hidden')) return;
+    if (e.target.closest('#themePopover, #btnTheme, #homeThemeBtn')) return;
+    closeThemePopover();
+  });
+  window.addEventListener('resize', closeThemePopover);
 }
 function wire() {
   $('#btnTheme').onclick = () => {
-    const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-    applyTheme(theme);
-    try { localStorage.setItem('trace.theme', theme); } catch {}
-    persistAppState({ theme });
+    const pop = $('#themePopover');
+    if (pop && !pop.classList.contains('hidden')) closeThemePopover();
+    else openThemePopover();
   };
   $('#btnRun').onclick = async () => {
     if (!S.power || S.building || S.importing || S.exporting) return;
@@ -2028,6 +2525,17 @@ function wire() {
     const mod = e.ctrlKey || e.metaKey;
     if (!mod && !e.altKey && !e.shiftKey && e.key === 'F11') { e.preventDefault(); ide?.toggleAppFullscreen?.(); return; }
     const modalOpen = !!document.querySelector('dialog:modal');
+    if (e.key === 'Escape' && !$('#themePopover')?.classList.contains('hidden')) {
+      e.preventDefault();
+      closeThemePopover();
+      return;
+    }
+    if (mod && !e.altKey && !e.shiftKey && e.key === ',') {
+      e.preventDefault();
+      if ($('#settingsDialog')?.open) $('#settingsDialog').close();
+      else openSettingsModal();
+      return;
+    }
     const homeOpen = !!($('#homeView') && !$('#homeView').classList.contains('hidden'));
     if (e.key === 'Escape' && !modalOpen && homeOpen) { if (ide?.hasActiveSession) ide.resumeWorkbench(); return; }
     if (modalOpen) return;
@@ -2363,9 +2871,17 @@ async function hydrateDiskState() {
     const data = await res.json();
     const st = data?.state;
     if (!st || typeof st !== 'object') return;
-    if (['light', 'dark'].includes(st.theme)) {
-      document.documentElement.dataset.theme = st.theme;
-      try { localStorage.setItem('trace.theme', st.theme); } catch {}
+    if (st.theme && typeof st.theme === 'string') {
+      activeThemeId = normalizeThemeId(st.theme);
+      try { localStorage.setItem('trace.theme', activeThemeId); } catch {}
+    }
+    if (Array.isArray(st.customThemes)) {
+      customThemes = st.customThemes.filter(t => t && t.id && t.name && t.tokens);
+      saveStoredCustomThemes(customThemes);
+    }
+    if (st.settings && typeof st.settings === 'object') {
+      appSettings = { ...DEFAULT_SETTINGS, ...st.settings };
+      saveStoredSettings(appSettings);
     }
     if (st.layout && typeof st.layout === 'object') {
       try { localStorage.setItem('trace.layout.v1', JSON.stringify(st.layout)); } catch {}
@@ -2397,11 +2913,20 @@ async function boot() {
   await hydrateDiskState();
   matchMedia('(max-width: 1000px)').addEventListener('change', syncNavigation);
   syncNavigation();
-  audio.setMuted(true);
+  audio.setMuted(!appSettings.startupUnmuted);
+  audio.setVolume(appSettings.masterVolume);
+  if (appSettings.startupUnmuted && $('#muteLabel')) {
+    $('#btnMute')?.setAttribute('aria-pressed', 'false');
+    $('#muteLabel').textContent = 'Sound on';
+  }
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
   try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { trackUiAction('3D', $('#view3d'), `${pressed ? 'press' : 'release'} ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.65); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
-  waves = new WaveViewer($('#waveCanvas'), $('#waveNames'), $('#waveScrollTrack'), $('#waveScrollThumb')); applyTheme(document.documentElement.dataset.theme); wire();
-  ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, restartSimulation, restoreSavedCompileState, renderSources, openTools, openBottomTab, syncNavigation, projectData, saveProject, persistAppState, prepareExit, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations, reloadQsfText });
+  waves = new WaveViewer($('#waveCanvas'), $('#waveNames'), $('#waveScrollTrack'), $('#waveScrollThumb'));
+  ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, restartSimulation, restoreSavedCompileState, renderSources, openTools, openBottomTab, syncNavigation, projectData, saveProject, persistAppState, prepareExit, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations, reloadQsfText, openSettings: tab => openSettingsModal(tab), toggleScheme });
+  applyTheme(activeThemeId);
+  wire();
+  wireSettingsAndThemes();
+  applyAllSettings({ persist: false });
   wireActionLogger();
   fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);

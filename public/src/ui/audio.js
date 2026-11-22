@@ -2,6 +2,7 @@
 let ctx = null;
 let master = null;
 let muted = false;
+let masterVolume = 0.5;
 let buzzerOsc = null, buzzerFilters = null, buzzerGain = null, buzzerStopTimer = null, buzzerWave = null;
 let workletNode = null, workletLoading = null, workletGain = null;
 
@@ -11,7 +12,7 @@ function ensure() {
   if (!AC) return null;
   ctx = new AC();
   master = ctx.createGain();
-  master.gain.value = muted ? 0 : 0.5;
+  master.gain.value = muted ? 0 : masterVolume;
   master.connect(ctx.destination);
   return ctx;
 }
@@ -24,9 +25,15 @@ export function resume() {
 
 export function setMuted(m) {
   muted = m;
-  if (master) master.gain.setTargetAtTime(m ? 0 : 0.5, ctx.currentTime, 0.02);
+  if (master) master.gain.setTargetAtTime(m ? 0 : masterVolume, ctx.currentTime, 0.02);
   if (m) stopBuzzer();
 }
+export function setVolume(pct) {
+  const norm = Math.max(0, Math.min(1, (Number(pct) || 0) / 100));
+  masterVolume = norm;
+  if (master && !muted) master.gain.setTargetAtTime(masterVolume, ctx.currentTime, 0.02);
+}
+export function getVolume() { return Math.round(masterVolume * 100); }
 export function isMuted() { return muted; }
 export function sampleRate() { return ctx?.sampleRate || 48000; }
 

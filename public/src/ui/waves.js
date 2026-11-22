@@ -130,10 +130,19 @@ export class WaveViewer {
     const style = getComputedStyle(document.documentElement);
     this.palette = Object.fromEntries(['bg', 'grid', 'row', 'text', 'unknown', 'cursor'].map(key => [key, style.getPropertyValue(`--wave-${key}`).trim()]));
     this.palette.header = style.getPropertyValue('--wave-header').trim() || this.palette.bg;
-    this.palette.line = style.getPropertyValue('--line').trim() || this.palette.grid;
-    this.colors = document.documentElement.dataset.theme === 'dark' ? DARK_COLORS : COLORS;
+    this.palette.line = style.getPropertyValue('--wave-line').trim() || style.getPropertyValue('--line').trim() || this.palette.grid;
+    const isDarkCanvas = document.documentElement.dataset.scheme === 'dark' || /^#0[0-5]|^#1[0-9]|^#2[0-9]/i.test(this.palette.bg);
+    const fallbackColors = isDarkCanvas ? DARK_COLORS : COLORS;
+    this.colors = Array.from({ length: 8 }, (_, i) => style.getPropertyValue(`--wave-c${i}`).trim() || fallbackColors[i]);
     this.signals.forEach((signal, i) => signal.color = this.colors[i % this.colors.length]);
     this.renderNames(); this.draw();
+  }
+  setMaxSamples(limit) {
+    const next = Math.max(2000, Math.min(200000, Number(limit) || 40000));
+    this.maxSamples = next;
+    for (const s of this.signals) {
+      if (s.samples.length > next) s.samples.splice(0, s.samples.length - next);
+    }
   }
   setTimeUnit(unit = 'auto') {
     this.timeUnit = unit || 'auto';

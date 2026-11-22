@@ -565,6 +565,10 @@ export function createIde(api) {
       const editor = new CodeEditor($('#editorHost'), {
         language: languageFor(name),
         wordWrap,
+        lineHeight: editorOpts.lineHeight,
+        tabSize: editorOpts.tabSize,
+        autoIndent: editorOpts.autoIndent,
+        highlightLine: editorOpts.highlightLine,
         onToggleWrap: () => toggleWordWrap(),
         onChange: () => {
           const current = docs.get(name);
@@ -961,7 +965,27 @@ export function createIde(api) {
   }
   let projectWatcher = null;
   let watchedDir = null;
+  let watchExternalEnabled = true;
+  let editorOpts = { lineHeight: 20, tabSize: 2, autoIndent: true, highlightLine: true };
+  let termOpts = { fontSize: 12, cursorStyle: 'block', cursorBlink: true, themeMode: 'always-dark' };
   const externalWarned = new Map();
+
+  function setWatchExternalEnabled(flag) {
+    watchExternalEnabled = flag !== false;
+    if (!watchExternalEnabled) closeProjectWatcher();
+    else if (S.projectDir) ensureProjectWatcher(S.projectDir);
+  }
+
+  function applyEditorOptions(opts = {}) {
+    if (opts.fontSize) {
+      const fs = Math.max(10, Math.min(20, Number(opts.fontSize) || 12));
+      editorOpts.lineHeight = Math.round(fs * 1.65);
+    }
+    if (opts.tabSize) editorOpts.tabSize = Math.max(1, Math.min(8, Number(opts.tabSize) || 2));
+    if (typeof opts.autoIndent === 'boolean') editorOpts.autoIndent = opts.autoIndent;
+    if (typeof opts.highlightLine === 'boolean') editorOpts.highlightLine = opts.highlightLine;
+    for (const doc of docs.values()) doc.editor?.setOptions?.(editorOpts);
+  }
 
   function closeProjectWatcher() {
     if (projectWatcher) {
@@ -972,7 +996,7 @@ export function createIde(api) {
   }
 
   function ensureProjectWatcher(dir) {
-    const target = dir || null;
+    const target = watchExternalEnabled ? (dir || null) : null;
     if (target === watchedDir) return;
     closeProjectWatcher();
     if (!target || typeof EventSource !== 'function') return;
@@ -997,6 +1021,7 @@ export function createIde(api) {
   }
 
   async function syncExternalDiskChanges(changedRels = []) {
+    if (!watchExternalEnabled) return;
     const dir = S.projectDir;
     if (!dir) return;
     const candidates = new Set();
@@ -2229,6 +2254,50 @@ export function createIde(api) {
   let termInfoLoaded = false;
   let termResizeObs = null;
 
+  function buildXtermTheme() {
+    const style = getComputedStyle(document.documentElement);
+    const read = (k, fb) => style.getPropertyValue(k).trim() || fb;
+    const isLight = (termOpts.themeMode === 'follow-theme') && document.documentElement.dataset.scheme === 'light';
+    if (isLight) {
+      const bg = read('--term-bg', '#f6f7f2');
+      const fg = read('--term-fg', '#1f261d');
+      const cur = read('--term-cursor', '#3e611c');
+      const sel = read('--term-sel', '#cfe39b88');
+      return {
+        background: bg, foreground: fg, cursor: cur, cursorAccent: bg, selectionBackground: sel,
+        black: '#1f261d', red: '#b23e36', green: '#3e611c', yellow: '#997129', blue: '#1d5c94', magenta: '#7c4791', cyan: '#216478', white: '#e8ebe0',
+        brightBlack: '#66705d', brightRed: '#c53030', brightGreen: '#2f5e16', brightYellow: '#b76e00', brightBlue: '#0068b5', brightMagenta: '#9248a8', brightCyan: '#0e7490', brightWhite: '#ffffff',
+      };
+    }
+    const bg = read('--term-bg', '#121611');
+    const fg = read('--term-fg', '#e4eadc');
+    const cur = read('--term-cursor', '#e4eadc');
+    const sel = read('--term-sel', '#b7d98c44');
+    return {
+      background: bg, foreground: fg, cursor: cur, cursorAccent: bg, selectionBackground: sel,
+      black: '#141813', red: '#f0655b', green: '#b7d98c', yellow: '#f0e68c', blue: '#78c6d9', magenta: '#d1a6f0', cyan: '#78c6d9', white: '#e4eadc',
+      brightBlack: '#6e7865', brightRed: '#f5897f', brightGreen: '#d4ed80', brightYellow: '#fff2a1', brightBlue: '#98dcf0', brightMagenta: '#e2bffa', brightCyan: '#98dcf0', brightWhite: '#ffffff',
+    };
+  }
+
+  function applyTerminalOptions(opts = {}) {
+    if (opts.fontSize) termOpts.fontSize = Math.max(9, Math.min(20, Number(opts.fontSize) || 12));
+    if (opts.cursorStyle) termOpts.cursorStyle = ['block', 'bar', 'underline'].includes(opts.cursorStyle) ? opts.cursorStyle : 'block';
+    if (typeof opts.cursorBlink === 'boolean') termOpts.cursorBlink = opts.cursorBlink;
+    if (opts.themeMode) termOpts.themeMode = opts.themeMode;
+    const nextTheme = buildXtermTheme();
+    for (const t of termSessionsList) {
+      if (!t?.xterm) continue;
+      try {
+        t.xterm.options.fontSize = termOpts.fontSize;
+        t.xterm.options.cursorStyle = termOpts.cursorStyle;
+        t.xterm.options.cursorBlink = termOpts.cursorBlink;
+        t.xterm.options.theme = nextTheme;
+      } catch {}
+    }
+    requestAnimationFrame(() => fitActiveXterm());
+  }
+
   const XTERM_THEME = {
     background: '#121611',
     foreground: '#e4eadc',
@@ -2433,17 +2502,17 @@ export function createIde(api) {
       const xterm = new Terminal({
         cols,
         rows,
-        cursorBlink: true,
-        cursorStyle: 'block',
+        cursorBlink: termOpts.cursorBlink,
+        cursorStyle: termOpts.cursorStyle,
         fontFamily: '"Cascadia Mono", Consolas, "Segoe UI Emoji", monospace',
-        fontSize: 12,
+        fontSize: termOpts.fontSize,
         lineHeight: 1.2,
         scrollback: 5000,
         convertEol: false,
         allowProposedApi: true,
         rescaleOverlappingGlyphs: true,
         ...(data.pty ? { windowsPty: { backend: 'conpty', buildNumber: 26200 } } : {}),
-        theme: XTERM_THEME,
+        theme: buildXtermTheme(),
       });
       registerUnicode11Provider(xterm);
 
@@ -2618,6 +2687,8 @@ export function createIde(api) {
     photo: () => $('#btnPhotoMode').click(),
     fullscreen: () => toggleAppFullscreen(),
     theme: () => $('#btnTheme').click(),
+    toggleScheme: () => api.toggleScheme?.(),
+    settings: () => api.openSettings?.(),
     resetLayout,
     exit: () => requestAppClose(),
     flash: () => api.flashToBoard?.(),
@@ -2958,6 +3029,7 @@ export function createIde(api) {
     setProblems, reportBuildFailure, resetLayout, setEditorPaneOpen, setBoardPaneOpen,
     showHome, requestReturnHome, requestProjectSwitch, requestAppClose, toggleAppFullscreen, setSkipHomeExitConfirm, openNewProjectWizard, resumeWorkbench, captureBaseline, currentProjectTitle, renderHome, recordRecentProject, populateHomeHdl,
     openFileBrowserModal, toggleWordWrap, setMarkdownMode, openTutorial, cycleTab, toggleTerminalPane, ensureTerminalInitialized, updateTermCwd,
+    applyEditorOptions, applyTerminalOptions, setWatchExternalEnabled,
     get hasActiveSession() { return hasActiveSession; },
     get active() { return active; },
     get tabs() { return [...tabs]; },

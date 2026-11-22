@@ -185,7 +185,7 @@ export function renderMarkdownHtml(markdown = '') {
   return html.join('\n');
 }
 
-const LINE_HEIGHT = 20, PAD_TOP = 10;
+const DEFAULT_LINE_HEIGHT = 20, PAD_TOP = 10;
 const INDENT_AFTER = /(\b(is|begin|then|else|loop|generate|record|units)|\(|\b(port|generic)(\s+map)?\s*\()$/i;
 
 export class CodeEditor {
@@ -193,6 +193,10 @@ export class CodeEditor {
     this.callbacks = callbacks;
     this.language = callbacks.language || 'vhdl';
     this.wordWrap = !!callbacks.wordWrap;
+    this.lineHeight = Number(callbacks.lineHeight) || DEFAULT_LINE_HEIGHT;
+    this.tabSize = Math.max(1, Math.min(8, Number(callbacks.tabSize) || 2));
+    this.autoIndent = callbacks.autoIndent !== false;
+    this.highlightLine = callbacks.highlightLine !== false;
     this.markers = [];
     this.root = document.createElement('div');
     this.root.className = `ce${this.wordWrap ? ' wrap-on' : ''}`;
@@ -216,6 +220,14 @@ export class CodeEditor {
     for (const type of ['keyup', 'click', 'focus', 'select']) this.input.addEventListener(type, () => this.reportCursor());
     this.input.addEventListener('blur', () => this.curLine.classList.add('off'));
     this.input.addEventListener('focus', () => this.curLine.classList.remove('off'));
+  }
+  setOptions(opts = {}) {
+    if (opts.lineHeight) this.lineHeight = Math.max(14, Number(opts.lineHeight) || DEFAULT_LINE_HEIGHT);
+    if (opts.tabSize) this.tabSize = Math.max(1, Math.min(8, Number(opts.tabSize) || 2));
+    if (typeof opts.autoIndent === 'boolean') this.autoIndent = opts.autoIndent;
+    if (typeof opts.highlightLine === 'boolean') this.highlightLine = opts.highlightLine;
+    this.renderMarkers();
+    this.reportCursor();
   }
   get value() { return this.input.value; }
   setValue(text) { this.input.value = text; this.renderNow(); this.reportCursor(); }
@@ -267,8 +279,8 @@ export class CodeEditor {
   reportCursor() {
     if (!this.root.classList.contains('active')) return;
     const info = this.cursor();
-    if (info.selected) this.curLine.remove();
-    else { this.curLine.style.top = `${PAD_TOP + (info.line - 1) * LINE_HEIGHT}px`; if (!this.curLine.isConnected) this.lines.prepend(this.curLine); }
+    if (info.selected || !this.highlightLine) this.curLine.remove();
+    else { this.curLine.style.top = `${PAD_TOP + (info.line - 1) * this.lineHeight}px`; if (!this.curLine.isConnected) this.lines.prepend(this.curLine); }
     this.callbacks.onCursor?.(info);
   }
   setMarkers(markers) { this.markers = markers || []; this.renderMarkers(); }
@@ -282,7 +294,7 @@ export class CodeEditor {
       seen.set(marker.line, { rank, marker });
     }
     for (const [line, { marker }] of seen) {
-      const top = PAD_TOP + (line - 1) * LINE_HEIGHT;
+      const top = PAD_TOP + (line - 1) * this.lineHeight;
       const bar = document.createElement('div'); bar.className = `ce-linehl ${marker.severity}`; bar.style.top = `${top}px`; this.lines.append(bar);
       const dot = document.createElement('div'); dot.className = `gm ${marker.severity}`; dot.style.top = `${top}px`; dot.title = marker.message || ''; dot.textContent = marker.severity === 'error' ? '●' : '▲'; this.gutterIn.append(dot);
     }
@@ -295,7 +307,7 @@ export class CodeEditor {
     offset += Math.min(Math.max(0, col - 1), rows[line - 1].length);
     this.focus();
     this.input.setSelectionRange(offset, offset);
-    const top = PAD_TOP + (line - 1) * LINE_HEIGHT;
+    const top = PAD_TOP + (line - 1) * this.lineHeight;
     if (top < this.input.scrollTop + 20 || top > this.input.scrollTop + this.input.clientHeight - 60) this.input.scrollTop = Math.max(0, top - this.input.clientHeight / 2);
     this.syncScroll(); this.reportCursor();
   }
@@ -399,17 +411,21 @@ export class CodeEditor {
   }
   indent() {
     const { selectionStart: start, selectionEnd: end, value } = this.input;
+    const step = this.tabSize || 2;
     if (start === end || !value.slice(start, end).includes('\n')) {
       const col = start - (value.lastIndexOf('\n', start - 1) + 1);
-      this.insert(' '.repeat(2 - (col % 2)));
+      this.insert(' '.repeat(step - (col % step)));
       return;
     }
     const block = this.blockRange();
-    this.replaceBlock(block.from, block.to, block.text.split('\n').map(line => '  ' + line).join('\n'));
+    const pad = ' '.repeat(step);
+    this.replaceBlock(block.from, block.to, block.text.split('\n').map(line => pad + line).join('\n'));
   }
   outdent() {
+    const step = this.tabSize || 2;
+    const re = new RegExp(`^( {1,${step}}|\\t)`);
     const block = this.blockRange();
-    const text = block.text.split('\n').map(line => line.replace(/^( {1,2}|\t)/, '')).join('\n');
+    const text = block.text.split('\n').map(line => line.replace(re, '')).join('\n');
     if (text !== block.text) this.replaceBlock(block.from, block.to, text);
   }
   toggleComment() {
@@ -430,9 +446,10 @@ export class CodeEditor {
   newline() {
     const { selectionStart: start, value } = this.input;
     const lineStart = value.lastIndexOf('\n', start - 1) + 1, before = value.slice(lineStart, start);
-    const indent = before.match(/^[ \t]*/)[0];
+    const indent = this.autoIndent ? before.match(/^[ \t]*/)[0] : '';
+    const pad = ' '.repeat(this.tabSize || 2);
     const code = before.replace(/--.*$/, '').trim();
-    const extra = this.language === 'vhdl' && INDENT_AFTER.test(code) && !/^end\b/i.test(code) ? '  ' : '';
+    const extra = this.autoIndent && this.language === 'vhdl' && INDENT_AFTER.test(code) && !/^end\b/i.test(code) ? pad : '';
     this.insert('\n' + indent + extra);
   }
   moveLines(direction) {

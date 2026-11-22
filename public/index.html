@@ -7,9 +7,29 @@
 <title>Trace — FPGA workbench</title>
 <script>
 {
-  let savedTheme;
-  try { savedTheme = localStorage.getItem('trace.theme'); } catch {}
-  document.documentElement.dataset.theme = ['light', 'dark'].includes(savedTheme) ? savedTheme : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  let savedTheme = '';
+  let cache = null;
+  try { savedTheme = localStorage.getItem('trace.theme') || ''; } catch {}
+  if (savedTheme === 'dark') savedTheme = 'trace-dark';
+  else if (savedTheme === 'light') savedTheme = 'trace-light';
+  try { cache = JSON.parse(localStorage.getItem('trace.themeCssCache.v1') || 'null'); } catch {}
+  const lightIds = new Set(['trace-light', 'quartus-light', 'modelsim-light', 'solarized-light']);
+  const themeId = savedTheme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'trace-dark' : 'trace-light');
+  const scheme = cache?.id === themeId && (cache.scheme === 'light' || cache.scheme === 'dark')
+    ? cache.scheme
+    : (lightIds.has(themeId) ? 'light' : 'dark');
+  const root = document.documentElement;
+  root.dataset.theme = themeId;
+  root.dataset.scheme = scheme;
+  if (cache?.id === themeId && cache.tokens && typeof cache.tokens === 'object') {
+    for (const [k, v] of Object.entries(cache.tokens)) {
+      if (k.startsWith('--')) root.style.setProperty(k, v);
+    }
+    if (cache.editorFontFamily) root.style.setProperty('--ce-font', cache.editorFontFamily);
+    if (cache.editorFontSize) root.style.setProperty('--ce-font-size', cache.editorFontSize + 'px');
+    if (cache.editorLineHeight) root.style.setProperty('--ce-line-height', cache.editorLineHeight + 'px');
+    if (cache.editorTabSize) root.style.setProperty('--ce-tab-size', String(cache.editorTabSize));
+  }
 }
 </script>
 <link rel="stylesheet" href="/vendor/xterm.css?v=2">
@@ -22,9 +42,9 @@
   <header id="topbar">
     <a class="brand" href="/" aria-label="Trace home"><span class="brand-mark">t</span><span>trace<span class="brand-period">.</span></span></a>
     <nav class="menubar" aria-label="IDE menu bar">
-      <div class="menu"><button class="menu-btn" data-menu="file" aria-expanded="false">File</button><div class="menu-pop hidden" data-pop="file"><button data-cmd="home"><span>Home / Welcome Screen</span></button><button data-cmd="newFile"><span>New File…</span><kbd>Ctrl+Alt+N</kbd></button><button data-cmd="newFolder"><span>New Folder…</span></button><hr><button data-cmd="saveFile"><span>Save File</span><kbd>Ctrl+S</kbd></button><button data-cmd="saveFileAs"><span>Save File As…</span><kbd>Ctrl+Alt+S</kbd></button><hr><button data-cmd="newProject"><span>New Project Wizard…</span></button><button data-cmd="openProject"><span>Open Project (.qpf / .qsf)…</span></button><button data-cmd="openFiles"><span>Add / Open Files…</span><kbd>Ctrl+O</kbd></button><button data-cmd="saveProject"><span id="menuSaveProjectLabel">Save Project As…</span><kbd>Ctrl+Shift+S</kbd></button><button data-cmd="saveProjectAs" id="menuSaveProjectAs" class="hidden"><span>Save Project As…</span></button><button data-cmd="exportJson"><span>Export Project JSON…</span></button><hr><button data-cmd="loadDemo"><span>Load Counter Demo</span></button><button data-cmd="closeTab"><span>Close Editor Tab</span><kbd>Ctrl+W</kbd></button><hr><button data-cmd="exit"><span>Exit</span><kbd>Alt+F4</kbd></button></div></div>
+      <div class="menu"><button class="menu-btn" data-menu="file" aria-expanded="false">File</button><div class="menu-pop hidden" data-pop="file"><button data-cmd="home"><span>Home / Welcome Screen</span></button><button data-cmd="newFile"><span>New File…</span><kbd>Ctrl+Alt+N</kbd></button><button data-cmd="newFolder"><span>New Folder…</span></button><hr><button data-cmd="saveFile"><span>Save File</span><kbd>Ctrl+S</kbd></button><button data-cmd="saveFileAs"><span>Save File As…</span><kbd>Ctrl+Alt+S</kbd></button><hr><button data-cmd="newProject"><span>New Project Wizard…</span></button><button data-cmd="openProject"><span>Open Project (.qpf / .qsf)…</span></button><button data-cmd="openFiles"><span>Add / Open Files…</span><kbd>Ctrl+O</kbd></button><button data-cmd="saveProject"><span id="menuSaveProjectLabel">Save Project As…</span><kbd>Ctrl+Shift+S</kbd></button><button data-cmd="saveProjectAs" id="menuSaveProjectAs" class="hidden"><span>Save Project As…</span></button><button data-cmd="exportJson"><span>Export Project JSON…</span></button><hr><button data-cmd="loadDemo"><span>Load Counter Demo</span></button><button data-cmd="closeTab"><span>Close Editor Tab</span><kbd>Ctrl+W</kbd></button><hr><button data-cmd="settings"><span>Settings &amp; Themes…</span><kbd>Ctrl+,</kbd></button><hr><button data-cmd="exit"><span>Exit</span><kbd>Alt+F4</kbd></button></div></div>
       <div class="menu"><button class="menu-btn" data-menu="edit" aria-expanded="false">Edit</button><div class="menu-pop hidden" data-pop="edit"><button data-cmd="undo"><span>Undo</span><kbd>Ctrl+Z</kbd></button><button data-cmd="redo"><span>Redo</span><kbd>Ctrl+Y</kbd></button><hr><button data-cmd="comment"><span>Toggle Line Comment</span><kbd>Ctrl+/</kbd></button><button data-cmd="dupLine"><span>Duplicate Line Down</span><kbd>Shift+Alt+↓</kbd></button><button data-cmd="delLine"><span>Delete Line</span><kbd>Ctrl+Shift+K</kbd></button><button data-cmd="wordWrap"><span>Toggle Word Wrap</span><kbd>Alt+Z</kbd></button></div></div>
-      <div class="menu"><button class="menu-btn" data-menu="view" aria-expanded="false">View</button><div class="menu-pop hidden" data-pop="view"><button data-cmd="viewExplorer"><span>Project Explorer</span><kbd>Ctrl+Shift+E</kbd></button><button data-cmd="viewPins"><span>Pin Planner</span></button><button data-cmd="toggleEditor"><span>Toggle Code Editor Pane</span><kbd>Ctrl+E</kbd></button><button data-cmd="toggleBoard"><span>Toggle 3D Board Viewport</span><kbd>Alt+B</kbd></button><button data-cmd="wordWrap"><span>Toggle Word Wrap</span><kbd>Alt+Z</kbd></button><hr><button data-cmd="panelWaves"><span>Logic Analyzer (Waveforms)</span></button><button data-cmd="panelTerminal"><span>Integrated Terminal</span><kbd>Ctrl+`</kbd></button><button data-cmd="panelProblems"><span>Problems</span></button><button data-cmd="panelConsole"><span>Output Console</span></button><button data-cmd="panelPinout"><span>Board Pinout Reference</span></button><button data-cmd="panelTruth"><span>Truth Table Generator</span></button><button data-cmd="panelUart"><span>UART Serial Monitor</span></button><button data-cmd="panelBitstream"><span>Bitstream Inspector</span></button><hr><button data-cmd="photo"><span>Photo Studio</span><kbd>P</kbd></button><button data-cmd="fullscreen"><span>Toggle Full Screen</span><kbd>F11</kbd></button><button data-cmd="theme"><span>Toggle Light / Dark Theme</span></button><button data-cmd="resetLayout"><span>Reset IDE Layout</span></button></div></div>
+      <div class="menu"><button class="menu-btn" data-menu="view" aria-expanded="false">View</button><div class="menu-pop hidden" data-pop="view"><button data-cmd="viewExplorer"><span>Project Explorer</span><kbd>Ctrl+Shift+E</kbd></button><button data-cmd="viewPins"><span>Pin Planner</span></button><button data-cmd="toggleEditor"><span>Toggle Code Editor Pane</span><kbd>Ctrl+E</kbd></button><button data-cmd="toggleBoard"><span>Toggle 3D Board Viewport</span><kbd>Alt+B</kbd></button><button data-cmd="wordWrap"><span>Toggle Word Wrap</span><kbd>Alt+Z</kbd></button><hr><button data-cmd="panelWaves"><span>Logic Analyzer (Waveforms)</span></button><button data-cmd="panelTerminal"><span>Integrated Terminal</span><kbd>Ctrl+`</kbd></button><button data-cmd="panelProblems"><span>Problems</span></button><button data-cmd="panelConsole"><span>Output Console</span></button><button data-cmd="panelPinout"><span>Board Pinout Reference</span></button><button data-cmd="panelTruth"><span>Truth Table Generator</span></button><button data-cmd="panelUart"><span>UART Serial Monitor</span></button><button data-cmd="panelBitstream"><span>Bitstream Inspector</span></button><hr><button data-cmd="photo"><span>Photo Studio</span><kbd>P</kbd></button><button data-cmd="fullscreen"><span>Toggle Full Screen</span><kbd>F11</kbd></button><button data-cmd="theme"><span>Color Theme…</span></button><button data-cmd="toggleScheme"><span>Toggle Dark / Light Mode</span></button><button data-cmd="settings"><span>Settings…</span><kbd>Ctrl+,</kbd></button><button data-cmd="resetLayout"><span>Reset IDE Layout</span></button></div></div>
       <div class="menu"><button class="menu-btn" data-menu="run" aria-expanded="false">Build &amp; Sim</button><div class="menu-pop hidden" data-pop="run"><button data-cmd="save"><span>Build &amp; Compile</span><kbd>F7</kbd></button><button data-cmd="flash"><span>Flash to Board</span><kbd>Ctrl+B</kbd></button><button data-cmd="projectSettings"><span>Project &amp; Compiler Settings…</span></button><hr><button data-cmd="restart"><span>Restart Simulation</span></button><button data-cmd="step"><span>Step Clock Cycle</span><kbd>.</kbd></button><button data-cmd="run"><span>Run / Pause Simulation</span><kbd>Space</kbd></button></div></div>
       <div class="menu"><button class="menu-btn" data-menu="help" aria-expanded="false">Help</button><div class="menu-pop hidden" data-pop="help"><button data-cmd="tutorial"><span>Interactive Tutorial (TUTORIAL.md)</span></button><button data-cmd="shortcuts"><span>Keyboard Shortcuts</span></button><button data-cmd="limits"><span>Simulation Model &amp; Limits</span></button></div></div>
     </nav>
@@ -43,7 +63,8 @@
     <button id="btnLibrary" class="rail-btn active" title="Project files" aria-label="Project files" aria-expanded="true"><svg viewBox="0 0 24 24"><path d="M3 7V5h7l2 2h9v13H3z"/></svg><span>Files</span></button>
     <button id="btnPins" class="rail-btn" title="Pin assignments" aria-label="Pin assignments"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4"/></svg><span>Pins</span></button>
     <button id="btnTools" class="rail-btn" title="Logic analyzer &amp; inspection tools" aria-label="Logic analyzer and inspection tools" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="m5 7 5 5-5 5m8 0h6"/></svg><span>Tools</span></button>
-    <button id="btnTheme" class="rail-btn rail-bottom" title="Switch to dark mode" aria-label="Dark mode" aria-pressed="false"><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 13.4A9 9 0 0 1 10.6 3.2 9 9 0 1 0 20.8 13.4Z"/></svg><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><span>Theme</span></button>
+    <button id="btnTheme" class="rail-btn rail-bottom" title="Color theme switcher" aria-label="Color theme switcher" aria-pressed="false"><svg class="theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 13.4A9 9 0 0 1 10.6 3.2 9 9 0 1 0 20.8 13.4Z"/></svg><svg class="theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><span>Theme</span></button>
+    <button id="btnSettings" class="rail-btn" title="Settings &amp; Preferences (Ctrl+,)" aria-label="Settings and preferences"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span>Settings</span></button>
     <button id="btnAbout" class="rail-btn" title="Simulation capabilities" aria-label="Simulation capabilities"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-11v2"/></svg><span>About</span></button>
   </nav>
   <aside id="left">
@@ -417,7 +438,8 @@
       <div class="home-top-actions">
         <button id="homeTutorialBtn" class="btn" title="Open interactive Trace FPGA Workbench Tutorial (TUTORIAL.md)">Tutorial</button>
         <button id="homeShortcutsBtn" class="btn" title="View keyboard shortcuts">Shortcuts</button>
-        <button id="homeThemeBtn" class="btn" title="Switch between light and dark theme">Theme</button>
+        <button id="homeThemeBtn" class="btn" title="Switch color theme">Theme</button>
+        <button id="homeSettingsBtn" class="btn" title="Settings &amp; Theme Customizer (Ctrl+,)">Settings</button>
         <button id="homeAboutBtn" class="btn" title="Simulation capabilities and limits">About</button>
         <button id="homeContinueBtn" class="btn dark hidden" title="Return to active IDE workbench (Esc)">Continue to Workbench <span>→</span></button>
       </div>
@@ -520,7 +542,7 @@
 <dialog id="exitWorkbenchDialog" class="confirm-dialog" aria-labelledby="exitWbTitle"><div class="dialog-head"><div><span class="eyebrow">EXIT WORKBENCH</span><h2 id="exitWbTitle">Save project changes before exiting?</h2></div><button class="icon-btn" type="button" data-close="exitWorkbenchDialog" aria-label="Cancel and stay in workbench">×</button></div><div class="confirm-body"><p id="exitWbText">Choose how to handle <strong id="exitWbProject">Counter demo</strong> before closing Trace FPGA Workbench.</p><p id="exitWbDetail" class="hint">Saving writes your project files to disk before closing. Discarding reverts unsaved project changes and closes immediately.</p></div><div class="dialog-foot confirm-foot"><button id="exitWbCancel" type="button" class="btn" data-close="exitWorkbenchDialog">Cancel</button><div class="confirm-actions"><button id="exitWbDiscard" type="button" class="btn confirm-discard">Discard Project Changes</button><button id="exitWbSave" type="button" class="btn dark">Save &amp; Exit</button></div></div></dialog>
 <dialog id="exitHomeDialog" class="confirm-dialog" aria-labelledby="exitHomeTitle"><div class="dialog-head"><div><span class="eyebrow">EXIT APPLICATION</span><h2 id="exitHomeTitle">Exit app?</h2></div><button class="icon-btn" type="button" data-close="exitHomeDialog" aria-label="Cancel">×</button></div><div class="confirm-body"><p>Are you sure you want to exit Trace FPGA Workbench?</p><label class="exit-dont-ask"><input id="exitHomeDontAsk" type="checkbox"><span>Do not ask again</span></label></div><div class="dialog-foot confirm-foot"><button id="exitHomeNo" type="button" class="btn" data-close="exitHomeDialog">No</button><div class="confirm-actions"><button id="exitHomeYes" type="button" class="btn dark">Yes</button></div></div></dialog>
 <dialog id="projectSwitchDialog" class="confirm-dialog" aria-labelledby="psTitle"><div class="dialog-head"><div><span class="eyebrow">OPEN PROJECT</span><h2 id="psTitle">How would you like to open this project?</h2></div><button class="icon-btn" type="button" data-close="projectSwitchDialog" aria-label="Cancel">×</button></div><div class="confirm-body"><p id="psText">You currently have <strong id="psCurrentProject">Counter demo</strong> open in this window.</p><p id="psDetail" class="hint">Open in a new Trace window to keep both projects running independently, or switch in this window.</p></div><div class="dialog-foot confirm-foot"><button id="psCancel" type="button" class="btn" data-close="projectSwitchDialog">Cancel</button><div class="confirm-actions"><button id="psNewWindow" type="button" class="btn">New Window ↗</button><button id="psDiscard" type="button" class="btn confirm-discard">Discard &amp; Open Here</button><button id="psSave" type="button" class="btn dark">Save &amp; Open Here</button></div></div></dialog>
-<dialog id="keysDialog"><div class="dialog-head"><h2>Keyboard shortcuts</h2><button class="icon-btn" data-close="keysDialog" aria-label="Close shortcuts">×</button></div><div class="about-content"><dl><dt>Editor &amp; Files (VS Code Standard)</dt><dd><code>Ctrl+S</code> Save File · <code>Ctrl+Alt+S</code> Save File As · <code>Ctrl+Shift+S</code> Save Project (.qpf/.qsf) · <code>Ctrl+O</code> Add / Open Files · <code>Ctrl+Alt+N</code> New File · <code>Ctrl+W</code> Close Active Tab · <code>Ctrl+Tab</code> / <code>Ctrl+Shift+Tab</code> Next / Prev Tab · <code>Alt+Z</code> Toggle Word Wrap · <code>Ctrl+/</code> Toggle Line Comment · <code>Shift+Alt+↑/↓</code> Duplicate Line · <code>Alt+↑/↓</code> Move Line · <code>Ctrl+Shift+K</code> Delete Line · <code>Ctrl+D</code> Select Word · <code>Ctrl+L</code> Select Line · <code>Tab</code> / <code>Shift+Tab</code> Indent / Outdent · <code>F2</code> Rename in Explorer</dd><dt>IDE Layout &amp; Panels</dt><dd><code>F7</code> / <code>Ctrl+Shift+B</code> Build &amp; Compile · <code>Ctrl+B</code> Flash to Board · <code>Ctrl+Shift+E</code> Project Explorer · <code>Ctrl+`</code> Toggle Integrated Terminal · <code>Ctrl+E</code> Toggle Editor Pane · <code>Alt+B</code> Toggle 3D Board Viewport · <code>F11</code> Toggle Full Screen</dd><dt>Simulation &amp; 3D Board</dt><dd><code>Space</code> Run / Pause · <code>.</code> Step cycle · Hold <code>1–4</code> Tactile keys S1–S4 · <code>Alt+1–4</code> Toggle DIP 1–4 · Hold <code>R</code> Reset · <code>V</code> Interact / Select mode · <code>F</code> Center selected part · <code>P</code> Photo Studio · <code>H</code> Toggle Photo Studio HUD · <code>Esc</code> Exit Photo Studio / dismiss popups</dd></dl></div></dialog>
+<dialog id="keysDialog"><div class="dialog-head"><h2>Keyboard shortcuts</h2><button class="icon-btn" data-close="keysDialog" aria-label="Close shortcuts">×</button></div><div class="about-content"><dl><dt>Editor &amp; Files (VS Code Standard)</dt><dd><code>Ctrl+S</code> Save File · <code>Ctrl+Alt+S</code> Save File As · <code>Ctrl+Shift+S</code> Save Project (.qpf/.qsf) · <code>Ctrl+O</code> Add / Open Files · <code>Ctrl+Alt+N</code> New File · <code>Ctrl+W</code> Close Active Tab · <code>Ctrl+Tab</code> / <code>Ctrl+Shift+Tab</code> Next / Prev Tab · <code>Alt+Z</code> Toggle Word Wrap · <code>Ctrl+/</code> Toggle Line Comment · <code>Shift+Alt+↑/↓</code> Duplicate Line · <code>Alt+↑/↓</code> Move Line · <code>Ctrl+Shift+K</code> Delete Line · <code>Ctrl+D</code> Select Word · <code>Ctrl+L</code> Select Line · <code>Tab</code> / <code>Shift+Tab</code> Indent / Outdent · <code>F2</code> Rename in Explorer</dd><dt>IDE Layout &amp; Panels</dt><dd><code>Ctrl+,</code> Settings &amp; Theme Studio · <code>F7</code> / <code>Ctrl+Shift+B</code> Build &amp; Compile · <code>Ctrl+B</code> Flash to Board · <code>Ctrl+Shift+E</code> Project Explorer · <code>Ctrl+`</code> Toggle Integrated Terminal · <code>Ctrl+E</code> Toggle Editor Pane · <code>Alt+B</code> Toggle 3D Board Viewport · <code>F11</code> Toggle Full Screen</dd><dt>Simulation &amp; 3D Board</dt><dd><code>Space</code> Run / Pause · <code>.</code> Step cycle · Hold <code>1–4</code> Tactile keys S1–S4 · <code>Alt+1–4</code> Toggle DIP 1–4 · Hold <code>R</code> Reset · <code>V</code> Interact / Select mode · <code>F</code> Center selected part · <code>P</code> Photo Studio · <code>H</code> Toggle Photo Studio HUD · <code>Esc</code> Exit Photo Studio / dismiss popups</dd></dl></div></dialog>
 <dialog id="fileBrowserDialog" class="fb-dialog" aria-labelledby="fbTitle">
   <div class="dialog-head">
     <div><span id="fbEyebrow" class="eyebrow">FILE EXPLORER</span><h2 id="fbTitle">Browse Files &amp; Folders</h2></div>
@@ -569,6 +591,128 @@
 <dialog id="explorerActionDialog" class="confirm-dialog" aria-labelledby="eaTitle"><div class="dialog-head"><div><span id="eaEyebrow" class="eyebrow">FILE EXPLORER</span><h2 id="eaTitle">Rename</h2></div><button class="icon-btn" type="button" data-close="explorerActionDialog" aria-label="Cancel">×</button></div><form id="eaForm"><div class="confirm-body"><p id="eaText"></p><input id="eaInput" class="search mono hidden" autocomplete="off" spellcheck="false"><p id="eaHint" class="hint hidden"></p></div><div class="dialog-foot confirm-foot"><button id="eaCancel" type="button" class="btn" data-close="explorerActionDialog">Cancel</button><div class="confirm-actions"><button id="eaConfirm" type="submit" class="btn dark">Confirm</button></div></div></form></dialog>
 <div id="explorerMenu" class="ctx-menu hidden" role="menu" aria-label="Explorer context menu"></div>
 <dialog id="aboutDialog"><div class="dialog-head"><h2>What this lab models</h2><button class="icon-btn" data-close="aboutDialog" aria-label="Close capabilities">×</button></div><div class="about-content"><p class="intro">A digital workbench.<br>Not a physical circuit solver.</p><dl><dt>Logic & timing</dt><dd>VHDL compiled and executed by the installed GHDL engine, connected through a native VPI bridge. Nine-state logic, native assertions, event timing, ideal clock stimulus and native VCD capture. The website itself is not a certified verification tool.</dd><dt>Board visualization</dt><dd>Photo-referenced component layout, active-low keys and LEDs, and multiplexed display persistence. The model is illustrative, not a dimensionally certified CAD model.</dd><dt>Not simulated</dt><dd>Voltage, current, power consumption, analog transients, signal integrity, metastability, thermal behavior, or FPGA place-and-route timing. Peripheral chips are visual references, not complete electronic models.</dd><dt>Files & projects</dt><dd>VHD/VHDL and VHO netlists compile locally; vendor netlists require their matching VHDL primitive libraries. CF files are GHDL indexes: include their source files and set the correct libraries. QSF imports pin assignments, not a Quartus build. SDF requires matching VITAL timing models and an instance path. HEX/MIF/MEM/TXT/DAT files are provided to the testbench as data; they do not configure the FPGA. VCD replays digital and real traces with selectable board scope. Verilog/SystemVerilog and proprietary bitstreams cannot execute in this GHDL installation.</dd><dt>Resource limits</dt><dd>Four simultaneous simulations, 100 source/data files, 512 observed native signals, 4096 bits per signal, 16 hierarchy levels. Live sessions use rolling in-memory VCD history (up to 25,000 timestamps) so continuous runs never hit disk-file size limits; VCD replay accepts 32 MB and 250,000 timestamps. Native simulation runs up to ~5 hours of 64-bit femtosecond time per session; high-frequency clocks (such as 50 MHz) automatically burst-step at maximum CPU throughput with adaptive decimated sampling.</dd><dt>Local execution</dt><dd>Run only trusted HDL. GHDL testbenches execute locally and may access files; this workbench is not a security sandbox. Projects autosave in this browser and can be exported as JSON; simulation processes and waveform history are not restored after closing the page.</dd><dt>Physical hardware</dt><dd>No JTAG connection. SOF/POF files are inspected, never “programmed.” Verify pin assignments and I/O standards against your exact board schematic before using real hardware.</dd></dl></div></dialog>
+<div id="themePopover" class="theme-pop hidden" role="dialog" aria-label="Quick Theme Switcher">
+  <div class="tp-head">
+    <span class="eyebrow">COLOR THEMES</span>
+    <span id="tpActiveName" class="tp-active mono">Trace Dark</span>
+  </div>
+  <div id="tpList" class="tp-list"></div>
+  <div class="tp-foot">
+    <button id="tpOpenCustomizer" type="button" class="btn dark block">Customize / Settings… <kbd>Ctrl+,</kbd></button>
+  </div>
+</div>
+<dialog id="settingsDialog" class="settings-modal" aria-labelledby="settingsTitle">
+  <div class="dialog-head">
+    <div><span class="eyebrow">WORKBENCH PREFERENCES</span><h2 id="settingsTitle">Settings &amp; Theme Studio</h2></div>
+    <button class="icon-btn" type="button" data-close="settingsDialog" aria-label="Close settings">×</button>
+  </div>
+  <div class="set-shell">
+    <nav class="set-nav" aria-label="Settings categories">
+      <button type="button" class="set-nav-btn active" data-settab="themes">Themes &amp; Appearance</button>
+      <button type="button" class="set-nav-btn" data-settab="editor">Code Editor</button>
+      <button type="button" class="set-nav-btn" data-settab="waveforms">Waveforms &amp; Sim</button>
+      <button type="button" class="set-nav-btn" data-settab="terminal">Terminal &amp; Workspace</button>
+      <button type="button" class="set-nav-btn" data-settab="hardware">Audio &amp; 3D Board</button>
+    </nav>
+    <div class="set-body">
+      <section class="set-pane active" data-setpane="themes">
+        <div class="set-section-head">
+          <div><h3>Theme Templates</h3><p class="hint">Built-in presets and saved custom themes. Logic Analyzer keeps an oscilloscope-dark canvas by default across all themes.</p></div>
+          <div class="set-inline-actions">
+            <button id="setToggleWaveCanvas" type="button" class="btn" title="Quick-toggle Logic Analyzer canvas dark mode">Scope Canvas: Dark</button>
+            <button id="setNewCustomBtn" type="button" class="btn dark">+ Customize Own Theme</button>
+          </div>
+        </div>
+        <div id="themePresetGrid" class="theme-grid"></div>
+        <div class="set-card">
+          <div class="set-card-head">
+            <div><span class="eyebrow">LIVE PREVIEW</span><h4>UI, VHDL Syntax &amp; Waveform Contrast</h4></div>
+          </div>
+          <div class="theme-preview-box">
+            <div class="tpv-code mono">
+              <div><span class="tk-kw">entity</span> buzz1 <span class="tk-kw">is</span> <span class="tk-cm">-- active-low board I/O</span></div>
+              <div>&nbsp;&nbsp;<span class="tk-kw">port</span> (clk : <span class="tk-kw">in</span> <span class="tk-ty">std_logic</span>; tone : <span class="tk-kw">out</span> <span class="tk-st">'1'</span>; cnt : <span class="tk-nu">50000000</span>);</div>
+            </div>
+            <div class="tpv-wave">
+              <div class="tpv-wave-row"><span class="tpv-dot" style="background:var(--wave-c0)"></span><span class="mono">clk</span><span class="tpv-trace" style="border-color:var(--wave-c0)"></span></div>
+              <div class="tpv-wave-row"><span class="tpv-dot" style="background:var(--wave-c1)"></span><span class="mono">btn1</span><span class="tpv-trace" style="border-color:var(--wave-c1)"></span></div>
+              <div class="tpv-wave-row"><span class="tpv-dot" style="background:var(--wave-c2)"></span><span class="mono">beep</span><span class="tpv-trace" style="border-color:var(--wave-c2)"></span></div>
+            </div>
+          </div>
+        </div>
+        <details id="customThemeStudio" class="set-card custom-studio">
+          <summary class="custom-studio-sum"><span>Custom Theme Studio</span><span id="customStudioBadge" class="hint">Build, edit &amp; export custom themes</span></summary>
+          <div class="custom-studio-body">
+            <div class="custom-toolbar">
+              <label class="field"><span>Theme name</span><input id="ctName" class="search" type="text" placeholder="My Custom Theme" value="My Custom Theme"></label>
+              <label class="field"><span>Base polarity</span><select id="ctScheme"><option value="dark">Dark Mode</option><option value="light">Light Mode</option></select></label>
+              <label class="field"><span>Clone from preset</span><select id="ctCloneSelect"></select></label>
+            </div>
+            <div class="custom-actions-bar">
+              <button id="ctSaveBtn" type="button" class="btn dark">Save Custom Theme</button>
+              <button id="ctApplyLiveBtn" type="button" class="btn">Preview Live</button>
+              <button id="ctExportBtn" type="button" class="btn">Export JSON ↗</button>
+              <button id="ctImportBtn" type="button" class="btn">Import JSON…</button>
+              <input id="ctImportFile" type="file" accept=".json" hidden>
+              <button id="ctDeleteBtn" type="button" class="btn confirm-discard hidden">Delete Saved Theme</button>
+            </div>
+            <div id="ctGroups" class="ct-groups"></div>
+          </div>
+        </details>
+      </section>
+      <section class="set-pane" data-setpane="editor">
+        <h3>Code Editor</h3>
+        <div class="set-grid">
+          <label class="set-row"><div><strong>Font Family</strong><span>Monospace typeface used in code tabs and line gutter</span></div><select id="setEditorFont"><option value='"Cascadia Code", Consolas, monospace'>Cascadia Code</option><option value='Consolas, "Courier New", monospace'>Consolas</option><option value='"JetBrains Mono", "Cascadia Code", monospace'>JetBrains Mono</option><option value='"Fira Code", "Cascadia Code", monospace'>Fira Code</option><option value="monospace">System Monospace</option></select></label>
+          <label class="set-row"><div><strong>Font Size</strong><span>Editor text size (<span id="setEditorFontVal" class="mono">12px</span>)</span></div><input id="setEditorFontSize" type="range" min="10" max="20" step="1" value="12"></label>
+          <label class="set-row"><div><strong>Tab Indentation</strong><span>Spaces inserted per Tab key press &amp; auto-indent level</span></div><select id="setEditorTabSize"><option value="2">2 spaces (VHDL standard)</option><option value="4">4 spaces</option></select></label>
+          <label class="set-row"><div><strong>Word Wrap</strong><span>Wrap long lines in editor tabs (<kbd>Alt+Z</kbd>)</span></div><input id="setEditorWrap" type="checkbox"></label>
+          <label class="set-row"><div><strong>Highlight Current Line</strong><span>Show subtle background band on the active cursor row</span></div><input id="setEditorHighlightLine" type="checkbox" checked></label>
+          <label class="set-row"><div><strong>Auto-Indent VHDL Blocks</strong><span>Automatically indent after <code>begin</code>, <code>then</code>, <code>process</code>, etc.</span></div><input id="setEditorAutoIndent" type="checkbox" checked></label>
+        </div>
+      </section>
+      <section class="set-pane" data-setpane="waveforms">
+        <h3>Waveforms &amp; Simulator</h3>
+        <div class="set-grid">
+          <label class="set-row"><div><strong>Logic Analyzer Canvas Background</strong><span>Keep the waveform plot black for high contrast even in Light themes</span></div><select id="setWaveCanvasMode"><option value="always-dark">Oscilloscope Black (Always Dark)</option><option value="follow-theme">Follow Active IDE Theme</option><option value="custom">Use Custom Theme Wave Palette</option></select></label>
+          <label class="set-row"><div><strong>Default Time Unit</strong><span>Timeline axis &amp; cursor readout formatting</span></div><select id="setWaveUnit"><option value="auto">Auto</option><option value="fs">fs</option><option value="ps">ps</option><option value="ns">ns</option><option value="us">µs</option><option value="ms">ms</option><option value="s">s</option></select></label>
+          <label class="set-row"><div><strong>Auto-Follow Live Run</strong><span>Scroll timeline continuously with simulation time</span></div><input id="setWaveFollow" type="checkbox" checked></label>
+          <label class="set-row"><div><strong>Max Live Waveform Samples</strong><span>Rolling history retained per signal during live simulation</span></div><select id="setWaveMaxSamples"><option value="10000">10,000 samples (lightweight)</option><option value="40000">40,000 samples (default)</option><option value="100000">100,000 samples (extended)</option></select></label>
+          <label class="set-row"><div><strong>Default Clock Frequency</strong><span>Default onboard clock frequency for new projects</span></div><select id="setDefaultClk"><option value="1">1 Hz</option><option value="1000">1 kHz</option><option value="1000000">1 MHz</option><option value="50000000">50 MHz (Onboard Crystal)</option></select></label>
+          <label class="set-row"><div><strong>Default VHDL Standard</strong><span>Used when no <code>.qsf</code> specifies <code>VHDL_INPUT_VERSION</code></span></div><select id="setDefaultStd"><option value="93">VHDL-1993</option><option value="02">VHDL-2002</option><option value="08">VHDL-2008</option></select></label>
+        </div>
+      </section>
+      <section class="set-pane" data-setpane="terminal">
+        <h3>Integrated Terminal &amp; Workspace</h3>
+        <div class="set-grid">
+          <label class="set-row"><div><strong>Terminal Color Scheme</strong><span>Keep terminal dark or match light/dark IDE themes</span></div><select id="setTermThemeMode"><option value="always-dark">Always Dark Terminal</option><option value="follow-theme">Match Active Theme</option></select></label>
+          <label class="set-row"><div><strong>Terminal Font Size</strong><span>ConPTY text size (<span id="setTermFontVal" class="mono">12px</span>)</span></div><input id="setTermFontSize" type="range" min="10" max="18" step="1" value="12"></label>
+          <label class="set-row"><div><strong>Terminal Cursor Style</strong><span>Shape of the terminal caret</span></div><select id="setTermCursorStyle"><option value="block">Block</option><option value="bar">Bar</option><option value="underline">Underline</option></select></label>
+          <label class="set-row"><div><strong>Terminal Cursor Blink</strong><span>Animate terminal cursor</span></div><input id="setTermCursorBlink" type="checkbox" checked></label>
+          <label class="set-row"><div><strong>Auto-Reload External File Edits</strong><span>Watch active project folder on disk and sync clean tabs &amp; Explorer automatically</span></div><input id="setWatchExternal" type="checkbox" checked></label>
+          <div class="set-row"><div><strong>Local HDL Library Folder</strong><span id="setHdlRootPath" class="mono">—</span></div><button id="setChangeHdlRootBtn" type="button" class="btn">Change Folder…</button></div>
+          <label class="set-row"><div><strong>Confirm Before Exiting on Home Screen</strong><span>Ask before closing Trace from the Welcome screen</span></div><input id="setConfirmHomeExit" type="checkbox" checked></label>
+        </div>
+      </section>
+      <section class="set-pane" data-setpane="hardware">
+        <h3>Audio &amp; 3D Devboard</h3>
+        <div class="set-grid">
+          <label class="set-row"><div><strong>Unmute Audio on First Simulation Run</strong><span>Start with buzzer audio enabled after user interaction</span></div><input id="setStartupUnmuted" type="checkbox"></label>
+          <label class="set-row"><div><strong>Master Buzzer Volume</strong><span>Output level (<span id="setVolumeVal" class="mono">50%</span>)</span></div><input id="setMasterVolume" type="range" min="0" max="100" step="1" value="50"></label>
+          <label class="set-row"><div><strong>3D Render Quality</strong><span>WebGL MSAA &amp; shadow fidelity</span></div><select id="setGfxQuality"><option value="high">High (MSAA)</option><option value="medium">Balanced</option><option value="low">Performance</option></select></label>
+          <label class="set-row"><div><strong>LED &amp; 7-Segment Glow</strong><span>Bloom &amp; PCB halo intensity (<span id="setGlowVal" class="mono">65%</span>)</span></div><input id="setBoardGlow" type="range" min="0" max="100" step="1" value="65"></label>
+          <div class="set-row"><div><strong>Reset Preferences</strong><span>Restore all IDE, Editor, and Theme settings to factory defaults</span></div><button id="setResetAllBtn" type="button" class="btn confirm-discard">Reset All Settings</button></div>
+        </div>
+      </section>
+    </div>
+  </div>
+  <div class="dialog-foot confirm-foot">
+    <span class="hint">Changes apply immediately and save automatically to local preferences.</span>
+    <div class="confirm-actions">
+      <button type="button" class="btn dark" data-close="settingsDialog">Done</button>
+    </div>
+  </div>
+</dialog>
 <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 <input id="fileInput" type="file" multiple accept=".vhd,.vhdl,.vho,.qsf,.sof,.pof,.vo,.v,.sv,.vcd,.cf,.sdf,.hex,.mif,.mem,.txt,.dat,.md,.json" hidden>
 <script type="module" src="/src/main.js"></script>

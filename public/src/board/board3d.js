@@ -166,7 +166,8 @@ export async function createBoard3D(canvas, opts = {}) {
       studio.syncToneMappingAndBackdrop();
     }
     grid.material.transparent = true;
-    grid.material.opacity = document.documentElement.dataset.theme === 'dark' ? .2 : 1;
+    const isDarkScheme = document.documentElement.dataset.scheme === 'dark' || document.documentElement.dataset.theme === 'dark';
+    grid.material.opacity = isDarkScheme ? .2 : 1;
     for (const sprite of labels.children) {
       const texture = sprite.material.map, context = texture.image.getContext('2d');
       context.clearRect(0, 0, 384, 64);
