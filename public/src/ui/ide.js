@@ -2090,65 +2090,389 @@ export function createIde(api) {
     });
   }
 
-  // ---------- integrated terminal in tools dock ----------
-  let termCwd = '';
-  let termBusy = false;
-  const termHistory = [];
-  let termHistIdx = -1;
+  // ---------- multi-tab inline integrated terminal in tools dock ----------
+  const termSessionsList = [];
+  let activeTermId = null;
+  let availableShells = [];
+  let defaultShellId = 'pwsh';
+  let termInfoLoaded = false;
 
-  function appendTermLine(text, cls = '') {
+  const escHtml = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  function activeTerm() {
+    return termSessionsList.find(t => t.id === activeTermId) || termSessionsList[0] || null;
+  }
+
+  function promptStringFor(term) {
+    if (!term) return 'PS> ';
+    const cwd = term.cwd || S.projectDir || 'C:\\';
+    return term.shell === 'cmd' ? `${cwd}>` : `PS ${cwd}> `;
+  }
+
+  function classifyShellToken(tok, isFirstWord) {
+    if (!tok) return '';
+    if (isFirstWord) return 'term-cmd-exec';
+    if (/^["'].*["']?$/.test(tok)) return 'term-cmd-str';
+    if (/^-[A-Za-z0-9_-]+$/.test(tok)) return 'term-cmd-flag';
+    return 'term-cmd-arg';
+  }
+
+  function renderHighlightedCommand(text = '', cursorIdx = null) {
+    const str = String(text || '');
+    const tokens = [];
+    const re = /(\s+|[;|]+|"[^"]*"?|'[^']*'?|[^\s;|"']+)/g;
+    let m, expectCmd = true;
+    while ((m = re.exec(str))) {
+      const part = m[0];
+      const start = m.index, end = start + part.length;
+      if (/^\s+$/.test(part)) {
+        tokens.push({ start, end, cls: '' });
+      } else if (/^[;|]+$/.test(part)) {
+        tokens.push({ start, end, cls: 'term-cmd-arg' });
+        expectCmd = true;
+      } else {
+        tokens.push({ start, end, cls: classifyShellToken(part, expectCmd) });
+        expectCmd = false;
+      }
+    }
+    if (cursorIdx === null) {
+      return tokens.map(t => {
+        const chunk = escHtml(str.slice(t.start, t.end));
+        return t.cls ? `<span class="${t.cls}">${chunk}</span>` : chunk;
+      }).join('');
+    }
+    let out = '';
+    const clampedCursor = Math.max(0, Math.min(str.length, cursorIdx));
+    for (let i = 0; i < str.length; i++) {
+      const ch = escHtml(str[i]);
+      const tok = tokens.find(t => i >= t.start && i < t.end);
+      const cls = tok?.cls || '';
+      if (i === clampedCursor) {
+        out += `<span class="term-cursor">${ch}</span>`;
+      } else {
+        out += cls ? `<span class="${cls}">${ch}</span>` : ch;
+      }
+    }
+    if (clampedCursor >= str.length) {
+      out += '<span class="term-cursor">&nbsp;</span>';
+    }
+    return out;
+  }
+
+  function scrollTermToBottom() {
+    const screen = $('#termScreen');
+    if (screen) screen.scrollTop = screen.scrollHeight;
+  }
+
+  function renderTerminalTabs() {
+    const host = $('#termTabs');
+    if (!host) return;
+    host.replaceChildren();
+    const counts = new Map();
+    for (const t of termSessionsList) {
+      const num = (counts.get(t.label) || 0) + 1;
+      counts.set(t.label, num);
+      const tab = document.createElement('div');
+      tab.className = `term-tab${t.id === activeTermId ? ' active' : ''}`;
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-selected', String(t.id === activeTermId));
+      tab.onclick = () => activateTerminalTab(t.id);
+      const ico = document.createElement('span');
+      ico.className = 'term-tab-ico';
+      ico.textContent = '>_';
+      const title = document.createElement('span');
+      title.textContent = num > 1 ? `${t.label} (${num})` : t.label;
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'term-tab-x';
+      closeBtn.textContent = '×';
+      closeBtn.title = `Close ${t.label}`;
+      closeBtn.onclick = e => {
+        e.stopPropagation();
+        closeTerminalTab(t.id);
+      };
+      tab.append(ico, title, closeBtn);
+      host.append(tab);
+    }
+  }
+
+  function renderActiveTerminal() {
+    const term = activeTerm();
+    renderTerminalTabs();
     const out = $('#termOut');
-    if (!out) return;
-    const div = document.createElement('div');
-    if (cls) div.className = cls;
-    div.textContent = text;
-    out.append(div);
-    out.scrollTop = out.scrollHeight;
+    const activeLine = $('#termActiveLine');
+    const promptEl = $('#termPromptLabel');
+    const cmdEl = $('#termInlineCmd');
+    if (!out || !activeLine || !promptEl || !cmdEl) return;
+    if (!term) {
+      out.replaceChildren();
+      promptEl.textContent = '';
+      cmdEl.innerHTML = '';
+      return;
+    }
+    if ($('#termCwdBadge')) {
+      $('#termCwdBadge').textContent = term.cwd || '';
+      $('#termCwdBadge').title = term.cwd || '';
+    }
+    $('#termKillBtn')?.classList.toggle('hidden', !term.busy);
+    out.replaceChildren();
+    for (const item of term.entries) {
+      const div = document.createElement('div');
+      div.className = `term-entry${item.cls ? ' ' + item.cls : ''}`;
+      if (item.html) div.innerHTML = item.html;
+      else div.textContent = item.text;
+      out.append(div);
+    }
+    if (term.busy) {
+      promptEl.textContent = '';
+      cmdEl.innerHTML = '<span class="term-cursor">&nbsp;</span>';
+    } else {
+      promptEl.textContent = promptStringFor(term);
+      cmdEl.innerHTML = renderHighlightedCommand(term.input, term.cursor);
+    }
+    scrollTermToBottom();
+  }
+
+  function renderInlineInputOnly() {
+    const term = activeTerm();
+    const promptEl = $('#termPromptLabel');
+    const cmdEl = $('#termInlineCmd');
+    if (!term || !promptEl || !cmdEl) return;
+    if (term.busy) {
+      promptEl.textContent = '';
+      cmdEl.innerHTML = '<span class="term-cursor">&nbsp;</span>';
+    } else {
+      promptEl.textContent = promptStringFor(term);
+      cmdEl.innerHTML = renderHighlightedCommand(term.input, term.cursor);
+    }
+    scrollTermToBottom();
+  }
+
+  function focusTerminalInput() {
+    const inp = $('#termHiddenInput');
+    if (!inp) return;
+    const term = activeTerm();
+    if (term) {
+      inp.value = term.input;
+      inp.setSelectionRange(term.cursor, term.cursor);
+    }
+    inp.focus({ preventScroll: true });
+    $('#termScreen')?.classList.add('focused');
+  }
+
+  async function ensureShellInfo() {
+    if (termInfoLoaded) return;
+    termInfoLoaded = true;
+    try {
+      const res = await fetch('/api/terminal/info');
+      const data = await res.json();
+      if (res.ok && data.ok && Array.isArray(data.shells) && data.shells.length) {
+        availableShells = data.shells;
+        defaultShellId = data.defaultShell || data.shells[0].id;
+        const sel = $('#termShellSelect');
+        if (sel) {
+          sel.replaceChildren(...availableShells.map(s => new Option(s.label, s.id)));
+          sel.value = defaultShellId;
+        }
+      }
+    } catch {}
+  }
+
+  async function createTerminalTab(requestedShell = '') {
+    await ensureShellInfo();
+    const shell = requestedShell || $('#termShellSelect')?.value || defaultShellId || 'pwsh';
+    const initialCwd = S.projectDir || '';
+    try {
+      const res = await fetch('/api/terminal/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shell, cwd: initialCwd }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Could not start terminal session.');
+      const term = {
+        id: data.id,
+        shell: data.shell,
+        label: data.label,
+        banner: data.banner,
+        cwd: data.cwd,
+        entries: [{ text: data.banner, cls: 'term-banner' }],
+        input: '',
+        cursor: 0,
+        busy: false,
+        history: [],
+        histIdx: 0,
+        tabMatches: [],
+        tabIdx: 0,
+        lastTabBase: null,
+      };
+      termSessionsList.push(term);
+      activeTermId = term.id;
+      renderActiveTerminal();
+      focusTerminalInput();
+      return term;
+    } catch (e) {
+      api.toast(e.message, 'err');
+      return null;
+    }
+  }
+
+  function activateTerminalTab(id) {
+    if (!termSessionsList.some(t => t.id === id)) return;
+    activeTermId = id;
+    renderActiveTerminal();
+    focusTerminalInput();
+  }
+
+  async function closeTerminalTab(id) {
+    const idx = termSessionsList.findIndex(t => t.id === id);
+    if (idx < 0) return;
+    termSessionsList.splice(idx, 1);
+    fetch('/api/terminal/close', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    }).catch(() => {});
+    if (!termSessionsList.length) {
+      await createTerminalTab();
+      return;
+    }
+    if (activeTermId === id) {
+      activeTermId = termSessionsList[Math.max(0, idx - 1)].id;
+    }
+    renderActiveTerminal();
+    focusTerminalInput();
   }
 
   function updateTermCwd(nextCwd) {
     if (!nextCwd) return;
-    termCwd = nextCwd;
-    if ($('#termCwdBadge')) {
-      $('#termCwdBadge').textContent = termCwd;
-      $('#termCwdBadge').title = `Working directory: ${termCwd}`;
-    }
-    if ($('#termPromptLabel')) {
-      const leaf = termCwd.split(/[\\/]/).filter(Boolean).pop() || termCwd;
-      $('#termPromptLabel').textContent = `PS ${leaf}>`;
-      $('#termPromptLabel').title = termCwd;
-    }
+    const term = activeTerm();
+    if (!term || term.busy) return;
+    if (term.cwd === nextCwd) return;
+    term.cwd = nextCwd;
+    renderActiveTerminal();
   }
 
-  async function runTerminalCommand(rawCmd) {
-    const cmd = String(rawCmd || '').trim();
-    if (!cmd) return;
-    termHistory.push(cmd);
-    termHistIdx = termHistory.length;
-    if (/^(cls|clear)$/i.test(cmd)) {
-      $('#termOut')?.replaceChildren();
+  async function submitTerminalLine() {
+    const term = activeTerm();
+    if (!term || term.busy) return;
+    const rawCmd = term.input;
+    const trimmed = rawCmd.trim();
+    const promptStr = promptStringFor(term);
+    term.entries.push({
+      html: `<span class="term-prompt">${escHtml(promptStr)}</span>${renderHighlightedCommand(rawCmd, null)}`,
+    });
+    term.input = '';
+    term.cursor = 0;
+    term.lastTabBase = null;
+    if ($('#termHiddenInput')) $('#termHiddenInput').value = '';
+
+    if (!trimmed) {
+      renderActiveTerminal();
       return;
     }
-    const targetCwd = termCwd || S.projectDir || '';
-    appendTermLine(`PS ${targetCwd || '.'}> ${cmd}`, 'term-line-cmd');
-    termBusy = true;
-    $('#termKillBtn')?.classList.remove('hidden');
+    if (term.history[term.history.length - 1] !== rawCmd) {
+      term.history.push(rawCmd);
+    }
+    term.histIdx = term.history.length;
+
+    if (/^(cls|clear)$/i.test(trimmed)) {
+      term.entries = [];
+      renderActiveTerminal();
+      return;
+    }
+    if (/^exit$/i.test(trimmed)) {
+      await closeTerminalTab(term.id);
+      return;
+    }
+
+    term.busy = true;
+    renderActiveTerminal();
     try {
       const res = await fetch('/api/terminal/exec', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: cmd, cwd: targetCwd }),
+        body: JSON.stringify({ id: term.id, shell: term.shell, command: rawCmd, cwd: term.cwd }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Terminal command failed.');
-      if (data.cwd) updateTermCwd(data.cwd);
-      if (data.stdout && data.stdout.trim()) appendTermLine(data.stdout.replace(/\r?\n$/, ''));
-      if (data.stderr && data.stderr.trim()) appendTermLine(data.stderr.replace(/\r?\n$/, ''), 'term-line-err');
+      if (data.cwd) term.cwd = data.cwd;
+      if (data.stdout) term.entries.push({ text: data.stdout });
+      if (data.stderr) term.entries.push({ text: data.stderr, cls: 'term-line-err' });
     } catch (e) {
-      appendTermLine(e.message, 'term-line-err');
+      term.entries.push({ text: e.message, cls: 'term-line-err' });
     } finally {
-      termBusy = false;
-      $('#termKillBtn')?.classList.add('hidden');
+      term.busy = false;
+      renderActiveTerminal();
+      focusTerminalInput();
+    }
+  }
+
+  async function handleTerminalTabCompletion() {
+    const term = activeTerm();
+    if (!term || term.busy) return;
+    if (term.lastTabBase === term.input && term.tabMatches.length > 1) {
+      term.tabIdx = (term.tabIdx + 1) % term.tabMatches.length;
+      term.input = term.tabMatches[term.tabIdx];
+      term.cursor = term.input.length;
+      term.lastTabBase = term.input;
+      if ($('#termHiddenInput')) {
+        $('#termHiddenInput').value = term.input;
+        $('#termHiddenInput').setSelectionRange(term.cursor, term.cursor);
+      }
+      renderInlineInputOnly();
+      return;
+    }
+    try {
+      const res = await fetch('/api/terminal/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: term.id, line: term.input.slice(0, term.cursor), cwd: term.cwd }),
+      });
+      const data = await res.json();
+      if (res.ok && Array.isArray(data.matches) && data.matches.length) {
+        const tail = term.input.slice(term.cursor);
+        term.tabMatches = data.matches.map(m => m + tail);
+        term.tabIdx = 0;
+        term.input = term.tabMatches[0];
+        term.cursor = data.matches[0].length;
+        term.lastTabBase = term.input;
+        if ($('#termHiddenInput')) {
+          $('#termHiddenInput').value = term.input;
+          $('#termHiddenInput').setSelectionRange(term.cursor, term.cursor);
+        }
+        renderInlineInputOnly();
+      }
+    } catch {}
+  }
+
+  async function interruptTerminalSession() {
+    const term = activeTerm();
+    if (!term) return;
+    if (term.busy) {
+      fetch('/api/terminal/kill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: term.id }),
+      }).catch(() => {});
+    } else {
+      const promptStr = promptStringFor(term);
+      term.entries.push({
+        html: `<span class="term-prompt">${escHtml(promptStr)}</span>${renderHighlightedCommand(term.input, null)}<span class="term-line-err">^C</span>`,
+      });
+      term.input = '';
+      term.cursor = 0;
+      if ($('#termHiddenInput')) $('#termHiddenInput').value = '';
+      renderActiveTerminal();
+    }
+  }
+
+  async function ensureTerminalInitialized() {
+    if (!termSessionsList.length) {
+      await createTerminalTab();
+    } else {
+      renderActiveTerminal();
+      focusTerminalInput();
     }
   }
 
@@ -2158,8 +2482,7 @@ export function createIde(api) {
       $('#closeRight')?.click();
     } else {
       api.openTools('terminal');
-      if (!termCwd && S.projectDir) updateTermCwd(S.projectDir);
-      requestAnimationFrame(() => $('#termInput')?.focus());
+      ensureTerminalInitialized();
     }
   }
 
@@ -2356,52 +2679,120 @@ export function createIde(api) {
         done({ cancelled: true });
       }
     });
-    // Integrated Terminal wiring
-    appendTermLine('Trace FPGA Workbench Integrated Shell (PowerShell · GHDL / GCC / Node on PATH)', 'term-line-info');
-    $('#termForm')?.addEventListener('submit', e => {
-      e.preventDefault();
-      const inp = $('#termInput');
-      if (!inp || termBusy) return;
-      const cmd = inp.value;
-      inp.value = '';
-      runTerminalCommand(cmd);
+    // Multi-Tab Inline Integrated Terminal wiring
+    ensureShellInfo();
+    $('#termNewTabBtn')?.addEventListener('click', () => createTerminalTab());
+    $('#termScreen')?.addEventListener('mousedown', () => {
+      setTimeout(() => {
+        const sel = window.getSelection();
+        if (!sel || sel.isCollapsed) focusTerminalInput();
+      }, 0);
     });
-    $('#termInput')?.addEventListener('keydown', e => {
+    $('#termHiddenInput')?.addEventListener('focus', () => $('#termScreen')?.classList.add('focused'));
+    $('#termHiddenInput')?.addEventListener('blur', () => $('#termScreen')?.classList.remove('focused'));
+    $('#termHiddenInput')?.addEventListener('input', e => {
+      const term = activeTerm();
+      if (!term || term.busy) { e.target.value = ''; return; }
+      const clean = e.target.value.replace(/[\r\n]+/g, '');
+      if (e.target.value !== clean) e.target.value = clean;
+      term.input = clean;
+      term.cursor = e.target.selectionStart ?? clean.length;
+      term.lastTabBase = null;
+      renderInlineInputOnly();
+    });
+    $('#termHiddenInput')?.addEventListener('keydown', e => {
+      const term = activeTerm();
+      if (!term) return;
+      if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'c') {
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed) return;
+        e.preventDefault();
+        interruptTerminalSession();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        term.entries = [];
+        renderActiveTerminal();
+        return;
+      }
+      if (term.busy) {
+        e.preventDefault();
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submitTerminalLine();
+        return;
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        handleTerminalTabCompletion();
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        term.input = '';
+        term.cursor = 0;
+        e.target.value = '';
+        renderInlineInputOnly();
+        return;
+      }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        if (termHistory.length && termHistIdx > 0) {
-          termHistIdx--;
-          e.target.value = termHistory[termHistIdx] || '';
+        if (term.history.length && term.histIdx > 0) {
+          term.histIdx--;
+          term.input = term.history[term.histIdx] || '';
+          term.cursor = term.input.length;
+          e.target.value = term.input;
+          e.target.setSelectionRange(term.cursor, term.cursor);
+          renderInlineInputOnly();
         }
-      } else if (e.key === 'ArrowDown') {
+        return;
+      }
+      if (e.key === 'ArrowDown') {
         e.preventDefault();
-        if (termHistIdx < termHistory.length - 1) {
-          termHistIdx++;
-          e.target.value = termHistory[termHistIdx] || '';
+        if (term.histIdx < term.history.length - 1) {
+          term.histIdx++;
+          term.input = term.history[term.histIdx] || '';
         } else {
-          termHistIdx = termHistory.length;
-          e.target.value = '';
+          term.histIdx = term.history.length;
+          term.input = '';
         }
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') {
-        e.preventDefault();
-        $('#termOut')?.replaceChildren();
-      } else if (e.ctrlKey && e.key.toLowerCase() === 'c' && termBusy) {
-        e.preventDefault();
-        fetch('/api/terminal/kill', { method: 'POST' }).catch(() => {});
+        term.cursor = term.input.length;
+        e.target.value = term.input;
+        e.target.setSelectionRange(term.cursor, term.cursor);
+        renderInlineInputOnly();
+        return;
+      }
+      if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+        requestAnimationFrame(() => {
+          term.cursor = e.target.selectionStart ?? term.input.length;
+          renderInlineInputOnly();
+        });
       }
     });
-    $('#termClearBtn')?.addEventListener('click', () => $('#termOut')?.replaceChildren());
+    $('#termClearBtn')?.addEventListener('click', () => {
+      const term = activeTerm();
+      if (term) { term.entries = []; renderActiveTerminal(); focusTerminalInput(); }
+    });
     $('#termCopyBtn')?.addEventListener('click', async () => {
-      const text = $('#termOut')?.innerText || '';
+      const text = $('#termScreen')?.innerText || '';
       try { await navigator.clipboard.writeText(text); api.toast('Copied terminal output.'); } catch {}
+      focusTerminalInput();
     });
     $('#termKillBtn')?.addEventListener('click', () => {
-      fetch('/api/terminal/kill', { method: 'POST' }).catch(() => {});
+      interruptTerminalSession();
+      focusTerminalInput();
     });
     $('#termCdProject')?.addEventListener('click', () => {
+      const term = activeTerm();
+      if (!term) return;
       if (S.projectDir) {
-        updateTermCwd(S.projectDir);
-        appendTermLine(`Working directory set to ${S.projectDir}`, 'term-line-info');
+        term.input = term.shell === 'cmd' ? `cd /d "${S.projectDir}"` : `Set-Location -LiteralPath "${S.projectDir}"`;
+        term.cursor = term.input.length;
+        submitTerminalLine();
       } else {
         api.toast('Save or open a project folder on disk first.');
       }
@@ -2550,7 +2941,7 @@ export function createIde(api) {
     refreshProjectTree, renderProjectTree, showNewFile, showNewFolder, closeExplorerMenu,
     setProblems, reportBuildFailure, resetLayout, setEditorPaneOpen, setBoardPaneOpen,
     showHome, requestReturnHome, requestProjectSwitch, requestAppClose, toggleAppFullscreen, setSkipHomeExitConfirm, openNewProjectWizard, resumeWorkbench, captureBaseline, currentProjectTitle, renderHome, recordRecentProject, populateHomeHdl,
-    openFileBrowserModal, toggleWordWrap, setMarkdownMode, openTutorial, cycleTab, toggleTerminalPane, updateTermCwd,
+    openFileBrowserModal, toggleWordWrap, setMarkdownMode, openTutorial, cycleTab, toggleTerminalPane, ensureTerminalInitialized, updateTermCwd,
     get hasActiveSession() { return hasActiveSession; },
     get active() { return active; },
     get tabs() { return [...tabs]; },

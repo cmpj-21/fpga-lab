@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promises as fs, appendFileSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
@@ -835,20 +835,10 @@ async function authorizeBrowserSelection({ targetPath, mode = 'folder' } = {}) {
   return { ok: true, cancelled: false, file: resolved, dir: authDir, isDirectory: st.isDirectory() };
 }
 
-let activeTerminalProc = null;
-async function execTerminalCommand({ command = '', cwd = '' } = {}) {
-  const cmdText = String(command || '').trim();
-  let workDir = '';
-  if (typeof cwd === 'string' && cwd.trim() && path.isAbsolute(cwd.trim())) {
-    const st = await fs.stat(cwd.trim()).catch(() => null);
-    if (st?.isDirectory()) workDir = path.resolve(cwd.trim());
-  }
-  if (!workDir) {
-    const st = await fs.stat(hdlRoot).catch(() => null);
-    workDir = st?.isDirectory() ? path.resolve(hdlRoot) : ROOT;
-  }
-  if (!cmdText) return { ok: true, stdout: '', stderr: '', exitCode: 0, cwd: workDir };
+const termSessions = new Map();
+let cachedShellInfo = null;
 
+function buildTerminalPathEnv() {
   const extraBins = [
     path.resolve(ROOT, 'runtime', 'ghdl', 'bin'),
     path.resolve(ROOT, 'runtime', 'node'),
@@ -856,54 +846,263 @@ async function execTerminalCommand({ command = '', cwd = '' } = {}) {
     path.resolve(ROOT, '..', 'runtime', 'node'),
     'C:\\msys64\\ucrt64\\bin',
   ].filter(p => { try { return statSync(p).isDirectory(); } catch { return false; } });
-  const envPath = [...extraBins, process.env.PATH || ''].filter(Boolean).join(path.delimiter);
+  return [...extraBins, process.env.PATH || ''].filter(Boolean).join(path.delimiter);
+}
 
-  const psScript = [
-    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-    '$ErrorActionPreference = "Continue"',
-    'Set-Location -LiteralPath $env:TRACE_TERM_CWD',
-    'try {',
-    '  Invoke-Expression $env:TRACE_TERM_CMD',
-    '} catch {',
-    '  [Console]::Error.WriteLine($_.Exception.Message)',
-    '  $global:LASTEXITCODE = 1',
-    '}',
-    '$code = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } elseif ($?) { 0 } else { 1 }',
-    'Write-Output "`n__TRACE_CWD__$((Get-Location).ProviderPath)__TRACE_CODE__$code"',
-  ].join('\n');
+function findExecutableOnPath(exeName, fallbacks = []) {
+  for (const candidate of fallbacks) {
+    try { if (candidate && statSync(candidate).isFile()) return candidate; } catch {}
+  }
+  const pathDirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const dir of pathDirs) {
+    const full = path.join(dir, exeName);
+    try { if (statSync(full).isFile()) return full; } catch {}
+  }
+  return null;
+}
+
+async function detectAvailableShells() {
+  if (cachedShellInfo) return cachedShellInfo;
+  const shells = [];
+  if (process.platform === 'win32') {
+    const pwshPath = findExecutableOnPath('pwsh.exe', [
+      'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+      'C:\\Program Files\\PowerShell\\7-preview\\pwsh.exe',
+    ]);
+    if (pwshPath) {
+      const ver = await new Promise(resolve => {
+        execFile(pwshPath, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString()'], { windowsHide: true, timeout: 4000 }, (err, stdout) => {
+          resolve(!err && stdout?.trim() ? `PowerShell ${stdout.trim()}` : 'PowerShell 7');
+        });
+      });
+      shells.push({ id: 'pwsh', label: 'pwsh.exe', exe: pwshPath, banner: ver });
+    }
+    const winPsPath = findExecutableOnPath('powershell.exe', [
+      path.join(process.env.SystemRoot || 'C:\\Windows', 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'),
+    ]);
+    if (winPsPath) {
+      shells.push({ id: 'powershell', label: 'powershell.exe', exe: winPsPath, banner: 'Windows PowerShell 5.1' });
+    }
+    const cmdPath = findExecutableOnPath('cmd.exe', [
+      path.join(process.env.SystemRoot || 'C:\\Windows', 'System32\\cmd.exe'),
+    ]);
+    if (cmdPath) {
+      shells.push({ id: 'cmd', label: 'cmd.exe', exe: cmdPath, banner: 'Microsoft Windows Command Prompt' });
+    }
+  } else {
+    shells.push({ id: 'sh', label: 'sh', exe: '/bin/sh', banner: 'POSIX Shell' });
+  }
+  cachedShellInfo = {
+    defaultShell: shells[0]?.id || 'powershell',
+    shells,
+  };
+  return cachedShellInfo;
+}
+
+function stripAnsi(str = '') {
+  return String(str).replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+}
+
+async function resolveValidCwd(cwd = '') {
+  if (typeof cwd === 'string' && cwd.trim() && path.isAbsolute(cwd.trim())) {
+    const st = await fs.stat(cwd.trim()).catch(() => null);
+    if (st?.isDirectory()) return path.resolve(cwd.trim());
+  }
+  const st = await fs.stat(hdlRoot).catch(() => null);
+  return st?.isDirectory() ? path.resolve(hdlRoot) : ROOT;
+}
+
+async function spawnPersistentShellSession(shellId = '', initialCwd = '', existingId = '') {
+  const info = await detectAvailableShells();
+  const chosen = info.shells.find(s => s.id === shellId) || info.shells[0];
+  const workDir = await resolveValidCwd(initialCwd);
+  const id = existingId || randomUUID();
+  const isCmd = chosen.id === 'cmd';
+  const args = isCmd
+    ? ['/Q', '/K', 'chcp 65001 >nul']
+    : ['-NoLogo', '-NoProfile', '-NoExit', '-Command', '-'];
+
+  const proc = spawn(chosen.exe, args, {
+    cwd: workDir,
+    windowsHide: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, PATH: buildTerminalPathEnv(), TERM: 'dumb', NO_COLOR: '1' },
+  });
+
+  const session = {
+    id,
+    shell: chosen.id,
+    label: chosen.label,
+    banner: chosen.banner,
+    exe: chosen.exe,
+    cwd: workDir,
+    proc,
+    stdoutBuf: '',
+    stderrBuf: '',
+    activeResolve: null,
+    activeTimer: null,
+  };
+
+  if (!isCmd) {
+    proc.stdin.write('[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; $ErrorView = "ConciseView"\n');
+  }
+
+  const checkDone = () => {
+    if (!session.activeResolve) return;
+    const match = session.stdoutBuf.match(/\r?\n?__TRACE_CWD__(.*?)__TRACE_END__\r?\n?/);
+    if (!match) return;
+    const outBefore = session.stdoutBuf.slice(0, match.index);
+    session.stdoutBuf = session.stdoutBuf.slice(match.index + match[0].length);
+    const newCwd = (match[1] || '').trim();
+    if (newCwd && path.isAbsolute(newCwd)) session.cwd = path.resolve(newCwd);
+    // Allow 15ms for any trailing stderr flush from the same command
+    clearTimeout(session.activeTimer);
+    setTimeout(() => {
+      if (!session.activeResolve) return;
+      const done = session.activeResolve;
+      session.activeResolve = null;
+      const errOut = session.stderrBuf;
+      session.stderrBuf = '';
+      done({
+        ok: true,
+        stdout: stripAnsi(outBefore).replace(/^\r?\n/, '').replace(/\r?\n$/, ''),
+        stderr: stripAnsi(errOut).replace(/^\r?\n/, '').replace(/\r?\n$/, ''),
+        cwd: session.cwd,
+      });
+    }, 18);
+  };
+
+  proc.stdout.on('data', chunk => {
+    session.stdoutBuf += chunk.toString('utf8');
+    checkDone();
+  });
+  proc.stderr.on('data', chunk => {
+    session.stderrBuf += chunk.toString('utf8');
+  });
+  proc.on('close', () => {
+    if (session.activeResolve) {
+      const done = session.activeResolve;
+      session.activeResolve = null;
+      clearTimeout(session.activeTimer);
+      done({
+        ok: true,
+        stdout: stripAnsi(session.stdoutBuf).trim(),
+        stderr: stripAnsi(session.stderrBuf).trim(),
+        cwd: session.cwd,
+      });
+    }
+    if (termSessions.get(id) === session) termSessions.delete(id);
+  });
+
+  termSessions.set(id, session);
+  return session;
+}
+
+async function createTerminalSession({ shell = '', cwd = '' } = {}) {
+  const s = await spawnPersistentShellSession(shell, cwd);
+  return {
+    ok: true,
+    id: s.id,
+    shell: s.shell,
+    label: s.label,
+    banner: s.banner,
+    cwd: s.cwd,
+  };
+}
+
+async function execTerminalCommand({ id = '', shell = '', command = '', cwd = '' } = {}) {
+  const cmdText = String(command || '').trim();
+  let session = id ? termSessions.get(id) : null;
+  if (!session || session.proc.killed || session.proc.exitCode !== null) {
+    session = await spawnPersistentShellSession(shell, cwd, id || randomUUID());
+  } else if (cwd && path.isAbsolute(cwd) && path.resolve(cwd).toLowerCase() !== session.cwd.toLowerCase()) {
+    session.cwd = await resolveValidCwd(cwd);
+    if (session.shell === 'cmd') session.proc.stdin.write(`cd /d "${session.cwd}"\r\n`);
+    else session.proc.stdin.write(`Set-Location -LiteralPath '${session.cwd.replace(/'/g, "''")}'\n`);
+  }
+  if (!cmdText) return { ok: true, id: session.id, stdout: '', stderr: '', cwd: session.cwd };
+
+  session.stdoutBuf = '';
+  session.stderrBuf = '';
 
   return new Promise(resolve => {
-    const child = execFile(
-      process.platform === 'win32' ? 'powershell.exe' : 'sh',
-      process.platform === 'win32'
-        ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', psScript]
-        : ['-c', `${cmdText}\nprintf "\\n__TRACE_CWD__%s__TRACE_CODE__%s" "$(pwd)" "$?"`],
-      {
-        cwd: workDir,
-        windowsHide: true,
-        timeout: 60000,
-        maxBuffer: 1024 * 1024,
-        env: { ...process.env, PATH: envPath, TRACE_TERM_CWD: workDir, TRACE_TERM_CMD: cmdText },
-      },
-      (err, stdout = '', stderr = '') => {
-        if (activeTerminalProc === child) activeTerminalProc = null;
-        let out = String(stdout || '');
-        let errOut = String(stderr || '');
-        let nextCwd = workDir;
-        let exitCode = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
-        const marker = out.match(/\r?\n__TRACE_CWD__(.*?)__TRACE_CODE__(-?\d+)\s*$/);
-        if (marker) {
-          out = out.slice(0, marker.index);
-          if (marker[1] && path.isAbsolute(marker[1].trim())) nextCwd = path.resolve(marker[1].trim());
-          exitCode = Number(marker[2]) || 0;
-        } else if (err && err.killed) {
-          errOut = (errOut ? errOut + '\n' : '') + 'Process terminated.';
-        }
-        resolve({ ok: true, stdout: out, stderr: errOut, exitCode, cwd: nextCwd });
-      }
-    );
-    activeTerminalProc = child;
+    session.activeResolve = resolve;
+    session.activeTimer = setTimeout(() => {
+      if (!session.activeResolve) return;
+      const done = session.activeResolve;
+      session.activeResolve = null;
+      const out = stripAnsi(session.stdoutBuf).trim();
+      const err = (stripAnsi(session.stderrBuf).trim() + '\nCommand timed out after 60s.').trim();
+      try { session.proc.kill(); } catch {}
+      termSessions.delete(session.id);
+      done({ ok: true, id: session.id, stdout: out, stderr: err, cwd: session.cwd });
+    }, 60000);
+
+    if (session.shell === 'cmd') {
+      session.proc.stdin.write(`${cmdText}\r\necho __TRACE_CWD__%CD%__TRACE_END__\r\n`);
+    } else {
+      session.proc.stdin.write(`${cmdText}\nWrite-Output "\`n__TRACE_CWD__$((Get-Location).ProviderPath)__TRACE_END__"\n`);
+    }
   });
+}
+
+async function killTerminalCommand({ id = '' } = {}) {
+  const session = id ? termSessions.get(id) : null;
+  if (!session) return { ok: true };
+  const prevShell = session.shell;
+  const prevCwd = session.cwd;
+  if (session.activeResolve) {
+    const done = session.activeResolve;
+    session.activeResolve = null;
+    clearTimeout(session.activeTimer);
+    done({
+      ok: true,
+      id: session.id,
+      stdout: stripAnsi(session.stdoutBuf).trim(),
+      stderr: (stripAnsi(session.stderrBuf).trim() + '\n^C').trim(),
+      cwd: prevCwd,
+    });
+  }
+  try { session.proc.kill(); } catch {}
+  termSessions.delete(id);
+  await spawnPersistentShellSession(prevShell, prevCwd, id);
+  return { ok: true };
+}
+
+function closeTerminalSession({ id = '' } = {}) {
+  const session = id ? termSessions.get(id) : null;
+  if (session) {
+    clearTimeout(session.activeTimer);
+    try { session.proc.kill(); } catch {}
+    termSessions.delete(id);
+  }
+  return { ok: true };
+}
+
+async function completeTerminalInput({ line = '', cwd = '' } = {}) {
+  const workDir = await resolveValidCwd(cwd);
+  const raw = String(line || '');
+  const match = raw.match(/(?:^|\s)(["']?)([^\s"']*)$/);
+  if (!match) return { ok: true, matches: [] };
+  const quote = match[1] || '';
+  const token = match[2] || '';
+  const slashIdx = Math.max(token.lastIndexOf('\\'), token.lastIndexOf('/'));
+  const dirPart = slashIdx >= 0 ? token.slice(0, slashIdx + 1) : '';
+  const prefix = (slashIdx >= 0 ? token.slice(slashIdx + 1) : token).toLowerCase();
+  const searchDir = dirPart ? path.resolve(workDir, dirPart) : workDir;
+  const entries = await fs.readdir(searchDir, { withFileTypes: true }).catch(() => []);
+  const matches = entries
+    .filter(e => !prefix || e.name.toLowerCase().startsWith(prefix))
+    .sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name) : a.isDirectory() ? -1 : 1))
+    .slice(0, 32)
+    .map(e => {
+      const suffix = e.isDirectory() ? '\\' : '';
+      const completed = `${dirPart}${e.name}${suffix}`;
+      const needsQuote = !quote && /\s/.test(completed);
+      const rep = needsQuote ? `.\\"${completed}"` : `${quote}${completed}${quote}`;
+      return raw.slice(0, raw.length - (quote.length + token.length)) + rep;
+    });
+  return { ok: true, matches };
 }
 
 const server = http.createServer(async (req, res) => {
@@ -962,16 +1161,28 @@ const server = http.createServer(async (req, res) => {
       const body = await json(req, 32 * 1024);
       return send(res, 200, await authorizeBrowserSelection(body));
     }
+    if (url.pathname === '/api/terminal/info' && req.method === 'GET') {
+      return send(res, 200, { ok: true, ...(await detectAvailableShells()) });
+    }
+    if (url.pathname === '/api/terminal/create' && req.method === 'POST') {
+      const body = await json(req, 32 * 1024).catch(() => ({}));
+      return send(res, 200, await createTerminalSession(body));
+    }
     if (url.pathname === '/api/terminal/exec' && req.method === 'POST') {
       const body = await json(req, 64 * 1024);
       return send(res, 200, await execTerminalCommand(body));
     }
+    if (url.pathname === '/api/terminal/complete' && req.method === 'POST') {
+      const body = await json(req, 32 * 1024);
+      return send(res, 200, await completeTerminalInput(body));
+    }
     if (url.pathname === '/api/terminal/kill' && req.method === 'POST') {
-      if (activeTerminalProc) {
-        try { activeTerminalProc.kill(); } catch {}
-        activeTerminalProc = null;
-      }
-      return send(res, 200, { ok: true });
+      const body = await json(req, 32 * 1024).catch(() => ({}));
+      return send(res, 200, await killTerminalCommand(body));
+    }
+    if (url.pathname === '/api/terminal/close' && req.method === 'POST') {
+      const body = await json(req, 32 * 1024).catch(() => ({}));
+      return send(res, 200, closeTerminalSession(body));
     }
     if (url.pathname === '/api/tutorial' && req.method === 'GET') {
       const tutPath = path.join(ROOT, 'TUTORIAL.md');
@@ -1112,6 +1323,11 @@ async function shutdown() {
   // Brief grace window so WebView2 pagehide sendBeacon log/state flushes land on disk
   if (IS_PACKAGED) await new Promise(r => setTimeout(r, 180));
   if (ownsLog) appendLogLine('info', 'app', 'Trace workbench shutting down');
+  for (const s of termSessions.values()) {
+    clearTimeout(s.activeTimer);
+    try { s.proc.kill(); } catch {}
+  }
+  termSessions.clear();
   server.close();
   await Promise.race([Promise.all([...sessions.values()].map(s => s.close().catch(() => {}))), new Promise(r => setTimeout(r, 2000))]);
   await stateWriteQueue.catch(() => {});

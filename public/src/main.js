@@ -1671,8 +1671,7 @@ function openBottomTab(tab = 'console') {
     $$('.dock-tab').forEach(t => { const active = t.dataset.docktab === lastBottomTab; t.classList.toggle('active', active); t.setAttribute('aria-selected', String(active)); });
     $$('.rtab').forEach(t => t.classList.toggle('active', t.id === 'rtab-' + lastBottomTab));
     if (lastBottomTab === 'terminal') {
-      if (S.projectDir || currentHdlRoot) ide?.updateTermCwd?.(S.projectDir || currentHdlRoot);
-      requestAnimationFrame(() => $('#termInput')?.focus());
+      ide?.ensureTerminalInitialized?.();
     }
   }
   syncNavigation();

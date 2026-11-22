@@ -368,19 +368,25 @@
         </footer>
         <aside id="right" class="hidden">
           <section id="rtab-terminal" class="rtab term-pane">
-            <div class="term-toolbar">
-              <span class="term-shell-badge mono">POWERSHELL</span>
-              <span id="termCwdBadge" class="term-cwd mono" title="Current terminal working directory">—</span>
-              <button id="termCdProject" type="button" class="text-btn push-right" title="Switch terminal directory to active project folder">CWD: Project</button>
-              <button id="termKillBtn" type="button" class="text-btn hidden" title="Terminate running command (Ctrl+C)">Stop</button>
-              <button id="termCopyBtn" type="button" class="text-btn" title="Copy terminal transcript">Copy</button>
-              <button id="termClearBtn" type="button" class="text-btn" title="Clear terminal (Ctrl+L)">Clear</button>
+            <div class="term-tabbar">
+              <div id="termTabs" class="term-tabs" role="tablist" aria-label="Terminal sessions"></div>
+              <div class="term-new-group">
+                <button id="termNewTabBtn" type="button" class="term-add-btn" title="New Terminal Tab">+</button>
+                <select id="termShellSelect" class="term-shell-select mono" aria-label="Shell profile for new terminal tab" title="Select shell for new terminal tab"></select>
+              </div>
+              <span id="termCwdBadge" class="term-cwd mono push-right" title="Current terminal working directory"></span>
+              <button id="termCdProject" type="button" class="text-btn" title="cd into active project folder">CWD: Project</button>
+              <button id="termKillBtn" type="button" class="text-btn hidden" title="Interrupt running command (Ctrl+C)">^C Stop</button>
+              <button id="termCopyBtn" type="button" class="text-btn" title="Copy terminal buffer">Copy</button>
+              <button id="termClearBtn" type="button" class="text-btn" title="Clear terminal screen (Ctrl+L / cls)">Clear</button>
             </div>
-            <div id="termOut" class="term-out mono" aria-live="polite"></div>
-            <form id="termForm" class="term-input-row" autocomplete="off">
-              <span id="termPromptLabel" class="term-prompt mono">PS&gt;</span>
-              <input id="termInput" class="term-input mono" type="text" placeholder="Type a command (ghdl --version, dir, git status, cd …) and press Enter" aria-label="Terminal command input" spellcheck="false" autocomplete="off">
-            </form>
+            <div id="termScreen" class="term-screen mono" tabindex="0" aria-label="Interactive terminal buffer">
+              <div id="termOut" class="term-out"></div>
+              <div id="termActiveLine" class="term-active-line">
+                <span id="termPromptLabel" class="term-prompt"></span><span id="termInlineCmd" class="term-inline-cmd"></span>
+              </div>
+              <textarea id="termHiddenInput" class="term-hidden-input" aria-label="Terminal keyboard input" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
+            </div>
           </section>
           <section id="rtab-console" class="rtab active"><div class="lib-actions"><span id="consoleCount" class="count">0</span><span class="hint">events</span><button id="consoleCopy" class="text-btn push-right" title="Copy the console and session details as plain text">Copy</button><button id="consoleClear" class="text-btn">Clear</button></div><div id="consoleOut" class="console-out"></div></section>
           <section id="rtab-problems" class="rtab"><div id="problemList" class="problem-list"></div></section>
