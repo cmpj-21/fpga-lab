@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { execFile, spawn } from 'node:child_process';
-import { promises as fs, appendFileSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { promises as fs, appendFileSync, mkdirSync, readFileSync, rmSync, statSync, watch, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -1151,6 +1151,49 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/project/tree' && req.method === 'POST') {
       const body = await json(req, 32 * 1024);
       return send(res, 200, await readProjectTree(body?.dir));
+    }
+    if (url.pathname === '/api/project/watch' && req.method === 'GET') {
+      const dir = url.searchParams.get('dir') || '';
+      const { root } = resolveProjectRel(dir, '', { allowRoot: true });
+      const st = await fs.stat(root).catch(() => null);
+      if (!st || !st.isDirectory()) return send(res, 404, { error: `Project folder not found: ${root}` });
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      res.write(`data: ${JSON.stringify({ type: 'ready', dir: root })}\n\n`);
+      const SKIP = new Set(['.git', '.trace-build', 'node_modules', 'work', 'greybox_tmp', 'db', 'incremental_db', 'output_files']);
+      const pendingFiles = new Set();
+      let flushTimer = null;
+      let watcher = null;
+      const flush = () => {
+        flushTimer = null;
+        if (res.writableEnded || res.destroyed) return;
+        const files = [...pendingFiles];
+        pendingFiles.clear();
+        if (files.length) res.write(`data: ${JSON.stringify({ type: 'change', files })}\n\n`);
+      };
+      try {
+        watcher = watch(root, { recursive: true }, (_eventType, filename) => {
+          const rel = filename ? String(filename).replaceAll('\\', '/') : '';
+          if (rel && rel.split('/').some(seg => SKIP.has(seg))) return;
+          pendingFiles.add(rel);
+          if (!flushTimer) flushTimer = setTimeout(flush, 150);
+        });
+      } catch {
+        res.write(`data: ${JSON.stringify({ type: 'error' })}\n\n`);
+      }
+      const keepAlive = setInterval(() => {
+        if (!res.writableEnded && !res.destroyed) res.write(':\n\n');
+      }, 25000);
+      req.on('close', () => {
+        clearInterval(keepAlive);
+        if (flushTimer) clearTimeout(flushTimer);
+        try { watcher?.close(); } catch {}
+      });
+      return;
     }
     if (url.pathname === '/api/project/read-file' && req.method === 'POST') {
       return send(res, 200, await readProjectFile(await json(req, 32 * 1024)));

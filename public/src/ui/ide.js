@@ -959,12 +959,142 @@ export function createIde(api) {
     };
     renderLevel(nodes, 0);
   }
-  async function refreshProjectTree() {
+  let projectWatcher = null;
+  let watchedDir = null;
+  const externalWarned = new Map();
+
+  function closeProjectWatcher() {
+    if (projectWatcher) {
+      try { projectWatcher.close(); } catch {}
+      projectWatcher = null;
+    }
+    watchedDir = null;
+  }
+
+  function ensureProjectWatcher(dir) {
+    const target = dir || null;
+    if (target === watchedDir) return;
+    closeProjectWatcher();
+    if (!target || typeof EventSource !== 'function') return;
+    watchedDir = target;
+    try {
+      const es = new EventSource('/api/project/watch?dir=' + encodeURIComponent(target));
+      es.onmessage = ev => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'change') {
+            refreshProjectTree(false);
+            syncExternalDiskChanges(Array.isArray(msg.files) ? msg.files.filter(Boolean) : []);
+          }
+        } catch {}
+      };
+      es.onerror = () => {
+        // EventSource reconnects automatically unless project closed
+        if (!S.projectDir) closeProjectWatcher();
+      };
+      projectWatcher = es;
+    } catch {}
+  }
+
+  async function syncExternalDiskChanges(changedRels = []) {
+    const dir = S.projectDir;
+    if (!dir) return;
+    const candidates = new Set();
+    const list = changedRels.length ? changedRels : [
+      ...[...docs.keys()],
+      ...S.sources.map(s => s.name),
+    ];
+    for (const raw of list) {
+      const rel = cleanRelPath(raw);
+      if (!rel) continue;
+      if (docs.has(rel) || find(rel) || /\.qsf$/i.test(rel)) candidates.add(rel);
+    }
+    if (!candidates.size) return;
+
+    let anySourceReloaded = false;
+    const reloadedNames = [];
+    for (const rel of candidates) {
+      try {
+        const res = await fetch('/api/project/read-file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dir, rel }),
+        });
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (!data?.ok || typeof data.text !== 'string') continue;
+        const diskText = data.text;
+        const doc = docs.get(rel);
+        const source = (!doc || !doc.diskOnly) ? find(rel) : null;
+        const isQsf = /\.qsf$/i.test(rel);
+
+        if (doc) {
+          doc.editor.renderNow?.();
+          const editorDirty = doc.editor.value !== doc.saved;
+          if (diskText === doc.saved && (!source || source.text === diskText)) continue;
+          if (editorDirty) {
+            if (externalWarned.get(rel) !== diskText) {
+              externalWarned.set(rel, diskText);
+              api.toast?.(`${rel} changed on disk (kept your unsaved edits).`, 'err');
+            }
+            continue;
+          }
+          const inp = doc.editor.input;
+          const selStart = inp?.selectionStart ?? 0;
+          const selEnd = inp?.selectionEnd ?? 0;
+          const scrollTop = inp?.scrollTop ?? 0;
+          doc.saved = diskText;
+          doc.dirty = false;
+          doc.editor.setValue(diskText);
+          if (inp) {
+            const maxPos = diskText.length;
+            inp.setSelectionRange(Math.min(selStart, maxPos), Math.min(selEnd, maxPos));
+            inp.scrollTop = scrollTop;
+          }
+          doc.editor.setMarkers?.(doc.diskOnly ? [] : markersFor(rel));
+          if (active === rel) syncMarkdownView();
+        } else if (source && source.text === diskText) {
+          continue;
+        }
+
+        if (source) {
+          source.text = diskText;
+          if (baselineProject && Array.isArray(baselineProject.sources)) {
+            const bSrc = baselineProject.sources.find(s => s.name === source.name);
+            if (bSrc) bSrc.text = diskText;
+          }
+          anySourceReloaded = true;
+        }
+        if (isQsf) {
+          api.reloadQsfText?.(diskText, rel);
+          if (baselineProject) baselineProject.assignments = [...S.assignments];
+        }
+        externalWarned.delete(rel);
+        reloadedNames.push(rel);
+      } catch {}
+    }
+
+    if (reloadedNames.length) {
+      if (anySourceReloaded) {
+        api.saveProject?.();
+        api.markDirty?.();
+      }
+      renderTabs();
+      updateStatus();
+      const label = reloadedNames.length === 1 ? reloadedNames[0] : `${reloadedNames.length} files`;
+      api.toast?.(`Reloaded ${label} from disk.`);
+      api.logEvent?.('info', `External file update reloaded: ${reloadedNames.join(', ')}`);
+    }
+  }
+
+  async function refreshProjectTree(syncWatch = true) {
     if (!S.projectDir) {
+      closeProjectWatcher();
       diskTree = null;
       renderProjectTree();
       return;
     }
+    if (syncWatch) ensureProjectWatcher(S.projectDir);
     const seq = ++treeSeq;
     try {
       const res = await fetch('/api/project/tree', {
@@ -2812,6 +2942,8 @@ export function createIde(api) {
       });
     });
     renderProblems(); updateStatus(); syncEditorVisibility(); syncBoardVisibility();
+    window.addEventListener('focus', () => { if (S.projectDir) { refreshProjectTree(false); syncExternalDiskChanges(); } });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && S.projectDir) { refreshProjectTree(false); syncExternalDiskChanges(); } });
   }
   wire();
 
