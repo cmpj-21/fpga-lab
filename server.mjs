@@ -120,7 +120,7 @@ const AUTO_PORT = PORT_ENV === 'auto';
 const REQUESTED_PORT = AUTO_PORT ? 8044 : (PORT_ENV !== undefined && PORT_ENV !== '' ? Number(PORT_ENV) : 8044);
 let activePort = REQUESTED_PORT || 8044;
 let triedFallbackPort = false;
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.vcd': 'text/plain', '.glb': 'model/gltf-binary', '.wasm': 'application/wasm' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.vcd': 'text/plain', '.glb': 'model/gltf-binary', '.wasm': 'application/wasm' };
 const within = (root, full) => { const rel = path.relative(root, full); return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)); };
 const LOG_DIR = path.resolve(process.env.TRACE_LOG_DIR || path.join(USER_DATA_DIR, 'logs'));
 const LOG_FILE = path.join(LOG_DIR, 'latest.log');

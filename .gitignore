@@ -15,6 +15,7 @@ dump_modules.txt
 
 # Compiled native bridge artifacts (compiled on the fly by GCC)
 backend/*.o
+backend/*.exe
 backend/bridge-*.vpi
 backend/bridge.vpi
 

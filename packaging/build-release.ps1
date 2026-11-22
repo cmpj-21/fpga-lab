@@ -21,6 +21,27 @@ $stageDir = Join-Path $distDir 'Trace'
 
 Write-Host "=== Trace FPGA Workbench Release Builder v$Version ===" -ForegroundColor Cyan
 
+# 0. Stop any lingering Trace / portable / WebView2 processes holding locks before rebuilding
+$lockProcs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+  ($_.Name -eq 'Trace.exe') -or
+  ($_.Name -like 'Trace-FPGA-Workbench*.exe') -or
+  ($_.Name -eq 'conpty_host.exe') -or
+  (($_.Name -eq 'node.exe' -or $_.Name -eq 'msedgewebview2.exe') -and (
+    ($_.ExecutablePath -like '*TraceFPGA*') -or
+    ($_.CommandLine -like '*TraceFPGA*') -or
+    ($_.CommandLine -like "*$distDir*") -or
+    ($_.CommandLine -like '*TraceData\\webview2*') -or
+    ($_.CommandLine -like '*--webview-exe-name=Trace.exe*')
+  ))
+}
+if ($lockProcs) {
+  Write-Host "Stopping lingering Trace background processes ($($lockProcs.Count))..." -ForegroundColor Yellow
+  foreach ($lp in $lockProcs) {
+    Stop-Process -Id $lp.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+  Start-Sleep -Milliseconds 350
+}
+
 # 1. Verify required local tools
 $gpp     = Join-Path $MsysBin 'g++.exe'
 $gcc     = Join-Path $MsysBin 'gcc.exe'

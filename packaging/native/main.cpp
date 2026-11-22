@@ -51,9 +51,11 @@ struct AppState {
     HANDLE stdinWrite = nullptr;
     ICoreWebView2Controller* controller = nullptr;
     ICoreWebView2* webview = nullptr;
+    CreateWebView2EnvFn createEnvFn = nullptr;
     std::wstring exeDir;
     std::wstring exePath;
     std::wstring dataDir;
+    std::wstring tempWebViewDir;
     std::wstring baseUrl;
     std::wstring initialQuery;
     bool devtools = false;
@@ -61,6 +63,7 @@ struct AppState {
     bool navigated = false;
     bool allowClose = false;
     bool isFullscreen = false;
+    bool wv2FallbackAttempted = false;
     WINDOWPLACEMENT savedPlacement{ sizeof(WINDOWPLACEMENT) };
     LONG_PTR savedStyle = 0;
     LONG_PTR savedExStyle = 0;
@@ -129,6 +132,65 @@ static bool IsDirWritable(const std::wstring& dir) {
     CloseHandle(h);
     return true;
 }
+
+static std::wstring FormatHRESULT(HRESULT hr) {
+    wchar_t buf[32] = {};
+    std::swprintf(buf, 32, L"0x%08lX", static_cast<unsigned long>(hr));
+    return buf;
+}
+
+static void DeleteDirBestEffort(const std::wstring& dir) {
+    if (dir.empty() || !DirExists(dir)) return;
+    WIN32_FIND_DATAW fd{};
+    HANDLE hFind = FindFirstFileW((dir + L"\\*").c_str(), &fd);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            if (std::wcscmp(fd.cFileName, L".") == 0 || std::wcscmp(fd.cFileName, L"..") == 0) continue;
+            std::wstring child = dir + L"\\" + fd.cFileName;
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                DeleteDirBestEffort(child);
+            } else {
+                SetFileAttributesW(child.c_str(), FILE_ATTRIBUTE_NORMAL);
+                DeleteFileW(child.c_str());
+            }
+        } while (FindNextFileW(hFind, &fd));
+        FindClose(hFind);
+    }
+    SetFileAttributesW(dir.c_str(), FILE_ATTRIBUTE_NORMAL);
+    RemoveDirectoryW(dir.c_str());
+}
+
+static void PruneStaleSessionDirs(const std::wstring& dataDir) {
+    if (dataDir.empty() || !DirExists(dataDir)) return;
+    WIN32_FIND_DATAW fd{};
+    HANDLE hFind = FindFirstFileW((dataDir + L"\\webview2-session-*").c_str(), &fd);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+    std::wstring ownName = L"webview2-session-" + std::to_wstring(GetCurrentProcessId());
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        std::wstring name = fd.cFileName;
+        if (name == ownName) continue;
+        // Skip folders whose owning Trace.exe PID is still alive
+        DWORD pid = 0;
+        if (name.size() > 17) {
+            pid = static_cast<DWORD>(_wtoi(name.c_str() + 17));
+        }
+        bool alive = false;
+        if (pid != 0) {
+            HANDLE hProc = OpenProcess(SYNCHRONIZE, FALSE, pid);
+            if (hProc) {
+                alive = (WaitForSingleObject(hProc, 0) == WAIT_TIMEOUT);
+                CloseHandle(hProc);
+            }
+        }
+        if (!alive) {
+            DeleteDirBestEffort(dataDir + L"\\" + name);
+        }
+    } while (FindNextFileW(hFind, &fd));
+    FindClose(hFind);
+}
+
+static bool StartWebView2WithDir(const std::wstring& userData);
 
 static std::wstring GetDataDir() {
     // 1. Explicit TRACE_DATA_DIR (set by single-file portable stub or user)
@@ -407,7 +469,20 @@ public:
     }
     HRESULT STDMETHODCALLTYPE Invoke(HRESULT result, ICoreWebView2Controller* controller) override {
         if (FAILED(result) || !controller) {
-            MessageBoxW(g_app.hwnd, L"Failed to initialize Microsoft Edge WebView2 controller.", L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
+            if (g_app.hwnd && IsWindow(g_app.hwnd) && !g_app.wv2FallbackAttempted && g_app.createEnvFn) {
+                g_app.wv2FallbackAttempted = true;
+                std::wstring baseData = g_app.dataDir.empty() ? GetDataDir() : g_app.dataDir;
+                std::wstring fallbackDir = baseData + L"\\webview2-session-" + std::to_wstring(GetCurrentProcessId());
+                g_app.tempWebViewDir = fallbackDir;
+                if (StartWebView2WithDir(fallbackDir)) {
+                    return S_OK;
+                }
+            }
+            if (g_app.hwnd && IsWindow(g_app.hwnd)) {
+                std::wstring msg = L"Failed to initialize Microsoft Edge WebView2 controller (" + FormatHRESULT(result) + L").";
+                MessageBoxW(g_app.hwnd, msg.c_str(), L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
+                DestroyWindow(g_app.hwnd);
+            }
             PostQuitMessage(1);
             return result;
         }
@@ -472,12 +547,22 @@ public:
     }
     HRESULT STDMETHODCALLTYPE Invoke(HRESULT result, ICoreWebView2Environment* env) override {
         if (FAILED(result) || !env) {
-            MessageBoxW(
-                g_app.hwnd,
-                L"Microsoft Edge WebView2 Runtime is required to run Trace FPGA Workbench.\n\n"
-                L"Install the Evergreen WebView2 Runtime from:\nhttps://developer.microsoft.com/microsoft-edge/webview2/",
-                L"Trace FPGA Workbench",
-                MB_OK | MB_ICONERROR);
+            if (g_app.hwnd && IsWindow(g_app.hwnd) && !g_app.wv2FallbackAttempted && g_app.createEnvFn) {
+                g_app.wv2FallbackAttempted = true;
+                std::wstring baseData = g_app.dataDir.empty() ? GetDataDir() : g_app.dataDir;
+                std::wstring fallbackDir = baseData + L"\\webview2-session-" + std::to_wstring(GetCurrentProcessId());
+                g_app.tempWebViewDir = fallbackDir;
+                if (StartWebView2WithDir(fallbackDir)) {
+                    return S_OK;
+                }
+            }
+            if (g_app.hwnd && IsWindow(g_app.hwnd)) {
+                std::wstring msg =
+                    L"Microsoft Edge WebView2 Runtime is required to run Trace FPGA Workbench (" + FormatHRESULT(result) + L").\n\n"
+                    L"Install the Evergreen WebView2 Runtime from:\nhttps://developer.microsoft.com/microsoft-edge/webview2/";
+                MessageBoxW(g_app.hwnd, msg.c_str(), L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
+                DestroyWindow(g_app.hwnd);
+            }
             PostQuitMessage(1);
             return result;
         }
@@ -587,20 +672,38 @@ static bool StartBackendServer() {
     std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
     cmdBuf.push_back(L'\0');
 
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    si.hStdOutput = stdoutWrite;
-    si.hStdError = stdoutWrite;
-    si.hStdInput = stdinRead;
+    STARTUPINFOEXW siEx{};
+    siEx.StartupInfo.cb = sizeof(STARTUPINFOEXW);
+    siEx.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    siEx.StartupInfo.wShowWindow = SW_HIDE;
+    siEx.StartupInfo.hStdOutput = stdoutWrite;
+    siEx.StartupInfo.hStdError = stdoutWrite;
+    siEx.StartupInfo.hStdInput = stdinRead;
+
+    // Restrict inherited handles to ONLY the two pipe ends node.exe needs (prevents grandchildren inheriting unrelated handles)
+    HANDLE inheritHandles[2] = { stdoutWrite, stdinRead };
+    SIZE_T attrSize = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
+    std::vector<BYTE> attrBuf(attrSize);
+    LPPROC_THREAD_ATTRIBUTE_LIST attrList = attrSize
+        ? reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuf.data())
+        : nullptr;
+    bool hasAttrList = attrList && InitializeProcThreadAttributeList(attrList, 1, 0, &attrSize) &&
+        UpdateProcThreadAttribute(attrList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inheritHandles, sizeof(inheritHandles), nullptr, nullptr);
+    if (hasAttrList) {
+        siEx.lpAttributeList = attrList;
+    }
 
     PROCESS_INFORMATION pi{};
-    DWORD flags = CREATE_NO_WINDOW | CREATE_SUSPENDED;
+    DWORD flags = CREATE_NO_WINDOW | CREATE_SUSPENDED | (hasAttrList ? EXTENDED_STARTUPINFO_PRESENT : 0);
     BOOL ok = CreateProcessW(
         FileExists(nodeExe) ? nodeExe.c_str() : nullptr,
-        cmdBuf.data(), nullptr, nullptr, TRUE, flags, nullptr, g_app.exeDir.c_str(), &si, &pi);
+        cmdBuf.data(), nullptr, nullptr, TRUE, flags, nullptr, g_app.exeDir.c_str(),
+        &siEx.StartupInfo, &pi);
 
+    if (attrList) {
+        DeleteProcThreadAttributeList(attrList);
+    }
     CloseHandle(stdoutWrite);
     CloseHandle(stdinRead);
 
@@ -628,6 +731,15 @@ static bool StartBackendServer() {
     return true;
 }
 
+static bool StartWebView2WithDir(const std::wstring& userData) {
+    if (!g_app.createEnvFn) return false;
+    CreateDirsRecursive(userData);
+    auto* handler = new EnvironmentCompletedHandler();
+    HRESULT hr = g_app.createEnvFn(nullptr, userData.c_str(), nullptr, handler);
+    handler->Release();
+    return SUCCEEDED(hr);
+}
+
 static void InitWebView2() {
     std::wstring loaderPath = g_app.exeDir + L"\\WebView2Loader.dll";
     HMODULE mod = FileExists(loaderPath)
@@ -635,13 +747,15 @@ static void InitWebView2() {
         : nullptr;
     if (!mod) {
         MessageBoxW(g_app.hwnd, L"Missing WebView2Loader.dll beside Trace.exe.", L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
+        if (g_app.hwnd) DestroyWindow(g_app.hwnd);
         PostQuitMessage(1);
         return;
     }
-    auto createEnv = reinterpret_cast<CreateWebView2EnvFn>(
+    g_app.createEnvFn = reinterpret_cast<CreateWebView2EnvFn>(
         GetProcAddress(mod, "CreateCoreWebView2EnvironmentWithOptions"));
-    if (!createEnv) {
+    if (!g_app.createEnvFn) {
         MessageBoxW(g_app.hwnd, L"Invalid WebView2Loader.dll.", L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
+        if (g_app.hwnd) DestroyWindow(g_app.hwnd);
         PostQuitMessage(1);
         return;
     }
@@ -651,19 +765,23 @@ static void InitWebView2() {
         L"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
         L"--enable-gpu-rasterization --enable-zero-copy --disable-background-timer-throttling --disable-renderer-backgrounding");
 
-    std::wstring userData = (g_app.dataDir.empty() ? GetDataDir() : g_app.dataDir) + L"\\webview2";
-    CreateDirsRecursive(userData);
+    std::wstring baseData = g_app.dataDir.empty() ? GetDataDir() : g_app.dataDir;
+    PruneStaleSessionDirs(baseData);
+    std::wstring userData = baseData + L"\\webview2";
 
-    auto* handler = new EnvironmentCompletedHandler();
-    HRESULT hr = createEnv(nullptr, userData.c_str(), nullptr, handler);
-    handler->Release();
-    if (FAILED(hr)) {
-        MessageBoxW(
-            g_app.hwnd,
-            L"Could not start Microsoft Edge WebView2.\n\nPlease install the Microsoft Edge WebView2 Runtime.",
-            L"Trace FPGA Workbench",
-            MB_OK | MB_ICONERROR);
-        PostQuitMessage(1);
+    if (!StartWebView2WithDir(userData)) {
+        g_app.wv2FallbackAttempted = true;
+        std::wstring fallbackDir = baseData + L"\\webview2-session-" + std::to_wstring(GetCurrentProcessId());
+        g_app.tempWebViewDir = fallbackDir;
+        if (!StartWebView2WithDir(fallbackDir)) {
+            MessageBoxW(
+                g_app.hwnd,
+                L"Could not start Microsoft Edge WebView2.\n\nPlease install the Microsoft Edge WebView2 Runtime.",
+                L"Trace FPGA Workbench",
+                MB_OK | MB_ICONERROR);
+            if (g_app.hwnd) DestroyWindow(g_app.hwnd);
+            PostQuitMessage(1);
+        }
     }
 }
 
@@ -840,22 +958,27 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
         g_app.stdinWrite = nullptr;
     }
     if (g_app.nodeProcess) {
-        WaitForSingleObject(g_app.nodeProcess, 2500);
+        WaitForSingleObject(g_app.nodeProcess, 1200);
         CloseHandle(g_app.nodeProcess);
         g_app.nodeProcess = nullptr;
     }
-    // Hard safety net: terminate any stubborn child GHDL/Node processes via Job Object
+    // Hard safety net: forcibly terminate any stubborn child Node/ConPTY/GHDL processes via Job Object
     if (g_app.job) {
+        TerminateJobObject(g_app.job, 0);
         CloseHandle(g_app.job);
         g_app.job = nullptr;
     }
-    // Wait for watcher thread to exit cleanly on pipe EOF before closing stdoutRead
+    // Unblock BackendWatcherThread if any grandchild still held stdoutWrite briefly; never CloseHandle(stdoutRead) while blocked in ReadFile
+    bool watcherExited = true;
     if (g_app.watcherThread) {
-        WaitForSingleObject(g_app.watcherThread, 1500);
+        if (WaitForSingleObject(g_app.watcherThread, 250) == WAIT_TIMEOUT) {
+            CancelSynchronousIo(g_app.watcherThread);
+            watcherExited = (WaitForSingleObject(g_app.watcherThread, 250) == WAIT_OBJECT_0);
+        }
         CloseHandle(g_app.watcherThread);
         g_app.watcherThread = nullptr;
     }
-    if (g_app.stdoutRead) {
+    if (g_app.stdoutRead && watcherExited) {
         CloseHandle(g_app.stdoutRead);
         g_app.stdoutRead = nullptr;
     }
@@ -865,5 +988,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     }
     DeleteObject(bgBrush);
     CoUninitialize();
-    return (int)msg.wParam;
+    if (!g_app.tempWebViewDir.empty()) {
+        DeleteDirBestEffort(g_app.tempWebViewDir);
+    }
+    ExitProcess(static_cast<UINT>(msg.wParam));
 }
