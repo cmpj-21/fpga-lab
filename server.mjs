@@ -912,22 +912,51 @@ async function resolveValidCwd(cwd = '') {
   return st?.isDirectory() ? path.resolve(hdlRoot) : ROOT;
 }
 
-async function spawnPersistentShellSession(shellId = '', initialCwd = '', existingId = '') {
-  const info = await detectAvailableShells();
-  const chosen = info.shells.find(s => s.id === shellId) || info.shells[0];
-  const workDir = await resolveValidCwd(initialCwd);
-  const id = existingId || randomUUID();
-  const isCmd = chosen.id === 'cmd';
-  const args = isCmd
-    ? ['/Q', '/K', 'chcp 65001 >nul']
-    : ['-NoLogo', '-NoProfile', '-NoExit', '-Command', '-'];
+function resolveConptyHelper() {
+  const candidates = [
+    path.join(ROOT, 'backend', 'conpty_host.exe'),
+    path.join(ROOT, '..', 'packaging', 'build', 'conpty_host.exe'),
+    path.join(ROOT, 'packaging', 'build', 'conpty_host.exe'),
+  ];
+  for (const c of candidates) {
+    try { if (statSync(c).isFile()) return c; } catch {}
+  }
+  return null;
+}
 
-  const proc = spawn(chosen.exe, args, {
-    cwd: workDir,
-    windowsHide: true,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, PATH: buildTerminalPathEnv(), TERM: 'dumb', NO_COLOR: '1' },
-  });
+function broadcastTermEvent(session, payload) {
+  const msg = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const res of [...session.clients]) {
+    try {
+      res.write(msg);
+    } catch {
+      session.clients.delete(res);
+    }
+  }
+}
+
+async function createTerminalSession({ shell = '', cwd = '', cols = 120, rows = 28 } = {}) {
+  const info = await detectAvailableShells();
+  const chosen = info.shells.find(s => s.id === shell) || info.shells[0];
+  const workDir = await resolveValidCwd(cwd);
+  const id = randomUUID();
+  const safeCols = Math.max(20, Math.min(500, Number(cols) || 120));
+  const safeRows = Math.max(5, Math.min(200, Number(rows) || 28));
+  const conptyExe = process.platform === 'win32' ? resolveConptyHelper() : null;
+
+  const proc = conptyExe
+    ? spawn(conptyExe, [String(safeCols), String(safeRows), chosen.exe], {
+        cwd: workDir,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, PATH: buildTerminalPathEnv(), TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+      })
+    : spawn(chosen.exe, chosen.id === 'cmd' ? ['/Q', '/K'] : ['-NoLogo'], {
+        cwd: workDir,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, PATH: buildTerminalPathEnv(), TERM: 'xterm-256color' },
+      });
 
   const session = {
     id,
@@ -937,172 +966,75 @@ async function spawnPersistentShellSession(shellId = '', initialCwd = '', existi
     exe: chosen.exe,
     cwd: workDir,
     proc,
-    stdoutBuf: '',
-    stderrBuf: '',
-    activeResolve: null,
-    activeTimer: null,
+    replayBuf: '',
+    clients: new Set(),
   };
 
-  if (!isCmd) {
-    proc.stdin.write('[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; $ErrorView = "ConciseView"\n');
-  }
-
-  const checkDone = () => {
-    if (!session.activeResolve) return;
-    const match = session.stdoutBuf.match(/\r?\n?__TRACE_CWD__(.*?)__TRACE_END__\r?\n?/);
-    if (!match) return;
-    const outBefore = session.stdoutBuf.slice(0, match.index);
-    session.stdoutBuf = session.stdoutBuf.slice(match.index + match[0].length);
-    const newCwd = (match[1] || '').trim();
-    if (newCwd && path.isAbsolute(newCwd)) session.cwd = path.resolve(newCwd);
-    // Allow 15ms for any trailing stderr flush from the same command
-    clearTimeout(session.activeTimer);
-    setTimeout(() => {
-      if (!session.activeResolve) return;
-      const done = session.activeResolve;
-      session.activeResolve = null;
-      const errOut = session.stderrBuf;
-      session.stderrBuf = '';
-      done({
-        ok: true,
-        stdout: stripAnsi(outBefore).replace(/^\r?\n/, '').replace(/\r?\n$/, ''),
-        stderr: stripAnsi(errOut).replace(/^\r?\n/, '').replace(/\r?\n$/, ''),
-        cwd: session.cwd,
-      });
-    }, 18);
-  };
-
-  proc.stdout.on('data', chunk => {
-    session.stdoutBuf += chunk.toString('utf8');
-    checkDone();
-  });
-  proc.stderr.on('data', chunk => {
-    session.stderrBuf += chunk.toString('utf8');
-  });
-  proc.on('close', () => {
-    if (session.activeResolve) {
-      const done = session.activeResolve;
-      session.activeResolve = null;
-      clearTimeout(session.activeTimer);
-      done({
-        ok: true,
-        stdout: stripAnsi(session.stdoutBuf).trim(),
-        stderr: stripAnsi(session.stderrBuf).trim(),
-        cwd: session.cwd,
-      });
+  const onChunk = chunk => {
+    const str = chunk.toString('utf8');
+    if (!str) return;
+    session.replayBuf += str;
+    if (session.replayBuf.length > 96 * 1024) {
+      session.replayBuf = session.replayBuf.slice(-64 * 1024);
     }
+    broadcastTermEvent(session, { type: 'data', data: str });
+  };
+
+  proc.stdout.on('data', onChunk);
+  proc.stderr.on('data', onChunk);
+  proc.on('close', code => {
+    broadcastTermEvent(session, { type: 'exit', code: code ?? 0 });
+    for (const res of session.clients) {
+      try { res.end(); } catch {}
+    }
+    session.clients.clear();
     if (termSessions.get(id) === session) termSessions.delete(id);
   });
 
   termSessions.set(id, session);
-  return session;
-}
-
-async function createTerminalSession({ shell = '', cwd = '' } = {}) {
-  const s = await spawnPersistentShellSession(shell, cwd);
   return {
     ok: true,
-    id: s.id,
-    shell: s.shell,
-    label: s.label,
-    banner: s.banner,
-    cwd: s.cwd,
+    id: session.id,
+    shell: session.shell,
+    label: session.label,
+    banner: session.banner,
+    cwd: session.cwd,
+    pty: !!conptyExe,
   };
 }
 
-async function execTerminalCommand({ id = '', shell = '', command = '', cwd = '' } = {}) {
-  const cmdText = String(command || '').trim();
-  let session = id ? termSessions.get(id) : null;
-  if (!session || session.proc.killed || session.proc.exitCode !== null) {
-    session = await spawnPersistentShellSession(shell, cwd, id || randomUUID());
-  } else if (cwd && path.isAbsolute(cwd) && path.resolve(cwd).toLowerCase() !== session.cwd.toLowerCase()) {
-    session.cwd = await resolveValidCwd(cwd);
-    if (session.shell === 'cmd') session.proc.stdin.write(`cd /d "${session.cwd}"\r\n`);
-    else session.proc.stdin.write(`Set-Location -LiteralPath '${session.cwd.replace(/'/g, "''")}'\n`);
+function writeTerminalInput({ id = '', data = '' } = {}) {
+  const session = id ? termSessions.get(id) : null;
+  if (!session || !session.proc || session.proc.killed) return { ok: false, error: 'Terminal session ended.' };
+  if (typeof data === 'string' && data.length > 0) {
+    try { session.proc.stdin.write(data, 'utf8'); } catch {}
   }
-  if (!cmdText) return { ok: true, id: session.id, stdout: '', stderr: '', cwd: session.cwd };
-
-  session.stdoutBuf = '';
-  session.stderrBuf = '';
-
-  return new Promise(resolve => {
-    session.activeResolve = resolve;
-    session.activeTimer = setTimeout(() => {
-      if (!session.activeResolve) return;
-      const done = session.activeResolve;
-      session.activeResolve = null;
-      const out = stripAnsi(session.stdoutBuf).trim();
-      const err = (stripAnsi(session.stderrBuf).trim() + '\nCommand timed out after 60s.').trim();
-      try { session.proc.kill(); } catch {}
-      termSessions.delete(session.id);
-      done({ ok: true, id: session.id, stdout: out, stderr: err, cwd: session.cwd });
-    }, 60000);
-
-    if (session.shell === 'cmd') {
-      session.proc.stdin.write(`${cmdText}\r\necho __TRACE_CWD__%CD%__TRACE_END__\r\n`);
-    } else {
-      session.proc.stdin.write(`${cmdText}\nWrite-Output "\`n__TRACE_CWD__$((Get-Location).ProviderPath)__TRACE_END__"\n`);
-    }
-  });
+  return { ok: true };
 }
 
-async function killTerminalCommand({ id = '' } = {}) {
+function resizeTerminalSession({ id = '', cols = 120, rows = 28 } = {}) {
   const session = id ? termSessions.get(id) : null;
-  if (!session) return { ok: true };
-  const prevShell = session.shell;
-  const prevCwd = session.cwd;
-  if (session.activeResolve) {
-    const done = session.activeResolve;
-    session.activeResolve = null;
-    clearTimeout(session.activeTimer);
-    done({
-      ok: true,
-      id: session.id,
-      stdout: stripAnsi(session.stdoutBuf).trim(),
-      stderr: (stripAnsi(session.stderrBuf).trim() + '\n^C').trim(),
-      cwd: prevCwd,
-    });
-  }
-  try { session.proc.kill(); } catch {}
-  termSessions.delete(id);
-  await spawnPersistentShellSession(prevShell, prevCwd, id);
+  if (!session || !session.proc || session.proc.killed) return { ok: false };
+  const c = Math.max(10, Math.min(500, Math.floor(Number(cols) || 120)));
+  const r = Math.max(4, Math.min(200, Math.floor(Number(rows) || 28)));
+  try {
+    session.proc.stdin.write(`\x1b]9999;R;${c};${r}\x07`, 'utf8');
+  } catch {}
   return { ok: true };
 }
 
 function closeTerminalSession({ id = '' } = {}) {
   const session = id ? termSessions.get(id) : null;
   if (session) {
-    clearTimeout(session.activeTimer);
+    for (const res of session.clients) {
+      try { res.end(); } catch {}
+    }
+    session.clients.clear();
+    try { session.proc.stdin.end(); } catch {}
     try { session.proc.kill(); } catch {}
     termSessions.delete(id);
   }
   return { ok: true };
-}
-
-async function completeTerminalInput({ line = '', cwd = '' } = {}) {
-  const workDir = await resolveValidCwd(cwd);
-  const raw = String(line || '');
-  const match = raw.match(/(?:^|\s)(["']?)([^\s"']*)$/);
-  if (!match) return { ok: true, matches: [] };
-  const quote = match[1] || '';
-  const token = match[2] || '';
-  const slashIdx = Math.max(token.lastIndexOf('\\'), token.lastIndexOf('/'));
-  const dirPart = slashIdx >= 0 ? token.slice(0, slashIdx + 1) : '';
-  const prefix = (slashIdx >= 0 ? token.slice(slashIdx + 1) : token).toLowerCase();
-  const searchDir = dirPart ? path.resolve(workDir, dirPart) : workDir;
-  const entries = await fs.readdir(searchDir, { withFileTypes: true }).catch(() => []);
-  const matches = entries
-    .filter(e => !prefix || e.name.toLowerCase().startsWith(prefix))
-    .sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name) : a.isDirectory() ? -1 : 1))
-    .slice(0, 32)
-    .map(e => {
-      const suffix = e.isDirectory() ? '\\' : '';
-      const completed = `${dirPart}${e.name}${suffix}`;
-      const needsQuote = !quote && /\s/.test(completed);
-      const rep = needsQuote ? `.\\"${completed}"` : `${quote}${completed}${quote}`;
-      return raw.slice(0, raw.length - (quote.length + token.length)) + rep;
-    });
-  return { ok: true, matches };
 }
 
 const server = http.createServer(async (req, res) => {
@@ -1168,17 +1100,32 @@ const server = http.createServer(async (req, res) => {
       const body = await json(req, 32 * 1024).catch(() => ({}));
       return send(res, 200, await createTerminalSession(body));
     }
-    if (url.pathname === '/api/terminal/exec' && req.method === 'POST') {
-      const body = await json(req, 64 * 1024);
-      return send(res, 200, await execTerminalCommand(body));
+    if (url.pathname === '/api/terminal/stream' && req.method === 'GET') {
+      const id = url.searchParams.get('id') || '';
+      const session = termSessions.get(id);
+      if (!session) return send(res, 404, { error: 'Terminal session not found.' });
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      if (session.replayBuf) {
+        res.write(`data: ${JSON.stringify({ type: 'data', data: session.replayBuf })}\n\n`);
+      }
+      session.clients.add(res);
+      req.on('close', () => {
+        session.clients.delete(res);
+      });
+      return;
     }
-    if (url.pathname === '/api/terminal/complete' && req.method === 'POST') {
+    if (url.pathname === '/api/terminal/write' && req.method === 'POST') {
+      const body = await json(req, 256 * 1024);
+      return send(res, 200, writeTerminalInput(body));
+    }
+    if (url.pathname === '/api/terminal/resize' && req.method === 'POST') {
       const body = await json(req, 32 * 1024);
-      return send(res, 200, await completeTerminalInput(body));
-    }
-    if (url.pathname === '/api/terminal/kill' && req.method === 'POST') {
-      const body = await json(req, 32 * 1024).catch(() => ({}));
-      return send(res, 200, await killTerminalCommand(body));
+      return send(res, 200, resizeTerminalSession(body));
     }
     if (url.pathname === '/api/terminal/close' && req.method === 'POST') {
       const body = await json(req, 32 * 1024).catch(() => ({}));

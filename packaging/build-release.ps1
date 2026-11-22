@@ -113,8 +113,18 @@ $stubExe = Join-Path $buildDir 'portable_stub.exe'
   -o $stubExe
 if ($LASTEXITCODE -ne 0) { throw "Failed to compile portable_stub.exe" }
 
+$conptyExe = Join-Path $buildDir 'conpty_host.exe'
+& $gpp -O2 -std=c++17 -municode -mconsole `
+  (Join-Path $nativeDir 'conpty_host.cpp') `
+  -static-libgcc -static-libstdc++ "-Wl,-Bstatic" -lwinpthread "-Wl,-Bdynamic" `
+  -lkernel32 -lshell32 `
+  -o $conptyExe
+if ($LASTEXITCODE -ne 0) { throw "Failed to compile conpty_host.exe" }
+Copy-Item $conptyExe (Join-Path $repoRoot 'backend\conpty_host.exe') -Force
+
 Write-Host "  Compiled Trace.exe ($([math]::Round((Get-Item $traceExe).Length / 1KB, 1)) KB)" -ForegroundColor Green
 Write-Host "  Compiled portable_stub.exe ($([math]::Round((Get-Item $stubExe).Length / 1KB, 1)) KB)" -ForegroundColor Green
+Write-Host "  Compiled conpty_host.exe ($([math]::Round((Get-Item $conptyExe).Length / 1KB, 1)) KB)" -ForegroundColor Green
 
 # 6. Stage complete self-contained directory (dist\Trace\)
 Write-Host "Staging self-contained release folder: $stageDir" -ForegroundColor Cyan
@@ -131,7 +141,11 @@ Set-Content -Path (Join-Path $stageDir 'portable.mode') -Value "Portable data mo
 
 # App code + all public assets (Three.js, GLB models, CSS, JS)
 Copy-Item (Join-Path $repoRoot 'server.mjs') (Join-Path $stageDir 'app\server.mjs') -Force
+if (Test-Path (Join-Path $repoRoot 'TUTORIAL.md')) {
+  Copy-Item (Join-Path $repoRoot 'TUTORIAL.md') (Join-Path $stageDir 'app\TUTORIAL.md') -Force
+}
 Copy-Item (Join-Path $repoRoot 'backend\engine.mjs') (Join-Path $stageDir 'app\backend\engine.mjs') -Force
+Copy-Item $conptyExe (Join-Path $stageDir 'app\backend\conpty_host.exe') -Force
 Copy-Item $bridgeSrc (Join-Path $stageDir 'app\backend\bridge.c') -Force
 Copy-Item $vpiOut (Join-Path $stageDir "app\backend\$(Split-Path -Leaf $vpiOut)") -Force
 Copy-Item (Join-Path $repoRoot 'public') (Join-Path $stageDir 'app\public') -Recurse -Force

@@ -1,6 +1,7 @@
 // IDE shell controller: resizable panes, multi-tab VHDL code editor, problems diagnostics, menus and status bar.
 import { CodeEditor, renderMarkdownHtml } from './editor.js';
 import { DEMO_SRC, DEMO_TOP } from './demo.js';
+import { Terminal } from '/vendor/xterm.mjs';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
@@ -2090,78 +2091,66 @@ export function createIde(api) {
     });
   }
 
-  // ---------- multi-tab inline integrated terminal in tools dock ----------
+  // ---------- multi-tab xterm.js + ConPTY integrated terminal in tools dock ----------
   const termSessionsList = [];
   let activeTermId = null;
   let availableShells = [];
   let defaultShellId = 'pwsh';
   let termInfoLoaded = false;
+  let termResizeObs = null;
 
-  const escHtml = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const XTERM_THEME = {
+    background: '#121611',
+    foreground: '#e4eadc',
+    cursor: '#e4eadc',
+    cursorAccent: '#121611',
+    selectionBackground: '#b7d98c44',
+    black: '#141813',
+    red: '#f0655b',
+    green: '#b7d98c',
+    yellow: '#f0e68c',
+    blue: '#78c6d9',
+    magenta: '#d1a6f0',
+    cyan: '#78c6d9',
+    white: '#e4eadc',
+    brightBlack: '#6e7865',
+    brightRed: '#f5897f',
+    brightGreen: '#d4ed80',
+    brightYellow: '#fff2a1',
+    brightBlue: '#98dcf0',
+    brightMagenta: '#e2bffa',
+    brightCyan: '#98dcf0',
+    brightWhite: '#ffffff',
+  };
 
   function activeTerm() {
     return termSessionsList.find(t => t.id === activeTermId) || termSessionsList[0] || null;
   }
 
-  function promptStringFor(term) {
-    if (!term) return 'PS> ';
-    const cwd = term.cwd || S.projectDir || 'C:\\';
-    return term.shell === 'cmd' ? `${cwd}>` : `PS ${cwd}> `;
-  }
-
-  function classifyShellToken(tok, isFirstWord) {
-    if (!tok) return '';
-    if (isFirstWord) return 'term-cmd-exec';
-    if (/^["'].*["']?$/.test(tok)) return 'term-cmd-str';
-    if (/^-[A-Za-z0-9_-]+$/.test(tok)) return 'term-cmd-flag';
-    return 'term-cmd-arg';
-  }
-
-  function renderHighlightedCommand(text = '', cursorIdx = null) {
-    const str = String(text || '');
-    const tokens = [];
-    const re = /(\s+|[;|]+|"[^"]*"?|'[^']*'?|[^\s;|"']+)/g;
-    let m, expectCmd = true;
-    while ((m = re.exec(str))) {
-      const part = m[0];
-      const start = m.index, end = start + part.length;
-      if (/^\s+$/.test(part)) {
-        tokens.push({ start, end, cls: '' });
-      } else if (/^[;|]+$/.test(part)) {
-        tokens.push({ start, end, cls: 'term-cmd-arg' });
-        expectCmd = true;
-      } else {
-        tokens.push({ start, end, cls: classifyShellToken(part, expectCmd) });
-        expectCmd = false;
-      }
-    }
-    if (cursorIdx === null) {
-      return tokens.map(t => {
-        const chunk = escHtml(str.slice(t.start, t.end));
-        return t.cls ? `<span class="${t.cls}">${chunk}</span>` : chunk;
-      }).join('');
-    }
-    let out = '';
-    const clampedCursor = Math.max(0, Math.min(str.length, cursorIdx));
-    for (let i = 0; i < str.length; i++) {
-      const ch = escHtml(str[i]);
-      const tok = tokens.find(t => i >= t.start && i < t.end);
-      const cls = tok?.cls || '';
-      if (i === clampedCursor) {
-        out += `<span class="term-cursor">${ch}</span>`;
-      } else {
-        out += cls ? `<span class="${cls}">${ch}</span>` : ch;
-      }
-    }
-    if (clampedCursor >= str.length) {
-      out += '<span class="term-cursor">&nbsp;</span>';
-    }
-    return out;
-  }
-
-  function scrollTermToBottom() {
+  function computeTermColsRows() {
     const screen = $('#termScreen');
-    if (screen) screen.scrollTop = screen.scrollHeight;
+    const rect = screen?.getBoundingClientRect();
+    const w = Math.max(240, (rect?.width || 800) - 24);
+    const h = Math.max(80, (rect?.height || 220) - 12);
+    const cols = Math.max(40, Math.min(400, Math.floor(w / 7.22)));
+    const rows = Math.max(5, Math.min(160, Math.floor(h / 16.8)));
+    return { cols, rows };
+  }
+
+  function fitActiveXterm() {
+    const term = activeTerm();
+    if (!term || !term.xterm) return;
+    const screen = $('#termScreen');
+    if (!screen || screen.offsetParent === null) return;
+    const { cols, rows } = computeTermColsRows();
+    if (term.xterm.cols !== cols || term.xterm.rows !== rows) {
+      try { term.xterm.resize(cols, rows); } catch {}
+      fetch('/api/terminal/resize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: term.id, cols, rows }),
+      }).catch(() => {});
+    }
   }
 
   function renderTerminalTabs() {
@@ -2194,70 +2183,11 @@ export function createIde(api) {
       tab.append(ico, title, closeBtn);
       host.append(tab);
     }
-  }
-
-  function renderActiveTerminal() {
-    const term = activeTerm();
-    renderTerminalTabs();
-    const out = $('#termOut');
-    const activeLine = $('#termActiveLine');
-    const promptEl = $('#termPromptLabel');
-    const cmdEl = $('#termInlineCmd');
-    if (!out || !activeLine || !promptEl || !cmdEl) return;
-    if (!term) {
-      out.replaceChildren();
-      promptEl.textContent = '';
-      cmdEl.innerHTML = '';
-      return;
-    }
+    const cur = activeTerm();
     if ($('#termCwdBadge')) {
-      $('#termCwdBadge').textContent = term.cwd || '';
-      $('#termCwdBadge').title = term.cwd || '';
+      $('#termCwdBadge').textContent = cur?.cwd || '';
+      $('#termCwdBadge').title = cur?.cwd || '';
     }
-    $('#termKillBtn')?.classList.toggle('hidden', !term.busy);
-    out.replaceChildren();
-    for (const item of term.entries) {
-      const div = document.createElement('div');
-      div.className = `term-entry${item.cls ? ' ' + item.cls : ''}`;
-      if (item.html) div.innerHTML = item.html;
-      else div.textContent = item.text;
-      out.append(div);
-    }
-    if (term.busy) {
-      promptEl.textContent = '';
-      cmdEl.innerHTML = '<span class="term-cursor">&nbsp;</span>';
-    } else {
-      promptEl.textContent = promptStringFor(term);
-      cmdEl.innerHTML = renderHighlightedCommand(term.input, term.cursor);
-    }
-    scrollTermToBottom();
-  }
-
-  function renderInlineInputOnly() {
-    const term = activeTerm();
-    const promptEl = $('#termPromptLabel');
-    const cmdEl = $('#termInlineCmd');
-    if (!term || !promptEl || !cmdEl) return;
-    if (term.busy) {
-      promptEl.textContent = '';
-      cmdEl.innerHTML = '<span class="term-cursor">&nbsp;</span>';
-    } else {
-      promptEl.textContent = promptStringFor(term);
-      cmdEl.innerHTML = renderHighlightedCommand(term.input, term.cursor);
-    }
-    scrollTermToBottom();
-  }
-
-  function focusTerminalInput() {
-    const inp = $('#termHiddenInput');
-    if (!inp) return;
-    const term = activeTerm();
-    if (term) {
-      inp.value = term.input;
-      inp.setSelectionRange(term.cursor, term.cursor);
-    }
-    inp.focus({ preventScroll: true });
-    $('#termScreen')?.classList.add('focused');
   }
 
   async function ensureShellInfo() {
@@ -2278,38 +2208,113 @@ export function createIde(api) {
     } catch {}
   }
 
+  function sendTermWrite(term, dataStr) {
+    if (!term || !dataStr) return;
+    term.writeBuf += dataStr;
+    if (term.writePending) return;
+    term.writePending = true;
+    queueMicrotask(async () => {
+      while (term.writeBuf.length > 0) {
+        const chunk = term.writeBuf;
+        term.writeBuf = '';
+        try {
+          await fetch('/api/terminal/write', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: term.id, data: chunk }),
+          });
+        } catch {}
+      }
+      term.writePending = false;
+    });
+  }
+
   async function createTerminalTab(requestedShell = '') {
     await ensureShellInfo();
     const shell = requestedShell || $('#termShellSelect')?.value || defaultShellId || 'pwsh';
     const initialCwd = S.projectDir || '';
+    const { cols, rows } = computeTermColsRows();
     try {
       const res = await fetch('/api/terminal/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shell, cwd: initialCwd }),
+        body: JSON.stringify({ shell, cwd: initialCwd, cols, rows }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Could not start terminal session.');
+
+      const hostDiv = document.createElement('div');
+      hostDiv.className = 'term-xterm-host';
+      $('#termScreen')?.append(hostDiv);
+
+      const xterm = new Terminal({
+        cols,
+        rows,
+        cursorBlink: true,
+        cursorStyle: 'block',
+        fontFamily: 'Consolas, "Cascadia Mono", "JetBrains Mono", monospace',
+        fontSize: 12,
+        lineHeight: 1.2,
+        scrollback: 5000,
+        convertEol: false,
+        allowProposedApi: true,
+        theme: XTERM_THEME,
+      });
+
       const term = {
         id: data.id,
         shell: data.shell,
         label: data.label,
         banner: data.banner,
         cwd: data.cwd,
-        entries: [{ text: data.banner, cls: 'term-banner' }],
-        input: '',
-        cursor: 0,
-        busy: false,
-        history: [],
-        histIdx: 0,
-        tabMatches: [],
-        tabIdx: 0,
-        lastTabBase: null,
+        hostDiv,
+        xterm,
+        es: null,
+        writeBuf: '',
+        writePending: false,
       };
+
+      xterm.open(hostDiv);
+      xterm.attachCustomKeyEventHandler(ev => {
+        if (ev.type !== 'keydown') return true;
+        const mod = ev.ctrlKey || ev.metaKey;
+        if (mod && !ev.altKey && !ev.shiftKey && ev.key === '`') {
+          ev.preventDefault();
+          toggleTerminalPane();
+          return false;
+        }
+        if (mod && !ev.altKey && ev.key.toLowerCase() === 'c' && xterm.hasSelection()) {
+          navigator.clipboard?.writeText(xterm.getSelection()).catch(() => {});
+          xterm.clearSelection();
+          return false;
+        }
+        if (mod && !ev.altKey && ev.key.toLowerCase() === 'v') {
+          ev.preventDefault();
+          navigator.clipboard?.readText().then(txt => { if (txt) sendTermWrite(term, txt); }).catch(() => {});
+          return false;
+        }
+        return true;
+      });
+
+      xterm.onData(inputData => {
+        sendTermWrite(term, inputData);
+      });
+
+      const es = new EventSource(`/api/terminal/stream?id=${encodeURIComponent(term.id)}`);
+      term.es = es;
+      es.onmessage = event => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'data' && msg.data) {
+            xterm.write(msg.data);
+          } else if (msg.type === 'exit') {
+            xterm.write(`\r\n\x1b[90m[Process exited with code ${msg.code ?? 0}]\x1b[0m\r\n`);
+          }
+        } catch {}
+      };
+
       termSessionsList.push(term);
-      activeTermId = term.id;
-      renderActiveTerminal();
-      focusTerminalInput();
+      activateTerminalTab(term.id);
       return term;
     } catch (e) {
       api.toast(e.message, 'err');
@@ -2318,16 +2323,26 @@ export function createIde(api) {
   }
 
   function activateTerminalTab(id) {
-    if (!termSessionsList.some(t => t.id === id)) return;
+    const target = termSessionsList.find(t => t.id === id);
+    if (!target) return;
     activeTermId = id;
-    renderActiveTerminal();
-    focusTerminalInput();
+    for (const t of termSessionsList) {
+      t.hostDiv.classList.toggle('hidden', t.id !== id);
+    }
+    renderTerminalTabs();
+    requestAnimationFrame(() => {
+      fitActiveXterm();
+      target.xterm?.focus();
+    });
   }
 
   async function closeTerminalTab(id) {
     const idx = termSessionsList.findIndex(t => t.id === id);
     if (idx < 0) return;
-    termSessionsList.splice(idx, 1);
+    const [removed] = termSessionsList.splice(idx, 1);
+    try { removed.es?.close(); } catch {}
+    try { removed.xterm?.dispose(); } catch {}
+    try { removed.hostDiv?.remove(); } catch {}
     fetch('/api/terminal/close', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2338,141 +2353,32 @@ export function createIde(api) {
       return;
     }
     if (activeTermId === id) {
-      activeTermId = termSessionsList[Math.max(0, idx - 1)].id;
+      activateTerminalTab(termSessionsList[Math.max(0, idx - 1)].id);
+    } else {
+      renderTerminalTabs();
     }
-    renderActiveTerminal();
-    focusTerminalInput();
   }
 
   function updateTermCwd(nextCwd) {
     if (!nextCwd) return;
     const term = activeTerm();
-    if (!term || term.busy) return;
-    if (term.cwd === nextCwd) return;
-    term.cwd = nextCwd;
-    renderActiveTerminal();
-  }
-
-  async function submitTerminalLine() {
-    const term = activeTerm();
-    if (!term || term.busy) return;
-    const rawCmd = term.input;
-    const trimmed = rawCmd.trim();
-    const promptStr = promptStringFor(term);
-    term.entries.push({
-      html: `<span class="term-prompt">${escHtml(promptStr)}</span>${renderHighlightedCommand(rawCmd, null)}`,
-    });
-    term.input = '';
-    term.cursor = 0;
-    term.lastTabBase = null;
-    if ($('#termHiddenInput')) $('#termHiddenInput').value = '';
-
-    if (!trimmed) {
-      renderActiveTerminal();
-      return;
-    }
-    if (term.history[term.history.length - 1] !== rawCmd) {
-      term.history.push(rawCmd);
-    }
-    term.histIdx = term.history.length;
-
-    if (/^(cls|clear)$/i.test(trimmed)) {
-      term.entries = [];
-      renderActiveTerminal();
-      return;
-    }
-    if (/^exit$/i.test(trimmed)) {
-      await closeTerminalTab(term.id);
-      return;
-    }
-
-    term.busy = true;
-    renderActiveTerminal();
-    try {
-      const res = await fetch('/api/terminal/exec', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: term.id, shell: term.shell, command: rawCmd, cwd: term.cwd }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Terminal command failed.');
-      if (data.cwd) term.cwd = data.cwd;
-      if (data.stdout) term.entries.push({ text: data.stdout });
-      if (data.stderr) term.entries.push({ text: data.stderr, cls: 'term-line-err' });
-    } catch (e) {
-      term.entries.push({ text: e.message, cls: 'term-line-err' });
-    } finally {
-      term.busy = false;
-      renderActiveTerminal();
-      focusTerminalInput();
-    }
-  }
-
-  async function handleTerminalTabCompletion() {
-    const term = activeTerm();
-    if (!term || term.busy) return;
-    if (term.lastTabBase === term.input && term.tabMatches.length > 1) {
-      term.tabIdx = (term.tabIdx + 1) % term.tabMatches.length;
-      term.input = term.tabMatches[term.tabIdx];
-      term.cursor = term.input.length;
-      term.lastTabBase = term.input;
-      if ($('#termHiddenInput')) {
-        $('#termHiddenInput').value = term.input;
-        $('#termHiddenInput').setSelectionRange(term.cursor, term.cursor);
-      }
-      renderInlineInputOnly();
-      return;
-    }
-    try {
-      const res = await fetch('/api/terminal/complete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: term.id, line: term.input.slice(0, term.cursor), cwd: term.cwd }),
-      });
-      const data = await res.json();
-      if (res.ok && Array.isArray(data.matches) && data.matches.length) {
-        const tail = term.input.slice(term.cursor);
-        term.tabMatches = data.matches.map(m => m + tail);
-        term.tabIdx = 0;
-        term.input = term.tabMatches[0];
-        term.cursor = data.matches[0].length;
-        term.lastTabBase = term.input;
-        if ($('#termHiddenInput')) {
-          $('#termHiddenInput').value = term.input;
-          $('#termHiddenInput').setSelectionRange(term.cursor, term.cursor);
-        }
-        renderInlineInputOnly();
-      }
-    } catch {}
-  }
-
-  async function interruptTerminalSession() {
-    const term = activeTerm();
     if (!term) return;
-    if (term.busy) {
-      fetch('/api/terminal/kill', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: term.id }),
-      }).catch(() => {});
-    } else {
-      const promptStr = promptStringFor(term);
-      term.entries.push({
-        html: `<span class="term-prompt">${escHtml(promptStr)}</span>${renderHighlightedCommand(term.input, null)}<span class="term-line-err">^C</span>`,
-      });
-      term.input = '';
-      term.cursor = 0;
-      if ($('#termHiddenInput')) $('#termHiddenInput').value = '';
-      renderActiveTerminal();
+    term.cwd = nextCwd;
+    if ($('#termCwdBadge')) {
+      $('#termCwdBadge').textContent = nextCwd;
+      $('#termCwdBadge').title = nextCwd;
     }
   }
 
   async function ensureTerminalInitialized() {
+    if (!termResizeObs && typeof ResizeObserver !== 'undefined' && $('#termScreen')) {
+      termResizeObs = new ResizeObserver(() => fitActiveXterm());
+      termResizeObs.observe($('#termScreen'));
+    }
     if (!termSessionsList.length) {
       await createTerminalTab();
     } else {
-      renderActiveTerminal();
-      focusTerminalInput();
+      activateTerminalTab(activeTermId || termSessionsList[0].id);
     }
   }
 
@@ -2679,120 +2585,44 @@ export function createIde(api) {
         done({ cancelled: true });
       }
     });
-    // Multi-Tab Inline Integrated Terminal wiring
+    // Multi-Tab xterm.js + ConPTY Integrated Terminal wiring
     ensureShellInfo();
     $('#termNewTabBtn')?.addEventListener('click', () => createTerminalTab());
-    $('#termScreen')?.addEventListener('mousedown', () => {
-      setTimeout(() => {
-        const sel = window.getSelection();
-        if (!sel || sel.isCollapsed) focusTerminalInput();
-      }, 0);
-    });
-    $('#termHiddenInput')?.addEventListener('focus', () => $('#termScreen')?.classList.add('focused'));
-    $('#termHiddenInput')?.addEventListener('blur', () => $('#termScreen')?.classList.remove('focused'));
-    $('#termHiddenInput')?.addEventListener('input', e => {
-      const term = activeTerm();
-      if (!term || term.busy) { e.target.value = ''; return; }
-      const clean = e.target.value.replace(/[\r\n]+/g, '');
-      if (e.target.value !== clean) e.target.value = clean;
-      term.input = clean;
-      term.cursor = e.target.selectionStart ?? clean.length;
-      term.lastTabBase = null;
-      renderInlineInputOnly();
-    });
-    $('#termHiddenInput')?.addEventListener('keydown', e => {
-      const term = activeTerm();
-      if (!term) return;
-      if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'c') {
-        const sel = window.getSelection();
-        if (sel && !sel.isCollapsed) return;
-        e.preventDefault();
-        interruptTerminalSession();
-        return;
-      }
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'l') {
-        e.preventDefault();
-        term.entries = [];
-        renderActiveTerminal();
-        return;
-      }
-      if (term.busy) {
-        e.preventDefault();
-        return;
-      }
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        submitTerminalLine();
-        return;
-      }
-      if (e.key === 'Tab') {
-        e.preventDefault();
-        handleTerminalTabCompletion();
-        return;
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        term.input = '';
-        term.cursor = 0;
-        e.target.value = '';
-        renderInlineInputOnly();
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        if (term.history.length && term.histIdx > 0) {
-          term.histIdx--;
-          term.input = term.history[term.histIdx] || '';
-          term.cursor = term.input.length;
-          e.target.value = term.input;
-          e.target.setSelectionRange(term.cursor, term.cursor);
-          renderInlineInputOnly();
-        }
-        return;
-      }
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        if (term.histIdx < term.history.length - 1) {
-          term.histIdx++;
-          term.input = term.history[term.histIdx] || '';
-        } else {
-          term.histIdx = term.history.length;
-          term.input = '';
-        }
-        term.cursor = term.input.length;
-        e.target.value = term.input;
-        e.target.setSelectionRange(term.cursor, term.cursor);
-        renderInlineInputOnly();
-        return;
-      }
-      if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
-        requestAnimationFrame(() => {
-          term.cursor = e.target.selectionStart ?? term.input.length;
-          renderInlineInputOnly();
-        });
-      }
-    });
     $('#termClearBtn')?.addEventListener('click', () => {
       const term = activeTerm();
-      if (term) { term.entries = []; renderActiveTerminal(); focusTerminalInput(); }
+      if (!term) return;
+      term.xterm?.clear();
+      sendTermWrite(term, term.shell === 'cmd' ? 'cls\r' : 'cls\r');
+      term.xterm?.focus();
     });
     $('#termCopyBtn')?.addEventListener('click', async () => {
-      const text = $('#termScreen')?.innerText || '';
-      try { await navigator.clipboard.writeText(text); api.toast('Copied terminal output.'); } catch {}
-      focusTerminalInput();
+      const term = activeTerm();
+      if (!term?.xterm) return;
+      const sel = term.xterm.getSelection();
+      if (sel) {
+        try { await navigator.clipboard.writeText(sel); api.toast('Copied terminal selection.'); } catch {}
+      } else {
+        term.xterm.selectAll();
+        const all = term.xterm.getSelection();
+        term.xterm.clearSelection();
+        try { await navigator.clipboard.writeText(all); api.toast('Copied terminal buffer.'); } catch {}
+      }
+      term.xterm.focus();
     });
     $('#termKillBtn')?.addEventListener('click', () => {
-      interruptTerminalSession();
-      focusTerminalInput();
+      const term = activeTerm();
+      if (!term) return;
+      sendTermWrite(term, '\x03');
+      term.xterm?.focus();
     });
     $('#termCdProject')?.addEventListener('click', () => {
       const term = activeTerm();
       if (!term) return;
       if (S.projectDir) {
-        term.input = term.shell === 'cmd' ? `cd /d "${S.projectDir}"` : `Set-Location -LiteralPath "${S.projectDir}"`;
-        term.cursor = term.input.length;
-        submitTerminalLine();
+        updateTermCwd(S.projectDir);
+        const cmd = term.shell === 'cmd' ? `cd /d "${S.projectDir}"\r` : `Set-Location -LiteralPath "${S.projectDir}"\r`;
+        sendTermWrite(term, cmd);
+        term.xterm?.focus();
       } else {
         api.toast('Save or open a project folder on disk first.');
       }
