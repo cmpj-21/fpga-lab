@@ -24,6 +24,7 @@
 #include <vector>
 #include <atomic>
 #include <cstdio>
+#include <cwchar>
 #include <WebView2.h>
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
@@ -58,6 +59,11 @@ struct AppState {
     bool devtools = false;
     bool ready = false;
     bool navigated = false;
+    bool allowClose = false;
+    bool isFullscreen = false;
+    WINDOWPLACEMENT savedPlacement{ sizeof(WINDOWPLACEMENT) };
+    LONG_PTR savedStyle = 0;
+    LONG_PTR savedExStyle = 0;
 };
 
 static AppState g_app;
@@ -166,6 +172,58 @@ static void ResizeWebView() {
     g_app.controller->put_Bounds(rc);
 }
 
+static void BringToForeground(HWND hwnd) {
+    if (!hwnd || IsIconic(hwnd)) return;
+    HWND fgWnd = GetForegroundWindow();
+    DWORD fgThread = fgWnd ? GetWindowThreadProcessId(fgWnd, nullptr) : 0;
+    DWORD curThread = GetCurrentThreadId();
+    if (fgThread && fgThread != curThread) {
+        AttachThreadInput(fgThread, curThread, TRUE);
+    }
+    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    SetForegroundWindow(hwnd);
+    BringWindowToTop(hwnd);
+    SetActiveWindow(hwnd);
+    SetFocus(hwnd);
+    if (fgThread && fgThread != curThread) {
+        AttachThreadInput(fgThread, curThread, FALSE);
+    }
+    if (g_app.controller) {
+        g_app.controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+    }
+}
+
+static void ToggleFullscreen(HWND hwnd) {
+    if (!hwnd) return;
+    if (!g_app.isFullscreen) {
+        g_app.savedPlacement.length = sizeof(WINDOWPLACEMENT);
+        GetWindowPlacement(hwnd, &g_app.savedPlacement);
+        g_app.savedStyle = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        g_app.savedExStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        MONITORINFO mi{ sizeof(mi) };
+        if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+            g_app.isFullscreen = true;
+            SetWindowLongPtrW(hwnd, GWL_STYLE, (g_app.savedStyle & ~WS_OVERLAPPEDWINDOW) | WS_POPUP | WS_VISIBLE);
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, g_app.savedExStyle & ~(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE));
+            SetWindowPos(hwnd, HWND_TOP,
+                         mi.rcMonitor.left, mi.rcMonitor.top,
+                         mi.rcMonitor.right - mi.rcMonitor.left,
+                         mi.rcMonitor.bottom - mi.rcMonitor.top,
+                         SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+            ResizeWebView();
+        }
+    } else {
+        g_app.isFullscreen = false;
+        SetWindowLongPtrW(hwnd, GWL_STYLE, g_app.savedStyle | WS_VISIBLE);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, g_app.savedExStyle);
+        SetWindowPlacement(hwnd, &g_app.savedPlacement);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+        ResizeWebView();
+    }
+}
+
 static void NavigateIfReady() {
     if (!g_app.navigated && g_app.webview && !g_app.baseUrl.empty()) {
         g_app.navigated = true;
@@ -206,18 +264,87 @@ static void SpawnNewWindowWithQuery(const std::wstring& query) {
     if (g_app.devtools) {
         cmd += L" --devtools";
     }
+    AllowSetForegroundWindow(ASFW_ANY);
     STARTUPINFOW si{};
     si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_SHOWMAXIMIZED;
     PROCESS_INFORMATION pi{};
     std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
     cmdBuf.push_back(L'\0');
     if (CreateProcessW(g_app.exePath.c_str(), cmdBuf.data(), nullptr, nullptr, FALSE, 0, nullptr, g_app.exeDir.c_str(), &si, &pi)) {
+        AllowSetForegroundWindow(pi.dwProcessId);
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
     }
 }
 
 // ---------- Minimal COM Handlers (zero WRL dependency) ----------
+
+class CloseScriptCompletedHandler final : public ICoreWebView2ExecuteScriptCompletedHandler {
+    std::atomic<ULONG> ref_{1};
+public:
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_ICoreWebView2ExecuteScriptCompletedHandler) {
+            *ppv = static_cast<ICoreWebView2ExecuteScriptCompletedHandler*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++ref_; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        ULONG r = --ref_;
+        if (r == 0) delete this;
+        return r;
+    }
+    HRESULT STDMETHODCALLTYPE Invoke(HRESULT errorCode, LPCWSTR resultObjectAsJson) override {
+        if (FAILED(errorCode) || !resultObjectAsJson || std::wcscmp(resultObjectAsJson, L"1") != 0) {
+            g_app.allowClose = true;
+            if (g_app.hwnd) DestroyWindow(g_app.hwnd);
+        }
+        return S_OK;
+    }
+};
+
+class WebMessageReceivedHandler final : public ICoreWebView2WebMessageReceivedEventHandler {
+    std::atomic<ULONG> ref_{1};
+public:
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_ICoreWebView2WebMessageReceivedEventHandler) {
+            *ppv = static_cast<ICoreWebView2WebMessageReceivedEventHandler*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++ref_; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        ULONG r = --ref_;
+        if (r == 0) delete this;
+        return r;
+    }
+    HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args) override {
+        LPWSTR msgRaw = nullptr;
+        if (SUCCEEDED(args->TryGetWebMessageAsString(&msgRaw)) && msgRaw) {
+            std::wstring msg(msgRaw);
+            CoTaskMemFree(msgRaw);
+            if (msg == L"app:close-now") {
+                g_app.allowClose = true;
+                if (g_app.hwnd) PostMessageW(g_app.hwnd, WM_CLOSE, 0, 0);
+            } else if (msg == L"app:toggle-fullscreen") {
+                ToggleFullscreen(g_app.hwnd);
+            } else if (msg == L"app:exit-fullscreen") {
+                if (g_app.isFullscreen) ToggleFullscreen(g_app.hwnd);
+            }
+        }
+        return S_OK;
+    }
+};
 
 class NewWindowHandler final : public ICoreWebView2NewWindowRequestedEventHandler {
     std::atomic<ULONG> ref_{1};
@@ -308,10 +435,16 @@ public:
             auto* nwHandler = new NewWindowHandler();
             g_app.webview->add_NewWindowRequested(nwHandler, &tok);
             nwHandler->Release();
+
+            EventRegistrationToken msgTok{};
+            auto* msgHandler = new WebMessageReceivedHandler();
+            g_app.webview->add_WebMessageReceived(msgHandler, &msgTok);
+            msgHandler->Release();
         }
 
         ResizeWebView();
         g_app.controller->put_IsVisible(TRUE);
+        BringToForeground(g_app.hwnd);
 
         NavigateIfReady();
         return S_OK;
@@ -565,6 +698,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             DestroyWindow(hwnd);
             return 0;
         }
+        case WM_CLOSE: {
+            if (g_app.allowClose || !g_app.ready || !g_app.navigated || !g_app.webview) {
+                DestroyWindow(hwnd);
+                return 0;
+            }
+            auto* handler = new CloseScriptCompletedHandler();
+            HRESULT hr = g_app.webview->ExecuteScript(
+                L"window.__traceRequestClose ? (window.__traceRequestClose(), 1) : 0",
+                handler);
+            handler->Release();
+            if (FAILED(hr)) {
+                g_app.allowClose = true;
+                DestroyWindow(hwnd);
+            }
+            return 0;
+        }
         case WM_DESTROY:
             if (g_app.controller) {
                 g_app.controller->Close();
@@ -665,8 +814,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     DwmSetWindowAttribute(g_app.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &useDark, sizeof(useDark));
     DwmSetWindowAttribute(g_app.hwnd, 19, &useDark, sizeof(useDark));
 
-    ShowWindow(g_app.hwnd, nCmdShow);
+    int initialShow = (nCmdShow == SW_SHOWMINIMIZED || nCmdShow == SW_MINIMIZE || nCmdShow == SW_SHOWMINNOACTIVE)
+        ? nCmdShow
+        : SW_SHOWMAXIMIZED;
+    ShowWindow(g_app.hwnd, initialShow);
     UpdateWindow(g_app.hwnd);
+    BringToForeground(g_app.hwnd);
 
     if (!StartBackendServer()) {
         DestroyWindow(g_app.hwnd);

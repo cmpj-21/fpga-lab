@@ -1757,6 +1757,7 @@ function wire() {
   };
   window.addEventListener('keydown', e => {
     const mod = e.ctrlKey || e.metaKey;
+    if (!mod && !e.altKey && !e.shiftKey && e.key === 'F11') { e.preventDefault(); ide?.toggleAppFullscreen?.(); return; }
     const modalOpen = !!document.querySelector('dialog:modal');
     const homeOpen = !!($('#homeView') && !$('#homeView').classList.contains('hidden'));
     if (e.key === 'Escape' && !modalOpen && homeOpen) { if (ide?.hasActiveSession) ide.resumeWorkbench(); return; }
@@ -2088,7 +2089,19 @@ async function hydrateDiskState() {
     if (st.lastProject && Array.isArray(st.lastProject.sources) && st.lastProject.sources.length) {
       try { localStorage.setItem('trace.project.v1', JSON.stringify(st.lastProject)); } catch {}
     }
+    if (typeof st.skipHomeExitConfirm === 'boolean') {
+      try {
+        if (st.skipHomeExitConfirm) localStorage.setItem('trace.skipHomeExitConfirm', '1');
+        else localStorage.removeItem('trace.skipHomeExitConfirm');
+      } catch {}
+    }
   } catch {}
+}
+async function prepareExit() {
+  flushState(true);
+  flushActions(true);
+  flushEvents(true);
+  await new Promise(r => setTimeout(r, 45));
 }
 async function boot() {
   await hydrateDiskState();
@@ -2098,7 +2111,7 @@ async function boot() {
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
   try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { trackUiAction('3D', $('#view3d'), `${pressed ? 'press' : 'release'} ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.65); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames'), $('#waveScrollTrack'), $('#waveScrollThumb')); applyTheme(document.documentElement.dataset.theme); wire();
-  ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, restartSimulation, restoreSavedCompileState, renderSources, openTools, openBottomTab, syncNavigation, projectData, saveProject, persistAppState, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations, reloadQsfText });
+  ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, restartSimulation, restoreSavedCompileState, renderSources, openTools, openBottomTab, syncNavigation, projectData, saveProject, persistAppState, prepareExit, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations, reloadQsfText });
   wireActionLogger();
   fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);

@@ -340,6 +340,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR lpCmdLine, int nCmdSho
     std::wstring targetExe = cacheDir + L"\\Trace.exe";
     std::wstring readyFlag = cacheDir + L"\\.ready";
 
+    HWND splash = nullptr;
     if (!PathExists(readyFlag) || !PathExists(targetExe)) {
         HANDLE unpackMutex = CreateMutexW(nullptr, FALSE, (L"Local\\TracePortableUnpack_" + tag).c_str());
         if (unpackMutex) {
@@ -349,7 +350,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR lpCmdLine, int nCmdSho
         bool unpackOk = true;
         if (needExtract) {
             CreateDirsRecursive(cacheRoot);
-            HWND splash = ShowSplash(hInstance);
+            splash = ShowSplash(hInstance);
             std::wstring stageDir = cacheDir + L".tmp-" + std::to_wstring(GetCurrentProcessId());
             DeleteDirRecursive(stageDir);
             bool ok = ExtractEmbeddedZip(selfPath, tr, stageDir, splash);
@@ -365,7 +366,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR lpCmdLine, int nCmdSho
                 DeleteDirRecursive(stageDir);
                 unpackOk = false;
             }
-            if (splash) DestroyWindow(splash);
             if (unpackOk) {
                 PruneOldCacheDirs(cacheRoot, tag);
             }
@@ -375,6 +375,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR lpCmdLine, int nCmdSho
             CloseHandle(unpackMutex);
         }
         if (!unpackOk || !PathExists(targetExe)) {
+            if (splash) DestroyWindow(splash);
             MessageBoxW(nullptr, L"Failed to unpack Trace FPGA Workbench portable bundle.", L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
             return 1;
         }
@@ -397,14 +398,24 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR lpCmdLine, int nCmdSho
     std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
     cmdBuf.push_back(L'\0');
 
+    AllowSetForegroundWindow(ASFW_ANY);
+
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = (WORD)nCmdShow;
+    si.wShowWindow = (nCmdShow == SW_SHOWMINIMIZED || nCmdShow == SW_MINIMIZE || nCmdShow == SW_SHOWMINNOACTIVE)
+        ? (WORD)nCmdShow
+        : (WORD)SW_SHOWMAXIMIZED;
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(targetExe.c_str(), cmdBuf.data(), nullptr, nullptr, FALSE, 0, nullptr, cacheDir.c_str(), &si, &pi)) {
+        if (splash) DestroyWindow(splash);
         MessageBoxW(nullptr, L"Failed to launch Trace.exe from portable cache.", L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
         return 1;
+    }
+    AllowSetForegroundWindow(pi.dwProcessId);
+    if (splash) {
+        WaitForInputIdle(pi.hProcess, 2000);
+        DestroyWindow(splash);
     }
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);

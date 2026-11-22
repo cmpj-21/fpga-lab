@@ -1529,6 +1529,110 @@ export function createIde(api) {
     api.toast('Discarded recent changes. All simulations stopped.');
     api.logEvent?.('info', `Returned to Home: discarded changes to ${discardedTitle} and stopped all simulations`);
   }
+  function isSkipHomeExitConfirm() {
+    try { return localStorage.getItem('trace.skipHomeExitConfirm') === '1'; } catch { return false; }
+  }
+  function setSkipHomeExitConfirm(skip) {
+    try {
+      if (skip) localStorage.setItem('trace.skipHomeExitConfirm', '1');
+      else localStorage.removeItem('trace.skipHomeExitConfirm');
+    } catch {}
+    api.persistAppState?.({ skipHomeExitConfirm: !!skip });
+  }
+  function toggleAppFullscreen() {
+    if (window.chrome?.webview?.postMessage) {
+      window.chrome.webview.postMessage('app:toggle-fullscreen');
+    } else if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.().catch(() => {});
+    } else {
+      document.exitFullscreen?.().catch(() => {});
+    }
+  }
+  async function executeNativeExit() {
+    await api.stopAllSimulations?.();
+    await api.prepareExit?.();
+    if (window.chrome?.webview?.postMessage) {
+      window.chrome.webview.postMessage('app:close-now');
+    } else {
+      window.close();
+    }
+  }
+  function closeOtherModals(keepId) {
+    $$('dialog[open]').forEach(d => {
+      if (d.id !== keepId && d.id !== 'sourceDialog') {
+        try { d.close(); } catch {}
+      }
+    });
+  }
+  function requestAppClose() {
+    const view = $('#homeView');
+    const inHome = !!(view && !view.classList.contains('hidden'));
+    if (inHome) {
+      if (isSkipHomeExitConfirm()) {
+        executeNativeExit();
+        return;
+      }
+      const dlg = $('#exitHomeDialog');
+      if (!dlg) {
+        executeNativeExit();
+        return;
+      }
+      closeOtherModals('exitHomeDialog');
+      if ($('#exitHomeDontAsk')) $('#exitHomeDontAsk').checked = false;
+      if (!dlg.open) dlg.showModal();
+      return;
+    }
+    const dlg = $('#exitWorkbenchDialog');
+    if (!dlg) {
+      executeNativeExit();
+      return;
+    }
+    closeOtherModals('exitWorkbenchDialog');
+    if ($('#exitWbProject')) $('#exitWbProject').textContent = currentProjectTitle();
+    if ($('#exitWbDetail')) $('#exitWbDetail').textContent = describeRecentChanges();
+    if ($('#exitWbSave')) $('#exitWbSave').textContent = S.projectDir ? 'Save & Exit' : 'Save Project As… & Exit';
+    if (!dlg.open) dlg.showModal();
+  }
+  async function confirmSaveAndExit() {
+    if (!validateLibraries()) return;
+    commitAll();
+    api.renderSources();
+    if (api.saveProjectToDisk) {
+      const ok = await api.saveProjectToDisk({ saveAs: !S.projectDir });
+      if (!ok) return;
+    } else {
+      api.saveProject?.();
+      recordRecentProject(projectTitle);
+      captureBaseline(projectTitle);
+    }
+    $('#exitWorkbenchDialog')?.close();
+    api.logEvent?.('info', `Exited workbench: saved changes to ${currentProjectTitle()} (${S.projectDir || 'local'})`);
+    await executeNativeExit();
+  }
+  async function confirmDiscardAndExit() {
+    const discardedTitle = currentProjectTitle();
+    for (const name of [...docs.keys()]) closeTab(name, true);
+    if (baselineProject) {
+      try { api.restoreProject(JSON.parse(JSON.stringify(baselineProject))); } catch {}
+    }
+    try {
+      if (baselineStorage === null) localStorage.removeItem('trace.project.v1');
+      else localStorage.setItem('trace.project.v1', baselineStorage);
+      api.persistAppState?.({ lastProject: baselineStorage ? JSON.parse(baselineStorage) : null });
+    } catch {}
+    saveRecents(baselineRecents);
+    $('#exitWorkbenchDialog')?.close();
+    api.logEvent?.('info', `Exited workbench: discarded changes to ${discardedTitle}`);
+    await executeNativeExit();
+  }
+  async function confirmHomeExit() {
+    const dontAsk = !!$('#exitHomeDontAsk')?.checked;
+    if (dontAsk) setSkipHomeExitConfirm(true);
+    $('#exitHomeDialog')?.close();
+    api.logEvent?.('info', `Exited application from Home menu (dontAskAgain=${dontAsk})`);
+    await executeNativeExit();
+  }
+  window.__traceRequestClose = requestAppClose;
   async function launchTemplateProject({ name, entity, standard = '08', templateKind = 'board_io', extraFiles = '' }) {
     const cleanEntity = entity.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
     if (!/^[a-z][a-z0-9_]*$/i.test(cleanEntity)) {
@@ -1652,8 +1756,10 @@ export function createIde(api) {
     toggleBoard: () => setBoardPaneOpen(!boardPaneOpen),
     focusBoard: () => setEditorPaneOpen(!$('#sourceDialog')?.open),
     photo: () => $('#btnPhotoMode').click(),
+    fullscreen: () => toggleAppFullscreen(),
     theme: () => $('#btnTheme').click(),
     resetLayout,
+    exit: () => requestAppClose(),
     flash: () => api.flashToBoard?.(),
     projectSettings: () => $('#projectSettingsDialog')?.showModal(),
     restart: () => $('#btnReset').click(),
@@ -1782,6 +1888,11 @@ export function createIde(api) {
     $('#homeConfirmSave')?.addEventListener('click', () => confirmSaveAndReturnHome());
     $('#homeConfirmDiscard')?.addEventListener('click', () => confirmDiscardAndReturnHome());
     $('#homeConfirmCancel')?.addEventListener('click', () => { pendingFocusWizard = false; $('#homeConfirmDialog')?.close(); });
+    $('#exitWbSave')?.addEventListener('click', () => confirmSaveAndExit());
+    $('#exitWbDiscard')?.addEventListener('click', () => confirmDiscardAndExit());
+    $('#exitWbCancel')?.addEventListener('click', () => $('#exitWorkbenchDialog')?.close());
+    $('#exitHomeYes')?.addEventListener('click', () => confirmHomeExit());
+    $('#exitHomeNo')?.addEventListener('click', () => $('#exitHomeDialog')?.close());
     $('#psNewWindow')?.addEventListener('click', () => {
       const sw = pendingSwitch;
       pendingSwitch = null;
@@ -1875,7 +1986,7 @@ export function createIde(api) {
     openFile, openDiskFile, closeTab, closeDiskTabs, activate, commitAll, hasUnsaved, validateLibraries, saveActiveFile, saveActiveFileAs, saveAndCompile, saveAndFlash, syncFromSources, openFirst, updateStatus,
     refreshProjectTree, renderProjectTree, showNewFile, showNewFolder, closeExplorerMenu,
     setProblems, reportBuildFailure, resetLayout, setEditorPaneOpen, setBoardPaneOpen,
-    showHome, requestReturnHome, requestProjectSwitch, openNewProjectWizard, resumeWorkbench, captureBaseline, currentProjectTitle, renderHome, recordRecentProject, populateHomeHdl,
+    showHome, requestReturnHome, requestProjectSwitch, requestAppClose, toggleAppFullscreen, setSkipHomeExitConfirm, openNewProjectWizard, resumeWorkbench, captureBaseline, currentProjectTitle, renderHome, recordRecentProject, populateHomeHdl,
     get hasActiveSession() { return hasActiveSession; },
     get active() { return active; },
     get tabs() { return [...tabs]; },
