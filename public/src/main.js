@@ -2637,6 +2637,76 @@ function wire() {
     button.onclick = () => toggleDip(Number(button.dataset.dip));
   });
   const keys = { '1': 's1', '2': 's2', '3': 's3', '4': 's4', r: 'reset_btn' };
+  let lastPointerX = -1, lastPointerY = -1, swallowedSpace = false;
+  document.addEventListener('pointermove', e => { lastPointerX = e.clientX; lastPointerY = e.clientY; }, { passive: true, capture: true });
+  document.addEventListener('pointerleave', () => { lastPointerX = -1; lastPointerY = -1; });
+  const getHoveredSimZone = () => {
+    const byPoint = (lastPointerX >= 0 && lastPointerY >= 0) ? document.elementFromPoint(lastPointerX, lastPointerY) : null;
+    const hovered = document.querySelector('#boardPane:hover, #center:hover, .input-bar:hover, #waves:hover, [data-docktab="waves"]:hover');
+    const node = byPoint || hovered;
+    if (!node) return null;
+    if ((node.closest('#waves') && !$('#waves')?.classList.contains('hidden')) || node.closest('[data-docktab="waves"].active')) return 'waves';
+    if (node.closest('#boardPane, #center, .input-bar') && !$('#ideMain')?.classList.contains('board-closed')) return 'board';
+    return null;
+  };
+  const simKeyNet = e => {
+    const lower = (e.key || '').toLowerCase();
+    if (keys[lower]) return keys[lower];
+    if (!e.shiftKey && /^Digit([1-4])$/.test(e.code || '')) return `s${e.code[5]}`;
+    return null;
+  };
+  const isTextTypingTarget = el => Boolean(
+    el?.closest?.('textarea, [contenteditable=""], [contenteditable="true"], .xterm, input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="button"]):not([type="submit"]):not([type="reset"])')
+  );
+  const canRouteHoveredSimKey = target => {
+    if (document.querySelector('dialog:modal')) return false;
+    if ($('#homeView') && !$('#homeView').classList.contains('hidden')) return false;
+    if (!$('#themePopover')?.classList.contains('hidden')) return false;
+    if (document.querySelector('.ts-pop, .menu-pop:not(.hidden), .ctx-menu:not(.hidden)')) return false;
+    if (target?.closest?.('.virtual-inputs input')) return false;
+    return Boolean(getHoveredSimZone());
+  };
+  window.addEventListener('keydown', e => {
+    if (!canRouteHoveredSimKey(e.target)) return;
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod) return;
+    if (e.altKey) {
+      const m = /^Digit([1-4])$/.exec(e.code || '');
+      const digit = ['1', '2', '3', '4'].includes(e.key) ? e.key : (m ? m[1] : null);
+      if (digit) {
+        e.preventDefault(); e.stopPropagation();
+        if (!e.repeat) toggleDip(Number(digit) - 1);
+      }
+      return;
+    }
+    const net = simKeyNet(e);
+    if (net) {
+      e.preventDefault(); e.stopPropagation();
+      if (!e.repeat) keyInput(net, true);
+      return;
+    }
+    if (e.code === 'Space') {
+      e.preventDefault(); e.stopPropagation();
+      swallowedSpace = true;
+      if (!e.repeat) $('#btnRun').click();
+      return;
+    }
+    if (e.key === '.') {
+      e.preventDefault(); e.stopPropagation();
+      $('#btnStep').click();
+    }
+  }, true);
+  window.addEventListener('keyup', e => {
+    const net = simKeyNet(e);
+    if (net && S.keys[net]) {
+      if (canRouteHoveredSimKey(e.target)) { e.preventDefault(); e.stopPropagation(); }
+      keyInput(net, false);
+    }
+    if (e.code === 'Space' && swallowedSpace) {
+      swallowedSpace = false;
+      e.preventDefault(); e.stopPropagation();
+    }
+  }, true);
   const setTool = mode => { board?.setToolMode(mode); $$('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === mode)); $('#lblHideOutline')?.classList.toggle('hidden', mode !== 'select'); syncViewportHint(); };
   const setNav = mode => { board?.setNavMode(mode); $$('[data-nav]').forEach(b => b.classList.toggle('active', b.dataset.nav === mode)); syncViewportHint(); };
   $('#chkHideOutline').onchange = e => board?.setHideOutline(e.target.checked);
@@ -2719,7 +2789,7 @@ function wire() {
     if (mod && !e.altKey && e.key.toLowerCase() === 'e') { e.preventDefault(); ide?.setEditorPaneOpen(!$('#sourceDialog')?.open); return; }
     if (!mod && e.altKey && e.key.toLowerCase() === 'b') { e.preventDefault(); ide?.setBoardPaneOpen(!ide.boardOpen); return; }
     if (mod && !e.altKey && e.key.toLowerCase() === 'o') { e.preventDefault(); $('#fileInput').click(); return; }
-    if (e.target.closest('input,select,textarea') || e.repeat) return;
+    if (isTextTypingTarget(e.target) || e.target.closest('.ts-pop') || e.repeat) return;
     if (e.altKey && ['1', '2', '3', '4'].includes(e.key)) { e.preventDefault(); toggleDip(Number(e.key) - 1); return; }
     if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); centerSelection(); return; }
     if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'v') { e.preventDefault(); setTool(board?.toolMode === 'select' ? 'interact' : 'select'); return; }

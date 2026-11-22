@@ -39,6 +39,19 @@ function summarizeBitMask(signal, block) {
   }
   return { real: false, s0: 0, s1: 0, su: 0, bits, first, last: block[block.length - 1]?.v, uniform };
 }
+function compactSignalSamples(signal, targetMax) {
+  const s = signal.samples;
+  if (s.length <= targetMax) return;
+  const keepRecent = Math.max(256, Math.floor(targetMax * 0.55));
+  const recentStart = Math.max(1, s.length - keepRecent);
+  const maxOlder = Math.max(64, Math.floor(targetMax * 0.35));
+  const step = Math.max(2, Math.ceil(recentStart / maxOlder));
+  const out = [s[0]];
+  for (let i = step; i < recentStart; i += step) out.push(s[i]);
+  for (let i = recentStart; i < s.length; i++) out.push(s[i]);
+  signal.samples = out;
+  signal._lod = null;
+}
 function ensureSignalLod(signal) {
   const samples = signal.samples;
   const n = samples.length;
@@ -217,9 +230,7 @@ export class WaveViewer {
   setMaxSamples(limit) {
     const next = Math.max(2000, Math.min(200000, Number(limit) || 40000));
     this.maxSamples = next;
-    for (const s of this.signals) {
-      if (s.samples.length > next) { s.samples.splice(0, s.samples.length - next); s._lod = null; }
-    }
+    for (const s of this.signals) compactSignalSamples(s, next);
     this.dataVersion++;
   }
   setTimeUnit(unit = 'auto') {
@@ -279,10 +290,7 @@ export class WaveViewer {
       }
       signal.last = value;
       dirty = true;
-      if (signal.samples.length > this.maxSamples) {
-        signal.samples.splice(0, 1000);
-        signal._lod = null;
-      }
+      if (signal.samples.length > this.maxSamples) compactSignalSamples(signal, this.maxSamples);
     }
     if (dirty) this.dataVersion++;
   }
