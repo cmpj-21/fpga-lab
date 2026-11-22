@@ -915,7 +915,7 @@ function updateBuzzerFromSamples(samples, burstStartCycles, burstStartTimeFs, st
     } else if (buzzerState.consecutiveEdges === 1 && sinceToggle <= 55) {
       sounding = true;
       freq = 2048;
-    } else if (buzzerState.lastLevel === '1' && buzzerState.idleLevel !== '1' && (buzzerState.consecutiveEdges === 0 || sinceToggle > holdMs)) {
+    } else if (buzzerState.lastLevel === '1' && buzzerState.idleLevel === '0' && (buzzerState.consecutiveEdges === 0 || sinceToggle > holdMs)) {
       sounding = true;
       freq = 2048;
     } else if (sinceToggle > 600) {
@@ -1125,13 +1125,11 @@ function updateNetInput(net) {
 }
 function keyInput(net, pressed) {
   S.keys[net] = pressed;
-  audio.click(pressed);
   updateNetInput(net);
   syncKeys();
 }
 function toggleDip(index) {
   S.dip ^= (1 << index);
-  audio.click(true);
   updateNetInput(KEY_NETS[index]);
   syncKeys();
 }
