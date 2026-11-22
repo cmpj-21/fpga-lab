@@ -11,6 +11,7 @@ import { DEMO_SRC, DEMO_NAME, DEMO_TOP } from './ui/demo.js';
 import { createIde, parseDiagnostics } from './ui/ide.js';
 import * as audio from './ui/audio.js';
 import { initCustomSelects, openPinPickerPopup, createPinChevronSvg } from './ui/selects.js';
+import { initCustomColorPickers } from './ui/colorpicker.js';
 import {
   THEME_PRESETS,
   TOKEN_GROUPS,
@@ -2662,7 +2663,7 @@ function wire() {
     if (document.querySelector('dialog:modal')) return false;
     if ($('#homeView') && !$('#homeView').classList.contains('hidden')) return false;
     if (!$('#themePopover')?.classList.contains('hidden')) return false;
-    if (document.querySelector('.ts-pop, .menu-pop:not(.hidden), .ctx-menu:not(.hidden)')) return false;
+    if (document.querySelector('.ts-pop, .tcp-pop, .menu-pop:not(.hidden), .ctx-menu:not(.hidden)')) return false;
     if (target?.closest?.('.virtual-inputs input')) return false;
     return Boolean(getHoveredSimZone());
   };
@@ -3171,6 +3172,7 @@ async function boot() {
   wireSettingsAndThemes();
   applyAllSettings({ persist: false });
   initCustomSelects();
+  initCustomColorPickers();
   wireActionLogger();
   fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);

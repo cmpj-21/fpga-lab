@@ -82,7 +82,7 @@ function closeActivePopup(restoreFocus = false) {
   }
 }
 
-function positionFloatingMenu(anchorEl, popEl, minWidth = 148, maxWidth = 360, capHeight = 320) {
+export function positionFloatingMenu(anchorEl, popEl, minWidth = 148, maxWidth = 360, capHeight = 320) {
   const rect = anchorEl.getBoundingClientRect();
   const minW = Math.max(rect.width, minWidth);
   popEl.style.minWidth = `${Math.round(minW)}px`;
@@ -198,6 +198,8 @@ function openPopup(select) {
   if (!inst || select.disabled || select.closest('fieldset:disabled')) return;
   if (active && active.select === select) return;
   closeActivePopup(false);
+  const popupToken = Symbol('ts');
+  window.dispatchEvent(new CustomEvent('trace:close-popups', { detail: popupToken }));
 
   // Close open menubar or explorer popovers so only one floating menu shows cleanly
   document.querySelectorAll('.menu-pop:not(.hidden), .ctx-menu:not(.hidden)').forEach(el => el.classList.add('hidden'));
@@ -249,7 +251,7 @@ function openPopup(select) {
     ? select.selectedIndex
     : firstEnabledIndex(select);
 
-  active = { select, wrap: inst.wrap, popEl, optionEls, highlightIdx: initIdx, openedAt: performance.now(), setHighlight, commit };
+  active = { token: popupToken, select, wrap: inst.wrap, popEl, optionEls, highlightIdx: initIdx, openedAt: performance.now(), setHighlight, commit };
   inst.wrap.classList.add('is-open');
 
   positionPopup(inst.wrap, popEl, inst.variant);
@@ -416,6 +418,10 @@ function wireGlobalHandlers() {
   if (globalWired) return;
   globalWired = true;
 
+  window.addEventListener('trace:close-popups', e => {
+    if (active && e.detail !== active.token) closeActivePopup(false);
+  });
+
   document.addEventListener('pointerdown', e => {
     if (!active) return;
     if (active.wrap.contains(e.target) || active.popEl.contains(e.target)) return;
@@ -478,6 +484,8 @@ export function openPinPickerPopup({ anchorWrap, focusInput, groups, currentPin,
     return;
   }
   closeActivePopup(false);
+  const popupToken = Symbol('pin');
+  window.dispatchEvent(new CustomEvent('trace:close-popups', { detail: popupToken }));
   document.querySelectorAll('.menu-pop:not(.hidden), .ctx-menu:not(.hidden)').forEach(el => el.classList.add('hidden'));
   document.querySelectorAll('.menu-btn[aria-expanded="true"]').forEach(b => b.setAttribute('aria-expanded', 'false'));
 
@@ -595,6 +603,7 @@ export function openPinPickerPopup({ anchorWrap, focusInput, groups, currentPin,
   };
 
   active = {
+    token: popupToken,
     select: null,
     focusBack: focusInput || anchorWrap,
     wrap: anchorWrap,
