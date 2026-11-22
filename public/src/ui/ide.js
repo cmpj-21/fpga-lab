@@ -2123,6 +2123,53 @@ export function createIde(api) {
     brightWhite: '#ffffff',
   };
 
+  const emojiPresRe = /\p{Emoji_Presentation}/u;
+  const emojiWidthCache = new Map();
+
+  function registerUnicode11Provider(xterm) {
+    if (!xterm?.unicode) return;
+    const v6 = xterm._core?.unicodeService?._providers?.['6'] || null;
+    const wcwidth = cp => {
+      if (cp < 32) return 0;
+      if (cp < 127) return 1;
+      if (cp === 0x200D || (cp >= 0xFE00 && cp <= 0xFE0F) ||
+          (cp >= 0x1F3FB && cp <= 0x1F3FF) || (cp >= 0xE0100 && cp <= 0xE01EF)) {
+        return 0;
+      }
+      const base = v6 ? v6.wcwidth(cp) : (cp >= 0x1100 ? 1 : 1);
+      if (base === 0 || base === 2) return base;
+      if (cp >= 0x1F1E6 && cp <= 0x1F1FF) return 2;
+      if (cp >= 0x2300) {
+        let cached = emojiWidthCache.get(cp);
+        if (cached === undefined) {
+          cached = emojiPresRe.test(String.fromCodePoint(cp)) ? 2 : base;
+          emojiWidthCache.set(cp, cached);
+        }
+        return cached;
+      }
+      return base;
+    };
+    const charProperties = (cp, preceding) => {
+      let w = wcwidth(cp);
+      let shouldJoin = w === 0 && preceding !== 0;
+      if (shouldJoin) {
+        const prevW = (preceding >> 1) & 3;
+        if (prevW === 0) {
+          shouldJoin = false;
+        } else if (cp === 0xFE0F && prevW === 1) {
+          w = 2;
+        } else if (prevW > w) {
+          w = prevW;
+        }
+      }
+      return ((w & 3) << 1) | (shouldJoin ? 1 : 0);
+    };
+    try {
+      xterm.unicode.register({ version: '11', wcwidth, charProperties });
+      xterm.unicode.activeVersion = '11';
+    } catch {}
+  }
+
   function activeTerm() {
     return termSessionsList.find(t => t.id === activeTermId) || termSessionsList[0] || null;
   }
@@ -2258,14 +2305,17 @@ export function createIde(api) {
         rows,
         cursorBlink: true,
         cursorStyle: 'block',
-        fontFamily: 'Consolas, "Cascadia Mono", "JetBrains Mono", monospace',
+        fontFamily: '"Cascadia Mono", Consolas, "Segoe UI Emoji", monospace',
         fontSize: 12,
         lineHeight: 1.2,
         scrollback: 5000,
         convertEol: false,
         allowProposedApi: true,
+        rescaleOverlappingGlyphs: true,
+        ...(data.pty ? { windowsPty: { backend: 'conpty', buildNumber: 26200 } } : {}),
         theme: XTERM_THEME,
       });
+      registerUnicode11Provider(xterm);
 
       const term = {
         id: data.id,
