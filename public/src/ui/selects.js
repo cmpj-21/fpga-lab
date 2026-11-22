@@ -76,18 +76,17 @@ function closeActivePopup(restoreFocus = false) {
   active = null;
   prev.wrap.classList.remove('is-open');
   prev.popEl.remove();
-  if (restoreFocus && document.contains(prev.select)) {
-    try { prev.select.focus({ preventScroll: true }); } catch {}
+  const target = prev.focusBack || prev.select;
+  if (restoreFocus && target && document.contains(target)) {
+    try { target.focus({ preventScroll: true }); } catch {}
   }
 }
 
-function positionPopup(wrap, popEl, variant) {
-  const rect = wrap.getBoundingClientRect();
-  const minW = variant === 'compact' || variant === 'ghost' || variant === 'flush'
-    ? Math.max(rect.width, 112)
-    : Math.max(rect.width, 148);
+function positionFloatingMenu(anchorEl, popEl, minWidth = 148, maxWidth = 360, capHeight = 320) {
+  const rect = anchorEl.getBoundingClientRect();
+  const minW = Math.max(rect.width, minWidth);
   popEl.style.minWidth = `${Math.round(minW)}px`;
-  popEl.style.maxWidth = `${Math.max(minW, Math.min(360, window.innerWidth - 16))}px`;
+  popEl.style.maxWidth = `${Math.max(minW, Math.min(maxWidth, window.innerWidth - 16))}px`;
   popEl.style.maxHeight = 'none';
 
   const popRect = popEl.getBoundingClientRect();
@@ -99,7 +98,7 @@ function positionPopup(wrap, popEl, variant) {
   const openAbove = spaceBelow < naturalH && spaceAbove > spaceBelow;
 
   const availH = openAbove ? spaceAbove : spaceBelow;
-  const maxH = Math.max(110, Math.min(320, availH));
+  const maxH = Math.max(110, Math.min(capHeight, availH));
   popEl.style.maxHeight = `${Math.round(maxH)}px`;
 
   if (openAbove) {
@@ -118,6 +117,11 @@ function positionPopup(wrap, popEl, variant) {
   }
   left = Math.max(8, Math.min(left, window.innerWidth - naturalW - 8));
   popEl.style.left = `${Math.round(left)}px`;
+}
+
+function positionPopup(wrap, popEl, variant) {
+  const minW = variant === 'compact' || variant === 'ghost' || variant === 'flush' ? 112 : 148;
+  positionFloatingMenu(wrap, popEl, minW, 360, 320);
 }
 
 function buildPopupOptions(select, popEl) {
@@ -462,4 +466,148 @@ export function initCustomSelects(root = document) {
 
 export function refreshAllCustomSelects(root = document) {
   root.querySelectorAll('select[data-ts-upgraded="1"]').forEach(syncTrigger);
+}
+
+export function createPinChevronSvg() {
+  return CHEV_SVG;
+}
+
+export function openPinPickerPopup({ anchorWrap, focusInput, groups, currentPin, assignments, portName, onPick }) {
+  if (active && active.wrap === anchorWrap) {
+    closeActivePopup(true);
+    return;
+  }
+  closeActivePopup(false);
+  document.querySelectorAll('.menu-pop:not(.hidden), .ctx-menu:not(.hidden)').forEach(el => el.classList.add('hidden'));
+  document.querySelectorAll('.menu-btn[aria-expanded="true"]').forEach(b => b.setAttribute('aria-expanded', 'false'));
+
+  const popEl = document.createElement('div');
+  popEl.className = 'ts-pop pin-pop';
+  popEl.setAttribute('role', 'listbox');
+
+  const optionEls = [];
+  let selectedBtnIdx = -1;
+
+  const addOptionRow = ({ pinVal, pinText, netText, metaText, isSelected, ownerPort }) => {
+    const idx = optionEls.length;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ts-opt pin-pop-opt';
+    btn.setAttribute('role', 'option');
+    btn.tabIndex = -1;
+    if (isSelected) {
+      btn.classList.add('is-selected');
+      btn.setAttribute('aria-selected', 'true');
+      selectedBtnIdx = idx;
+    } else {
+      btn.setAttribute('aria-selected', 'false');
+    }
+
+    const left = document.createElement('span');
+    left.className = 'pin-pop-left';
+    const pinBadge = document.createElement('span');
+    pinBadge.className = 'pin-pop-code mono';
+    pinBadge.textContent = pinText;
+    const netLabel = document.createElement('span');
+    netLabel.className = 'pin-pop-net';
+    netLabel.textContent = netText;
+    left.append(pinBadge, netLabel);
+
+    const right = document.createElement('span');
+    right.className = 'pin-pop-right';
+    if (ownerPort) {
+      const used = document.createElement('span');
+      used.className = 'pin-pop-used mono';
+      used.textContent = ownerPort;
+      right.append(used);
+    } else if (metaText) {
+      const note = document.createElement('span');
+      note.className = 'pin-pop-meta';
+      note.textContent = metaText;
+      right.append(note);
+    }
+    btn.append(left, right);
+    btn.insertAdjacentHTML('beforeend', CHECK_SVG);
+
+    btn.addEventListener('pointerdown', e => e.preventDefault());
+    btn.addEventListener('pointermove', () => {
+      if (active && active.highlightIdx !== idx) active.setHighlight(idx, false);
+    });
+    btn.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      closeActivePopup(false);
+      onPick(pinVal);
+    });
+
+    popEl.append(btn);
+    optionEls.push(btn);
+  };
+
+  if (currentPin !== null) {
+    addOptionRow({
+      pinVal: '',
+      pinText: 'CLEAR',
+      netText: 'Unassign pin',
+      metaText: '',
+      isSelected: false,
+      ownerPort: '',
+    });
+  }
+
+  for (const grp of groups) {
+    const hdr = document.createElement('div');
+    hdr.className = 'ts-group-label';
+    hdr.textContent = grp.group;
+    popEl.append(hdr);
+    for (const p of grp.pins) {
+      const owner = (assignments?.get(p.pin) || '').trim().toLowerCase();
+      const usedElsewhere = owner && owner !== portName ? owner : '';
+      addOptionRow({
+        pinVal: `PIN_${p.pin}`,
+        pinText: `PIN_${p.pin}`,
+        netText: p.net,
+        metaText: p.polarity,
+        isSelected: currentPin === p.pin,
+        ownerPort: usedElsewhere,
+      });
+    }
+  }
+
+  popEl.style.visibility = 'hidden';
+  document.body.append(popEl);
+
+  const setHighlight = (idx, scrollIntoView = true) => {
+    if (!active) return;
+    const prevBtn = active.optionEls[active.highlightIdx];
+    if (prevBtn) prevBtn.classList.remove('is-highlighted');
+    active.highlightIdx = idx;
+    const nextBtn = active.optionEls[idx];
+    if (nextBtn) {
+      nextBtn.classList.add('is-highlighted');
+      if (scrollIntoView) {
+        const pr = popEl.getBoundingClientRect();
+        const br = nextBtn.getBoundingClientRect();
+        if (br.top < pr.top + 4) popEl.scrollTop -= (pr.top + 4 - br.top);
+        else if (br.bottom > pr.bottom - 4) popEl.scrollTop += (br.bottom - (pr.bottom - 4));
+      }
+    }
+  };
+
+  active = {
+    select: null,
+    focusBack: focusInput || anchorWrap,
+    wrap: anchorWrap,
+    popEl,
+    optionEls,
+    highlightIdx: selectedBtnIdx,
+    openedAt: performance.now(),
+    setHighlight,
+    commit: () => {},
+  };
+  anchorWrap.classList.add('is-open');
+  positionFloatingMenu(anchorWrap, popEl, 250, 340, 310);
+  popEl.style.visibility = '';
+  if (selectedBtnIdx >= 0) setHighlight(selectedBtnIdx, true);
+  requestAnimationFrame(() => popEl.classList.add('is-visible'));
 }

@@ -10,7 +10,7 @@ import { WaveViewer } from './ui/waves.js';
 import { DEMO_SRC, DEMO_NAME, DEMO_TOP } from './ui/demo.js';
 import { createIde, parseDiagnostics } from './ui/ide.js';
 import * as audio from './ui/audio.js';
-import { initCustomSelects } from './ui/selects.js';
+import { initCustomSelects, openPinPickerPopup, createPinChevronSvg } from './ui/selects.js';
 import {
   THEME_PRESETS,
   TOKEN_GROUPS,
@@ -1583,17 +1583,6 @@ function renderPinoutRef() {
 }
 function renderPins() {
   $('#pinBody').replaceChildren();
-  const datalist = $('#boardPinList');
-  if (datalist && !datalist.children.length) {
-    for (const grp of BOARD_PINOUT_GROUPS) {
-      for (const p of grp.pins) {
-        const opt = document.createElement('option');
-        opt.value = `PIN_${p.pin}`;
-        opt.label = `${p.net} · ${p.polarity} (${p.note})`;
-        datalist.append(opt);
-      }
-    }
-  }
   const hint = $('#pinStepHint');
   if (hint) {
     hint.textContent = S.vcd
@@ -1676,10 +1665,13 @@ function renderPins() {
     dirBadge.textContent = port.dir;
     dirCell.append(dirBadge);
     const locCell = document.createElement('td');
+    const locWrap = document.createElement('div');
+    locWrap.className = 'pin-loc-wrap';
     const input = document.createElement('input');
     input.value = currentPin ? `PIN_${currentPin}` : '';
     input.placeholder = 'PIN_...';
-    input.setAttribute('list', 'boardPinList');
+    input.autocomplete = 'off';
+    input.spellcheck = false;
     input.setAttribute('aria-label', `${port.label} pin location`);
     input.title = currentPin ? `Assigned to PIN_${currentPin}${boardNet ? ` (${boardNet})` : ''}` : 'Enter devboard pin number (1–144), e.g. 88 or PIN_88';
     input.className = bound ? 'mapped' : currentPin ? 'assigned' : 'unmapped';
@@ -1719,14 +1711,40 @@ function renderPins() {
       if (moveDelta !== 0) focusPinRow(rowIndex + moveDelta);
       return true;
     };
+    const openPicker = () => {
+      if (input.disabled) return;
+      openPinPickerPopup({
+        anchorWrap: locWrap,
+        focusInput: input,
+        groups: BOARD_PINOUT_GROUPS,
+        currentPin,
+        assignments: S.assignments,
+        portName: port.name,
+        onPick: pinVal => {
+          input.value = pinVal;
+          commitInput(0);
+        },
+      });
+    };
+    const pickBtn = document.createElement('button');
+    pickBtn.type = 'button';
+    pickBtn.className = 'pin-pick-btn';
+    pickBtn.tabIndex = -1;
+    pickBtn.disabled = input.disabled;
+    pickBtn.setAttribute('aria-label', `Browse pins for ${port.label}`);
+    pickBtn.title = 'Browse board pins (Alt+Down)';
+    pickBtn.innerHTML = createPinChevronSvg();
+    pickBtn.onclick = e => { e.preventDefault(); e.stopPropagation(); openPicker(); };
     input.onchange = () => { if (!committed) commitInput(0); };
     input.onkeydown = e => {
-      if (e.key === 'Enter') { e.preventDefault(); commitInput(e.shiftKey ? -1 : 1); }
+      if ((e.altKey && e.key === 'ArrowDown') || e.key === 'F4') { e.preventDefault(); openPicker(); }
+      else if (e.key === 'Enter') { e.preventDefault(); commitInput(e.shiftKey ? -1 : 1); }
       else if (e.key === 'ArrowDown') { e.preventDefault(); commitInput(1); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); commitInput(-1); }
       else if (e.key === 'Escape') { e.preventDefault(); input.value = currentPin ? `PIN_${currentPin}` : ''; input.blur(); }
     };
-    locCell.append(input);
+    locWrap.append(input, pickBtn);
+    locCell.append(locWrap);
     const netCell = document.createElement('td');
     const netSpan = document.createElement('span');
     netSpan.className = `pin-net-tag${boardNet ? '' : ' empty'}`;
