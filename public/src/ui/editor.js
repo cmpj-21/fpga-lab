@@ -29,6 +29,162 @@ export function highlightVhdl(text) {
   return out + esc(text.slice(last));
 }
 
+const QSF_COMMANDS = new Set([
+  'set_global_assignment', 'set_location_assignment', 'set_instance_assignment',
+  'set_parameter', 'project_new', 'project_open', 'project_close', 'export_assignments',
+  'quartus_version', 'project_revision', 'date',
+]);
+const QSF_KEYS = new Set([
+  'family', 'device', 'top_level_entity', 'vhdl_file', 'verilog_file', 'vhdl_input_version',
+  'project_output_directory', 'min_core_junction_temp', 'max_core_junction_temp',
+  'error_check_frequency_divisor', 'nominal_core_supply_voltage', 'eda_simulation_tool',
+  'eda_output_data_format', 'power_preserves_high_speed_tiles', 'partition_netlist_type',
+  'partition_fit_attempt_hierarchy', 'partition_color', 'io_standard', 'current_strength_new',
+  'slew_rate', 'weak_pull_up_resistor', 'sdc_file', 'qip_file', 'bdf_file', 'source_file',
+]);
+const QSF_TOKEN = /(#[^\n]*)|("(?:[^"\n\\]|\\.)*"?|'(?:[^'\n\\]|\\.)*'?|\{[^}\n]*\}?)|(-[A-Za-z_][A-Za-z0-9_-]*)|(\bPIN_\d+\b|\bEP4CE\w+\b|\bVHDL_(?:1993|2002|2008)\b|\b\d+(?:\.\d+)?\b)|([A-Za-z_][A-Za-z0-9_]*)/g;
+
+export function highlightQsf(text) {
+  let out = '', last = 0, match;
+  QSF_TOKEN.lastIndex = 0;
+  while ((match = QSF_TOKEN.exec(text))) {
+    const token = match[0];
+    if (!token.length) { QSF_TOKEN.lastIndex++; continue; }
+    if (match.index > last) out += esc(text.slice(last, match.index));
+    let cls = null;
+    if (match[1]) cls = 'cm';
+    else if (match[2]) cls = 'st';
+    else if (match[3]) cls = 'ty';
+    else if (match[4]) cls = 'nu';
+    else if (match[5]) {
+      const low = token.toLowerCase();
+      if (QSF_COMMANDS.has(low)) cls = 'kw';
+      else if (QSF_KEYS.has(low)) cls = 'ty';
+    }
+    out += cls ? `<span class="tk-${cls}">${esc(token)}</span>` : esc(token);
+    last = match.index + token.length;
+  }
+  return out + esc(text.slice(last));
+}
+
+const MD_TOKEN = /(```[\s\S]*?(?:```|$))|(`[^`\n]+`)|(^[ \t]*#{1,6}[ \t]+[^\n]*)|(^[ \t]*>[ \t]?.+$)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(\[[^\]\n]+\]\([^)\n]+\))|(^[ \t]*(?:[-*+]|\d+\.)[ \t]+)/gm;
+
+export function highlightMarkdown(text) {
+  let out = '', last = 0, match;
+  MD_TOKEN.lastIndex = 0;
+  while ((match = MD_TOKEN.exec(text))) {
+    const token = match[0];
+    if (!token.length) { MD_TOKEN.lastIndex++; continue; }
+    if (match.index > last) out += esc(text.slice(last, match.index));
+    let cls = null;
+    if (match[1] || match[2]) cls = 'st';
+    else if (match[3]) cls = 'kw';
+    else if (match[4]) cls = 'cm';
+    else if (match[5] || match[7]) cls = 'ty';
+    else if (match[6]) cls = 'nu';
+    out += cls ? `<span class="tk-${cls}">${esc(token)}</span>` : esc(token);
+    last = match.index + token.length;
+  }
+  return out + esc(text.slice(last));
+}
+
+function formatInlineMarkdown(raw) {
+  let s = esc(raw);
+  s = s.replace(/`([^`]+)`/g, '<code class="md-code-inline">$1</code>');
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|#[a-z0-9_-]+)\)/gi, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  return s;
+}
+
+export function renderMarkdownHtml(markdown = '') {
+  const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
+  const html = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+    const fence = line.match(/^```([a-z0-9_-]*)\s*$/i);
+    if (fence) {
+      const lang = (fence[1] || '').toLowerCase();
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^```\s*$/.test(lines[i])) {
+        buf.push(lines[i]);
+        i++;
+      }
+      if (i < lines.length) i++;
+      const codeText = buf.join('\n');
+      const highlighted = lang === 'vhdl' || lang === 'vhd'
+        ? highlightVhdl(codeText)
+        : (lang === 'qsf' || lang === 'qpf' || lang === 'tcl')
+          ? highlightQsf(codeText)
+          : esc(codeText);
+      html.push(`<div class="md-code-block">${lang ? `<div class="md-code-lang mono">${esc(lang)}</div>` : ''}<pre class="mono"><code>${highlighted}</code></pre></div>`);
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      const level = heading[1].length;
+      const slug = heading[2].toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      html.push(`<h${level} id="${esc(slug)}">${formatInlineMarkdown(heading[2])}</h${level}>`);
+      i++;
+      continue;
+    }
+    if (/^(?:---|\*\*\*|___)\s*$/.test(line.trim())) {
+      html.push('<hr>');
+      i++;
+      continue;
+    }
+    if (line.includes('|') && i + 1 < lines.length && /^\s*\|?[\s:-]+\|[\s|:-]*$/.test(lines[i + 1])) {
+      const parseRow = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => formatInlineMarkdown(c.trim()));
+      const headers = parseRow(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim()) {
+        rows.push(parseRow(lines[i]));
+        i++;
+      }
+      html.push(`<div class="md-table-wrap"><table class="md-table"><thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+      continue;
+    }
+    if (/^\s*>\s?/.test(line)) {
+      const qLines = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        qLines.push(lines[i].replace(/^\s*>\s?/, ''));
+        i++;
+      }
+      html.push(`<blockquote class="md-quote">${qLines.map(formatInlineMarkdown).join('<br>')}</blockquote>`);
+      continue;
+    }
+    if (/^\s*(?:[-*+]|\d+\.)\s+/.test(line)) {
+      const ordered = /^\s*\d+\.\s+/.test(line);
+      const tag = ordered ? 'ol' : 'ul';
+      const items = [];
+      while (i < lines.length && /^\s*(?:[-*+]|\d+\.)\s+/.test(lines[i])) {
+        let itemText = lines[i].replace(/^\s*(?:[-*+]|\d+\.)\s+/, '');
+        const task = itemText.match(/^\[([ xX])\]\s+(.*)$/);
+        if (task) {
+          const checked = task[1].toLowerCase() === 'x';
+          items.push(`<li class="md-task"><input type="checkbox" disabled ${checked ? 'checked' : ''}><span>${formatInlineMarkdown(task[2])}</span></li>`);
+        } else {
+          items.push(`<li>${formatInlineMarkdown(itemText)}</li>`);
+        }
+        i++;
+      }
+      html.push(`<${tag} class="md-list">${items.join('')}</${tag}>`);
+      continue;
+    }
+    const pLines = [];
+    while (i < lines.length && lines[i].trim() && !/^(?:```|#{1,6}\s|>\s?|(?:---|\*\*\*|___)\s*$|\s*(?:[-*+]|\d+\.)\s+)/.test(lines[i])) {
+      pLines.push(formatInlineMarkdown(lines[i]));
+      i++;
+    }
+    html.push(`<p>${pLines.join(' ')}</p>`);
+  }
+  return html.join('\n');
+}
+
 const LINE_HEIGHT = 20, PAD_TOP = 10;
 const INDENT_AFTER = /(\b(is|begin|then|else|loop|generate|record|units)|\(|\b(port|generic)(\s+map)?\s*\()$/i;
 
@@ -36,11 +192,12 @@ export class CodeEditor {
   constructor(host, callbacks = {}) {
     this.callbacks = callbacks;
     this.language = callbacks.language || 'vhdl';
+    this.wordWrap = !!callbacks.wordWrap;
     this.markers = [];
     this.root = document.createElement('div');
-    this.root.className = 'ce';
+    this.root.className = `ce${this.wordWrap ? ' wrap-on' : ''}`;
     this.root.innerHTML = '<div class="ce-gutter" aria-hidden="true"><div class="ce-gutter-in"><pre class="ce-nums"></pre></div></div>' +
-      '<div class="ce-view"><textarea class="ce-input ce-text" spellcheck="false" wrap="off" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="Source code editor"></textarea>' +
+      `<div class="ce-view"><textarea class="ce-input ce-text" spellcheck="false" wrap="${this.wordWrap ? 'soft' : 'off'}" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="Source code editor"></textarea>` +
       '<div class="ce-layer" aria-hidden="true"><div class="ce-lines"></div><pre class="ce-hl ce-text"></pre></div></div>';
     host.append(this.root);
     this.gutter = this.root.querySelector('.ce-gutter');
@@ -66,9 +223,27 @@ export class CodeEditor {
   focus() { this.input.focus({ preventScroll: true }); }
   schedule() { if (this.frame) return; this.frame = requestAnimationFrame(() => { this.frame = 0; this.renderNow(); this.reportCursor(); }); }
   setLanguage(lang = 'vhdl') { this.language = lang; this.renderNow(); }
+  setWordWrap(enabled) {
+    this.wordWrap = !!enabled;
+    this.root.classList.toggle('wrap-on', this.wordWrap);
+    this.input.setAttribute('wrap', this.wordWrap ? 'soft' : 'off');
+    if (this.wordWrap) this.input.scrollLeft = 0;
+    this.syncScroll();
+    this.reportCursor();
+  }
+  toggleWordWrap() {
+    this.setWordWrap(!this.wordWrap);
+    return this.wordWrap;
+  }
+  highlightText(text) {
+    if (this.language === 'vhdl') return highlightVhdl(text);
+    if (this.language === 'qsf') return highlightQsf(text);
+    if (this.language === 'markdown') return highlightMarkdown(text);
+    return esc(text);
+  }
   renderNow() {
     const text = this.input.value;
-    this.pre.innerHTML = (this.language === 'vhdl' ? highlightVhdl(text) : esc(text)) + '\n';
+    this.pre.innerHTML = this.highlightText(text) + '\n';
     const count = text.split('\n').length;
     if (count !== this.lineCount) {
       this.lineCount = count;
@@ -80,7 +255,8 @@ export class CodeEditor {
     this.renderMarkers();
   }
   syncScroll() {
-    this.layer.style.transform = `translate(${-this.input.scrollLeft}px, ${-this.input.scrollTop}px)`;
+    const x = this.wordWrap ? 0 : -this.input.scrollLeft;
+    this.layer.style.transform = `translate(${x}px, ${-this.input.scrollTop}px)`;
     this.gutterIn.style.transform = `translateY(${-this.input.scrollTop}px)`;
   }
   cursor() {
@@ -144,10 +320,82 @@ export class CodeEditor {
   onKeyDown(event) {
     const mod = event.ctrlKey || event.metaKey, key = event.key;
     if (mod && !event.shiftKey && !event.altKey && key.toLowerCase() === 's') { event.preventDefault(); event.stopPropagation(); this.callbacks.onSave?.(); return; }
-    if (mod && key === '/') { event.preventDefault(); this.toggleComment(); return; }
+    if (!mod && event.altKey && !event.shiftKey && key.toLowerCase() === 'z') { event.preventDefault(); event.stopPropagation(); if (this.callbacks.onToggleWrap) this.callbacks.onToggleWrap(); else this.toggleWordWrap(); return; }
+    if (mod && !event.altKey && key === '/') { event.preventDefault(); this.toggleComment(); return; }
+    if (mod && event.shiftKey && !event.altKey && key.toLowerCase() === 'k') { event.preventDefault(); this.deleteLines(); return; }
+    if (mod && !event.shiftKey && !event.altKey && key.toLowerCase() === 'l') { event.preventDefault(); this.selectLine(); return; }
+    if (mod && !event.shiftKey && !event.altKey && key.toLowerCase() === 'd') { event.preventDefault(); this.selectWord(); return; }
+    if (mod && !event.altKey && key === 'Enter') { event.preventDefault(); this.insertLineAround(event.shiftKey ? -1 : 1); return; }
     if (key === 'Tab' && !mod && !event.altKey) { event.preventDefault(); if (event.shiftKey) this.outdent(); else this.indent(); return; }
     if (key === 'Enter' && !mod && !event.shiftKey && !event.altKey) { event.preventDefault(); this.newline(); return; }
-    if (event.altKey && !mod && (key === 'ArrowUp' || key === 'ArrowDown')) { event.preventDefault(); this.moveLines(key === 'ArrowUp' ? -1 : 1); }
+    if (event.altKey && event.shiftKey && !mod && (key === 'ArrowUp' || key === 'ArrowDown')) { event.preventDefault(); this.duplicateLines(key === 'ArrowUp' ? -1 : 1); return; }
+    if (event.altKey && !event.shiftKey && !mod && (key === 'ArrowUp' || key === 'ArrowDown')) { event.preventDefault(); this.moveLines(key === 'ArrowUp' ? -1 : 1); }
+  }
+  duplicateLines(direction = 1) {
+    const block = this.blockRange();
+    const replacement = block.text + '\n' + block.text;
+    this.insert(replacement, block.from, block.to);
+    if (direction < 0) {
+      this.input.setSelectionRange(block.from, block.from + block.text.length);
+    } else {
+      const secondStart = block.from + block.text.length + 1;
+      this.input.setSelectionRange(secondStart, secondStart + block.text.length);
+    }
+    this.reportCursor();
+  }
+  deleteLines() {
+    const value = this.input.value;
+    const block = this.blockRange();
+    let from = block.from, to = block.to;
+    if (to < value.length && value[to] === '\n') to++;
+    else if (from > 0 && value[from - 1] === '\n') from--;
+    this.insert('', from, to);
+    const pos = Math.min(from, this.input.value.length);
+    this.input.setSelectionRange(pos, pos);
+    this.reportCursor();
+  }
+  selectLine() {
+    const value = this.input.value;
+    const block = this.blockRange();
+    const to = block.to < value.length && value[block.to] === '\n' ? block.to + 1 : block.to;
+    this.input.setSelectionRange(block.from, to);
+    this.reportCursor();
+  }
+  selectWord() {
+    const value = this.input.value;
+    const pos = this.input.selectionStart;
+    if (this.input.selectionStart !== this.input.selectionEnd) {
+      const selected = value.slice(this.input.selectionStart, this.input.selectionEnd);
+      if (selected && !/\n/.test(selected)) {
+        const nextIdx = value.indexOf(selected, this.input.selectionEnd);
+        const wrapIdx = nextIdx >= 0 ? nextIdx : value.indexOf(selected, 0);
+        if (wrapIdx >= 0) {
+          this.input.setSelectionRange(wrapIdx, wrapIdx + selected.length);
+          this.reportCursor();
+          return;
+        }
+      }
+    }
+    let start = pos, end = pos;
+    while (start > 0 && /\w/.test(value[start - 1])) start--;
+    while (end < value.length && /\w/.test(value[end])) end++;
+    if (end > start) {
+      this.input.setSelectionRange(start, end);
+      this.reportCursor();
+    }
+  }
+  insertLineAround(dir = 1) {
+    const block = this.blockRange();
+    const indent = (block.text.match(/^[ \t]*/) || [''])[0];
+    if (dir < 0) {
+      this.insert(indent + '\n', block.from, block.from);
+      this.input.setSelectionRange(block.from + indent.length, block.from + indent.length);
+    } else {
+      this.insert('\n' + indent, block.to, block.to);
+      const pos = block.to + 1 + indent.length;
+      this.input.setSelectionRange(pos, pos);
+    }
+    this.reportCursor();
   }
   indent() {
     const { selectionStart: start, selectionEnd: end, value } = this.input;

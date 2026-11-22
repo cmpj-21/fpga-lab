@@ -21,11 +21,11 @@
   <header id="topbar">
     <a class="brand" href="/" aria-label="Trace home"><span class="brand-mark">t</span><span>trace<span class="brand-period">.</span></span></a>
     <nav class="menubar" aria-label="IDE menu bar">
-      <div class="menu"><button class="menu-btn" data-menu="file" aria-expanded="false">File</button><div class="menu-pop hidden" data-pop="file"><button data-cmd="home"><span>Home / Welcome Screen</span></button><button data-cmd="newFile"><span>New File…</span><kbd>Ctrl+Alt+N</kbd></button><button data-cmd="newFolder"><span>New Folder…</span></button><hr><button data-cmd="saveFile"><span>Save File</span><kbd>Ctrl+S</kbd></button><button data-cmd="saveFileAs"><span>Save File As…</span><kbd>Ctrl+Alt+S</kbd></button><hr><button data-cmd="newProject"><span>New Project Wizard…</span></button><button data-cmd="openProject"><span>Open Project (.qpf / .qsf)…</span></button><button data-cmd="openFiles"><span>Add / Open Files…</span><kbd>Ctrl+O</kbd></button><button data-cmd="saveProject"><span id="menuSaveProjectLabel">Save Project As…</span><kbd>Ctrl+Shift+S</kbd></button><button data-cmd="saveProjectAs" id="menuSaveProjectAs" class="hidden"><span>Save Project As…</span></button><button data-cmd="exportJson"><span>Export Project JSON…</span></button><hr><button data-cmd="loadDemo"><span>Load Counter Demo</span></button><button data-cmd="closeTab"><span>Close Editor Tab</span></button><hr><button data-cmd="exit"><span>Exit</span><kbd>Alt+F4</kbd></button></div></div>
-      <div class="menu"><button class="menu-btn" data-menu="edit" aria-expanded="false">Edit</button><div class="menu-pop hidden" data-pop="edit"><button data-cmd="undo"><span>Undo</span><kbd>Ctrl+Z</kbd></button><button data-cmd="redo"><span>Redo</span><kbd>Ctrl+Y</kbd></button><hr><button data-cmd="comment"><span>Toggle Line Comment</span><kbd>Ctrl+/</kbd></button></div></div>
-      <div class="menu"><button class="menu-btn" data-menu="view" aria-expanded="false">View</button><div class="menu-pop hidden" data-pop="view"><button data-cmd="viewExplorer"><span>Project Explorer</span></button><button data-cmd="viewPins"><span>Pin Planner</span></button><button data-cmd="toggleEditor"><span>Toggle Code Editor Pane</span><kbd>Ctrl+E</kbd></button><button data-cmd="toggleBoard"><span>Toggle 3D Board Viewport</span><kbd>Alt+B</kbd></button><hr><button data-cmd="panelWaves"><span>Logic Analyzer (Waveforms)</span></button><button data-cmd="panelProblems"><span>Problems</span></button><button data-cmd="panelConsole"><span>Output Console</span></button><button data-cmd="panelPinout"><span>Board Pinout Reference</span></button><button data-cmd="panelTruth"><span>Truth Table Generator</span></button><button data-cmd="panelUart"><span>UART Serial Monitor</span></button><button data-cmd="panelBitstream"><span>Bitstream Inspector</span></button><hr><button data-cmd="photo"><span>Photo Studio</span><kbd>P</kbd></button><button data-cmd="fullscreen"><span>Toggle Full Screen</span><kbd>F11</kbd></button><button data-cmd="theme"><span>Toggle Light / Dark Theme</span></button><button data-cmd="resetLayout"><span>Reset IDE Layout</span></button></div></div>
+      <div class="menu"><button class="menu-btn" data-menu="file" aria-expanded="false">File</button><div class="menu-pop hidden" data-pop="file"><button data-cmd="home"><span>Home / Welcome Screen</span></button><button data-cmd="newFile"><span>New File…</span><kbd>Ctrl+Alt+N</kbd></button><button data-cmd="newFolder"><span>New Folder…</span></button><hr><button data-cmd="saveFile"><span>Save File</span><kbd>Ctrl+S</kbd></button><button data-cmd="saveFileAs"><span>Save File As…</span><kbd>Ctrl+Alt+S</kbd></button><hr><button data-cmd="newProject"><span>New Project Wizard…</span></button><button data-cmd="openProject"><span>Open Project (.qpf / .qsf)…</span></button><button data-cmd="openFiles"><span>Add / Open Files…</span><kbd>Ctrl+O</kbd></button><button data-cmd="saveProject"><span id="menuSaveProjectLabel">Save Project As…</span><kbd>Ctrl+Shift+S</kbd></button><button data-cmd="saveProjectAs" id="menuSaveProjectAs" class="hidden"><span>Save Project As…</span></button><button data-cmd="exportJson"><span>Export Project JSON…</span></button><hr><button data-cmd="loadDemo"><span>Load Counter Demo</span></button><button data-cmd="closeTab"><span>Close Editor Tab</span><kbd>Ctrl+W</kbd></button><hr><button data-cmd="exit"><span>Exit</span><kbd>Alt+F4</kbd></button></div></div>
+      <div class="menu"><button class="menu-btn" data-menu="edit" aria-expanded="false">Edit</button><div class="menu-pop hidden" data-pop="edit"><button data-cmd="undo"><span>Undo</span><kbd>Ctrl+Z</kbd></button><button data-cmd="redo"><span>Redo</span><kbd>Ctrl+Y</kbd></button><hr><button data-cmd="comment"><span>Toggle Line Comment</span><kbd>Ctrl+/</kbd></button><button data-cmd="dupLine"><span>Duplicate Line Down</span><kbd>Shift+Alt+↓</kbd></button><button data-cmd="delLine"><span>Delete Line</span><kbd>Ctrl+Shift+K</kbd></button><button data-cmd="wordWrap"><span>Toggle Word Wrap</span><kbd>Alt+Z</kbd></button></div></div>
+      <div class="menu"><button class="menu-btn" data-menu="view" aria-expanded="false">View</button><div class="menu-pop hidden" data-pop="view"><button data-cmd="viewExplorer"><span>Project Explorer</span><kbd>Ctrl+Shift+E</kbd></button><button data-cmd="viewPins"><span>Pin Planner</span></button><button data-cmd="toggleEditor"><span>Toggle Code Editor Pane</span><kbd>Ctrl+E</kbd></button><button data-cmd="toggleBoard"><span>Toggle 3D Board Viewport</span><kbd>Alt+B</kbd></button><button data-cmd="wordWrap"><span>Toggle Word Wrap</span><kbd>Alt+Z</kbd></button><hr><button data-cmd="panelWaves"><span>Logic Analyzer (Waveforms)</span></button><button data-cmd="panelTerminal"><span>Integrated Terminal</span><kbd>Ctrl+`</kbd></button><button data-cmd="panelProblems"><span>Problems</span></button><button data-cmd="panelConsole"><span>Output Console</span></button><button data-cmd="panelPinout"><span>Board Pinout Reference</span></button><button data-cmd="panelTruth"><span>Truth Table Generator</span></button><button data-cmd="panelUart"><span>UART Serial Monitor</span></button><button data-cmd="panelBitstream"><span>Bitstream Inspector</span></button><hr><button data-cmd="photo"><span>Photo Studio</span><kbd>P</kbd></button><button data-cmd="fullscreen"><span>Toggle Full Screen</span><kbd>F11</kbd></button><button data-cmd="theme"><span>Toggle Light / Dark Theme</span></button><button data-cmd="resetLayout"><span>Reset IDE Layout</span></button></div></div>
       <div class="menu"><button class="menu-btn" data-menu="run" aria-expanded="false">Build &amp; Sim</button><div class="menu-pop hidden" data-pop="run"><button data-cmd="save"><span>Build &amp; Compile</span><kbd>F7</kbd></button><button data-cmd="flash"><span>Flash to Board</span><kbd>Ctrl+B</kbd></button><button data-cmd="projectSettings"><span>Project &amp; Compiler Settings…</span></button><hr><button data-cmd="restart"><span>Restart Simulation</span></button><button data-cmd="step"><span>Step Clock Cycle</span><kbd>.</kbd></button><button data-cmd="run"><span>Run / Pause Simulation</span><kbd>Space</kbd></button></div></div>
-      <div class="menu"><button class="menu-btn" data-menu="help" aria-expanded="false">Help</button><div class="menu-pop hidden" data-pop="help"><button data-cmd="shortcuts"><span>Keyboard Shortcuts</span></button><button data-cmd="limits"><span>Simulation Model &amp; Limits</span></button></div></div>
+      <div class="menu"><button class="menu-btn" data-menu="help" aria-expanded="false">Help</button><div class="menu-pop hidden" data-pop="help"><button data-cmd="tutorial"><span>Interactive Tutorial (TUTORIAL.md)</span></button><button data-cmd="shortcuts"><span>Keyboard Shortcuts</span></button><button data-cmd="limits"><span>Simulation Model &amp; Limits</span></button></div></div>
     </nav>
     <span class="header-divider"></span><span class="workspace-name">EP4CE6E22C8N · Cyclone IV</span>
     <div class="transport">
@@ -109,12 +109,18 @@
           <h2 id="sourceName" class="mono"></h2>
           <span id="editorCrumb" class="hidden"></span>
           <div class="editor-crumb-end">
+            <div id="mdModeSwitch" class="md-mode-switch hidden" role="group" aria-label="Markdown display mode">
+              <button type="button" class="md-mode-btn active" data-md-mode="view" title="Rendered Markdown document preview">View</button>
+              <button type="button" class="md-mode-btn" data-md-mode="raw" title="Edit raw Markdown source text">Raw</button>
+            </div>
+            <button id="btnWordWrap" type="button" class="btn wrap-toggle-btn" aria-pressed="false" title="Toggle Word Wrap (Alt+Z)">Wrap</button>
             <label id="sourceLibraryWrap" class="lib-inline"><span>Library</span><input id="sourceLibrary" class="search mono" value="work" aria-label="VHDL source library"></label>
             <button id="saveFileBtn" class="btn" title="Save active file (Ctrl+S)">Save</button>
             <button id="saveSource" class="btn dark" title="Save edits and compile VHDL design (F7)">Save &amp; Compile</button>
           </div>
         </div>
         <div id="editorHost" class="editor-host">
+          <article id="mdPreviewPane" class="md-preview hidden" aria-label="Markdown preview"></article>
           <div id="editorEmpty" class="editor-empty hidden">
             <p>No file open in editor</p>
             <button id="btnOpenFirst" class="btn">Open active source</button>
@@ -342,6 +348,7 @@
       <div class="dock-tabbar">
         <div class="dock-tabs" role="tablist" aria-label="Bottom panel">
           <button class="dock-tab" role="tab" aria-selected="false" data-docktab="waves">Logic Analyzer</button>
+          <button class="dock-tab" role="tab" aria-selected="false" data-docktab="terminal" data-rtab="terminal">Terminal</button>
           <button class="dock-tab active" role="tab" aria-selected="true" data-docktab="console" data-rtab="console">Console</button>
           <button class="dock-tab" role="tab" aria-selected="false" data-docktab="problems" data-rtab="problems">Problems <span id="problemCount" class="count-badge hidden">0</span></button>
           <button class="dock-tab" role="tab" aria-selected="false" data-docktab="pinout" data-rtab="pinout">Pinout</button>
@@ -360,6 +367,21 @@
           <div class="waves-status"><span id="waveCursor">Cursor —</span><span>0 / 1 · U uninitialized · X unknown · Z high impedance</span></div>
         </footer>
         <aside id="right" class="hidden">
+          <section id="rtab-terminal" class="rtab term-pane">
+            <div class="term-toolbar">
+              <span class="term-shell-badge mono">POWERSHELL</span>
+              <span id="termCwdBadge" class="term-cwd mono" title="Current terminal working directory">—</span>
+              <button id="termCdProject" type="button" class="text-btn push-right" title="Switch terminal directory to active project folder">CWD: Project</button>
+              <button id="termKillBtn" type="button" class="text-btn hidden" title="Terminate running command (Ctrl+C)">Stop</button>
+              <button id="termCopyBtn" type="button" class="text-btn" title="Copy terminal transcript">Copy</button>
+              <button id="termClearBtn" type="button" class="text-btn" title="Clear terminal (Ctrl+L)">Clear</button>
+            </div>
+            <div id="termOut" class="term-out mono" aria-live="polite"></div>
+            <form id="termForm" class="term-input-row" autocomplete="off">
+              <span id="termPromptLabel" class="term-prompt mono">PS&gt;</span>
+              <input id="termInput" class="term-input mono" type="text" placeholder="Type a command (ghdl --version, dir, git status, cd …) and press Enter" aria-label="Terminal command input" spellcheck="false" autocomplete="off">
+            </form>
+          </section>
           <section id="rtab-console" class="rtab active"><div class="lib-actions"><span id="consoleCount" class="count">0</span><span class="hint">events</span><button id="consoleCopy" class="text-btn push-right" title="Copy the console and session details as plain text">Copy</button><button id="consoleClear" class="text-btn">Clear</button></div><div id="consoleOut" class="console-out"></div></section>
           <section id="rtab-problems" class="rtab"><div id="problemList" class="problem-list"></div></section>
           <section id="rtab-pinout" class="rtab"><p class="hint">Master RZ-EasyFPGA A2.2 (EP4CE6E22C8N) pinout reference. Click any row to locate the component on the 3D board.</p><input id="pinoutSearch" class="search" type="search" placeholder="Filter by pin, net, or peripheral…" aria-label="Filter master board pinout"><div class="pin-scroll"><table class="pinout-ref-table"><thead><tr><th>Pin</th><th>Board Net</th><th>Polarity / Info</th><th>Assigned</th></tr></thead><tbody id="pinoutRefBody"></tbody></table></div></section>
@@ -393,54 +415,103 @@
         <span class="home-device-chip mono">RZ-EasyFPGA A2.2 · Cyclone IV EP4CE6E22C8N</span>
       </div>
       <div class="home-top-actions">
+        <button id="homeTutorialBtn" class="btn" title="Open interactive Trace FPGA Workbench Tutorial (TUTORIAL.md)">Tutorial</button>
+        <button id="homeShortcutsBtn" class="btn" title="View keyboard shortcuts">Shortcuts</button>
         <button id="homeThemeBtn" class="btn" title="Switch between light and dark theme">Theme</button>
         <button id="homeAboutBtn" class="btn" title="Simulation capabilities and limits">About</button>
         <button id="homeContinueBtn" class="btn dark hidden" title="Return to active IDE workbench (Esc)">Continue to Workbench <span>→</span></button>
       </div>
     </header>
     <div class="home-body">
-      <div class="home-col home-left">
+      <div class="home-hero-banner">
         <div class="home-hero-card">
-          <span class="eyebrow">START</span>
+          <div class="home-status-row">
+            <span class="home-engine-pill mono"><i></i>GHDL + Native VPI Engine · 50 MHz Crystal</span>
+            <span class="home-std-pill mono">VHDL-93 / 2002 / 2008 · IEEE &amp; Altera Primitives</span>
+          </div>
           <h1>Build &amp; flash VHDL onto a virtual Cyclone IV board<span>.</span></h1>
-          <p>Compile VHDL-1993/2002/2008 locally with GHDL, inspect real-time waveforms, and interact with the 3D RZ-EasyFPGA A2.2 development board.</p>
+          <p>Write and compile hardware designs locally, map physical EP4CE6E22C8N pins, inspect multi-bit waveforms in the Logic Analyzer, and actuate real-time 3D switches, LEDs, and multiplexed 7-segment displays.</p>
           <div class="home-quick-btns">
             <button id="homeNewProjectBtn" class="btn dark"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>New Project…</span></button>
             <button id="homeOpenProjectBtn" class="btn"><svg viewBox="0 0 24 24"><path d="M3 7V5h7l2 2h9v13H3z"/></svg><span>Open Project (.qpf)…</span></button>
-            <button id="homeOpenBtn" class="btn"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg><span>Open Files…</span></button>
+            <button id="homeOpenBtn" class="btn"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg><span>Open Files…</span><kbd>Ctrl+O</kbd></button>
             <button id="homeDemoBtn" class="btn"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg><span>Counter Demo</span></button>
           </div>
+          <div class="home-workflow-strip" aria-label="5-step hardware workflow">
+            <div class="hw-step"><b>1</b><span>Write VHDL</span></div>
+            <span class="hw-arrow">→</span>
+            <div class="hw-step"><b>2</b><span>Compile <kbd>F7</kbd></span></div>
+            <span class="hw-arrow">→</span>
+            <div class="hw-step"><b>3</b><span>Assign Pins</span></div>
+            <span class="hw-arrow">→</span>
+            <div class="hw-step"><b>4</b><span>Re-Compile</span></div>
+            <span class="hw-arrow">→</span>
+            <div class="hw-step"><b>5</b><span>Flash &amp; Run <kbd>Space</kbd></span></div>
+          </div>
         </div>
-        <div class="home-card">
+        <div class="home-board-spec-card">
+          <div class="hbs-head">
+            <div><span class="eyebrow">TARGET HARDWARE SCHEMATIC</span><h2>RZ-EasyFPGA A2.2 Pinout Quick-Reference</h2></div>
+            <span class="hbs-package mono">144-TQFP · 3.3V LVTTL</span>
+          </div>
+          <div class="hbs-grid">
+            <div class="hbs-item"><span class="hbs-label">Clock (50 MHz)</span><code class="mono">PIN_23</code><small>Onboard crystal</small></div>
+            <div class="hbs-item"><span class="hbs-label">Reset Key</span><code class="mono">PIN_25</code><small>Active-Low (0 = pressed)</small></div>
+            <div class="hbs-item"><span class="hbs-label">Keys S1–S4 &amp; DIP 1–4</span><code class="mono">PIN_88, 89, 90, 91</code><small>Active-Low · Shared nets</small></div>
+            <div class="hbs-item"><span class="hbs-label">User LEDs 1–4</span><code class="mono">PIN_87, 86, 85, 84</code><small>Active-Low (0 = ON)</small></div>
+            <div class="hbs-item"><span class="hbs-label">7-Seg Digit Enables</span><code class="mono">PIN_133, 135, 136, 137</code><small>dtube1..4 · Active-Low</small></div>
+            <div class="hbs-item"><span class="hbs-label">7-Seg Segments a..g, dp</span><code class="mono">128,121,125,129,132,126,124,127</code><small>Active-Low (0 = Lit)</small></div>
+            <div class="hbs-item"><span class="hbs-label">Piezo Buzzer</span><code class="mono">PIN_110</code><small>Active-High (1 = Sound)</small></div>
+            <div class="hbs-item"><span class="hbs-label">UART / VGA DB15</span><code class="mono">114..115 · 101..106</code><small>TXD/RXD · HS/VS/B/G/R</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="home-dashboard-grid">
+        <div class="home-card home-recents-card">
           <div class="home-card-head">
             <div><span class="eyebrow">WORKSPACE HISTORY</span><h2>Recent projects</h2></div>
             <button id="homeClearRecents" class="text-btn" type="button">Clear recent</button>
           </div>
           <div id="homeRecentList" class="home-recent-list"></div>
         </div>
-      </div>
-      <div class="home-col home-right">
-        <div class="home-card">
+        <div class="home-card home-starters-card">
           <div class="home-card-head">
             <div><span class="eyebrow">STARTER TEMPLATES</span><h2>Quick-start hardware labs</h2></div>
+            <span class="hint">1-click template launch</span>
           </div>
           <div id="homeStarterGrid" class="home-starter-grid">
-            <button type="button" class="home-starter-item" data-starter="counter"><strong>Counter &amp; 4-Digit 7-Seg</strong><span>24-bit synchronous counter with multiplexed hex display &amp; lamp test</span></button>
-            <button type="button" class="home-starter-item" data-starter="board_io"><strong>Full Board I/O Template</strong><span>All physical ports declared: Clock, Reset, S1–S4, LED1–LED4, 7-Seg, Buzzer</span></button>
-            <button type="button" class="home-starter-item" data-starter="keys_leds"><strong>Keys, DIP &amp; LED Logic</strong><span>Combinational active-low switch and indicator lab</span></button>
-            <button type="button" class="home-starter-item" data-starter="uart_tx"><strong>UART Serial Transmitter</strong><span>8-N-1 ASCII frame generator for uart_txd</span></button>
+            <button type="button" class="home-starter-item" data-starter="counter"><div class="hsi-top"><strong>Counter &amp; 4-Digit 7-Seg</strong><span class="hsi-tag mono">7-SEG · LEDS</span></div><span>24-bit synchronous counter with multiplexed hex display &amp; lamp test</span></button>
+            <button type="button" class="home-starter-item" data-starter="board_io"><div class="hsi-top"><strong>Full Board I/O Template</strong><span class="hsi-tag mono">ALL PINS</span></div><span>All physical ports declared: Clock, Reset, S1–S4, LED1–LED4, 7-Seg, Buzzer</span></button>
+            <button type="button" class="home-starter-item" data-starter="keys_leds"><div class="hsi-top"><strong>Keys, DIP &amp; LED Logic</strong><span class="hsi-tag mono">PIN_88..91</span></div><span>Combinational active-low tactile switch, DIP lever, and LED indicator lab</span></button>
+            <button type="button" class="home-starter-item" data-starter="buzzer"><div class="hsi-top"><strong>Piezo Buzzer Tone Synth</strong><span class="hsi-tag mono">PIN_110</span></div><span>Synchronous square-wave audio tone generator driven by S1 and Reset</span></button>
+            <button type="button" class="home-starter-item" data-starter="uart_tx"><div class="hsi-top"><strong>UART Serial Transmitter</strong><span class="hsi-tag mono">PIN_114</span></div><span>115200 baud 8-N-1 ASCII frame generator for the built-in UART monitor</span></button>
+            <button type="button" class="home-starter-item" data-starter="blank"><div class="hsi-top"><strong>Blank VHDL-2008 Entity</strong><span class="hsi-tag mono">CLEAN</span></div><span>Minimal entity and RTL architecture skeleton ready for custom lab designs</span></button>
           </div>
         </div>
         <div class="home-card home-lib-card">
           <div class="home-card-head">
             <div><span class="eyebrow">LOCAL DISK</span><h2>Local HDL library</h2></div>
-            <input id="homeHdlSearch" class="search" type="search" placeholder="Filter local HDL files…" aria-label="Filter local HDL files">
+            <input id="homeHdlSearch" class="search" type="search" placeholder="Filter projects &amp; files…" aria-label="Filter local HDL files">
           </div>
           <div class="hdl-root-bar"><span id="homeHdlRoot" class="hdl-root-path mono" title="Local HDL library folder">—</span><button id="homeChangeHdlRoot" type="button" class="text-btn" title="Choose Local HDL library folder">Change folder…</button></div>
           <div id="homeHdlList" class="home-hdl-list"><p class="empty">Reading local files…</p></div>
         </div>
       </div>
     </div>
+    <footer class="home-footer">
+      <span class="hf-left"><i></i>All VHDL compilation and simulation executes locally on this device</span>
+      <div class="hf-right mono">
+        <span><code>Ctrl+O</code> Open Files</span>
+        <span>·</span>
+        <span><code>F7</code> Compile</span>
+        <span>·</span>
+        <span><code>Ctrl+`</code> Terminal</span>
+        <span>·</span>
+        <span><code>Alt+Z</code> Word Wrap</span>
+        <span>·</span>
+        <span><code>F11</code> Full Screen</span>
+      </div>
+    </footer>
   </section>
 </div>
 <dialog id="projectSettingsDialog" class="settings-dialog" aria-labelledby="projectSettingsTitle"><div class="dialog-head"><div><span class="eyebrow">BUILD CONFIGURATION</span><h2 id="projectSettingsTitle">Project &amp; compiler settings</h2></div><button class="icon-btn" type="button" data-close="projectSettingsDialog" aria-label="Close project settings">×</button></div><div class="wizard-body"><div class="home-form-grid"><label class="field" for="topSelect"><span>Top entity</span><select id="topSelect"></select></label><label class="field" for="standardSelect"><span>VHDL standard</span><select id="standardSelect"><option value="93">VHDL-1993</option><option value="02">VHDL-2002</option><option value="08">VHDL-2008</option></select></label><label class="field" for="topLibrary"><span>Top library</span><input id="topLibrary" class="search mono" value="work" aria-label="Top library"></label><label class="field" for="genericInput"><span>Generic overrides</span><input id="genericInput" class="search mono" placeholder="WIDTH=32, DEPTH=8" aria-label="Generic overrides"></label></div><div id="sdfControls" class="hidden"><span id="sdfName" class="mono"></span><div class="home-form-grid"><label class="field"><span>SDF instance</span><input id="sdfInstance" class="search mono" placeholder="/ (top level)" aria-label="SDF instance"></label><label class="field"><span>Timing corner</span><select id="sdfCorner"><option value="min">Minimum</option><option value="typ" selected>Typical</option><option value="max">Maximum</option></select></label></div><button id="clearSdf" type="button" class="text-btn">Remove annotation</button><p class="hint">Requires compatible VITAL models and timing checks. A file alone does not create gate delays.</p></div></div><div class="dialog-foot confirm-foot"><span class="hint">Changes apply on next Build &amp; Compile</span><div class="confirm-actions"><button type="button" class="btn dark" data-close="projectSettingsDialog">Done</button></div></div></dialog>
@@ -449,12 +520,57 @@
 <dialog id="exitWorkbenchDialog" class="confirm-dialog" aria-labelledby="exitWbTitle"><div class="dialog-head"><div><span class="eyebrow">EXIT WORKBENCH</span><h2 id="exitWbTitle">Save project changes before exiting?</h2></div><button class="icon-btn" type="button" data-close="exitWorkbenchDialog" aria-label="Cancel and stay in workbench">×</button></div><div class="confirm-body"><p id="exitWbText">Choose how to handle <strong id="exitWbProject">Counter demo</strong> before closing Trace FPGA Workbench.</p><p id="exitWbDetail" class="hint">Saving writes your project files to disk before closing. Discarding reverts unsaved project changes and closes immediately.</p></div><div class="dialog-foot confirm-foot"><button id="exitWbCancel" type="button" class="btn" data-close="exitWorkbenchDialog">Cancel</button><div class="confirm-actions"><button id="exitWbDiscard" type="button" class="btn confirm-discard">Discard Project Changes</button><button id="exitWbSave" type="button" class="btn dark">Save &amp; Exit</button></div></div></dialog>
 <dialog id="exitHomeDialog" class="confirm-dialog" aria-labelledby="exitHomeTitle"><div class="dialog-head"><div><span class="eyebrow">EXIT APPLICATION</span><h2 id="exitHomeTitle">Exit app?</h2></div><button class="icon-btn" type="button" data-close="exitHomeDialog" aria-label="Cancel">×</button></div><div class="confirm-body"><p>Are you sure you want to exit Trace FPGA Workbench?</p><label class="exit-dont-ask"><input id="exitHomeDontAsk" type="checkbox"><span>Do not ask again</span></label></div><div class="dialog-foot confirm-foot"><button id="exitHomeNo" type="button" class="btn" data-close="exitHomeDialog">No</button><div class="confirm-actions"><button id="exitHomeYes" type="button" class="btn dark">Yes</button></div></div></dialog>
 <dialog id="projectSwitchDialog" class="confirm-dialog" aria-labelledby="psTitle"><div class="dialog-head"><div><span class="eyebrow">OPEN PROJECT</span><h2 id="psTitle">How would you like to open this project?</h2></div><button class="icon-btn" type="button" data-close="projectSwitchDialog" aria-label="Cancel">×</button></div><div class="confirm-body"><p id="psText">You currently have <strong id="psCurrentProject">Counter demo</strong> open in this window.</p><p id="psDetail" class="hint">Open in a new Trace window to keep both projects running independently, or switch in this window.</p></div><div class="dialog-foot confirm-foot"><button id="psCancel" type="button" class="btn" data-close="projectSwitchDialog">Cancel</button><div class="confirm-actions"><button id="psNewWindow" type="button" class="btn">New Window ↗</button><button id="psDiscard" type="button" class="btn confirm-discard">Discard &amp; Open Here</button><button id="psSave" type="button" class="btn dark">Save &amp; Open Here</button></div></div></dialog>
-<dialog id="keysDialog"><div class="dialog-head"><h2>Keyboard shortcuts</h2><button class="icon-btn" data-close="keysDialog" aria-label="Close shortcuts">×</button></div><div class="about-content"><dl><dt>Editor &amp; Files</dt><dd><code>Ctrl+S</code> Save File · <code>Ctrl+Alt+S</code> Save File As · <code>Ctrl+Shift+S</code> Save Project (.qpf/.qsf) · <code>Ctrl+O</code> Add / Open Files · <code>Ctrl+Alt+N</code> New File · <code>F2</code> Rename selected file/folder · <code>F7</code> Build &amp; Compile · <code>Ctrl+B</code> Flash compiled design to board · <code>Ctrl+/</code> Toggle comment · <code>Tab</code> / <code>Shift+Tab</code> Indent / outdent · <code>Alt+↑/↓</code> Move line · <code>Ctrl+E</code> Toggle editor pane · <code>Alt+B</code> Toggle 3D board viewport · <code>F11</code> Toggle Full Screen</dd><dt>Simulation &amp; Board</dt><dd><code>Space</code> Run / Pause · <code>.</code> Step cycle · Hold <code>1–4</code> Tactile keys S1–S4 · <code>Alt+1–4</code> Toggle DIP 1–4 · Hold <code>R</code> Reset · <code>V</code> Interact / Select mode · <code>F</code> Center selected part · <code>P</code> Photo Studio · <code>H</code> Toggle Photo Studio HUD · <code>Esc</code> Exit Photo Studio / dismiss popups</dd></dl></div></dialog>
+<dialog id="keysDialog"><div class="dialog-head"><h2>Keyboard shortcuts</h2><button class="icon-btn" data-close="keysDialog" aria-label="Close shortcuts">×</button></div><div class="about-content"><dl><dt>Editor &amp; Files (VS Code Standard)</dt><dd><code>Ctrl+S</code> Save File · <code>Ctrl+Alt+S</code> Save File As · <code>Ctrl+Shift+S</code> Save Project (.qpf/.qsf) · <code>Ctrl+O</code> Add / Open Files · <code>Ctrl+Alt+N</code> New File · <code>Ctrl+W</code> Close Active Tab · <code>Ctrl+Tab</code> / <code>Ctrl+Shift+Tab</code> Next / Prev Tab · <code>Alt+Z</code> Toggle Word Wrap · <code>Ctrl+/</code> Toggle Line Comment · <code>Shift+Alt+↑/↓</code> Duplicate Line · <code>Alt+↑/↓</code> Move Line · <code>Ctrl+Shift+K</code> Delete Line · <code>Ctrl+D</code> Select Word · <code>Ctrl+L</code> Select Line · <code>Tab</code> / <code>Shift+Tab</code> Indent / Outdent · <code>F2</code> Rename in Explorer</dd><dt>IDE Layout &amp; Panels</dt><dd><code>F7</code> / <code>Ctrl+Shift+B</code> Build &amp; Compile · <code>Ctrl+B</code> Flash to Board · <code>Ctrl+Shift+E</code> Project Explorer · <code>Ctrl+`</code> Toggle Integrated Terminal · <code>Ctrl+E</code> Toggle Editor Pane · <code>Alt+B</code> Toggle 3D Board Viewport · <code>F11</code> Toggle Full Screen</dd><dt>Simulation &amp; 3D Board</dt><dd><code>Space</code> Run / Pause · <code>.</code> Step cycle · Hold <code>1–4</code> Tactile keys S1–S4 · <code>Alt+1–4</code> Toggle DIP 1–4 · Hold <code>R</code> Reset · <code>V</code> Interact / Select mode · <code>F</code> Center selected part · <code>P</code> Photo Studio · <code>H</code> Toggle Photo Studio HUD · <code>Esc</code> Exit Photo Studio / dismiss popups</dd></dl></div></dialog>
+<dialog id="fileBrowserDialog" class="fb-dialog" aria-labelledby="fbTitle">
+  <div class="dialog-head">
+    <div><span id="fbEyebrow" class="eyebrow">FILE EXPLORER</span><h2 id="fbTitle">Browse Files &amp; Folders</h2></div>
+    <button class="icon-btn" type="button" data-close="fileBrowserDialog" aria-label="Close file explorer">×</button>
+  </div>
+  <div class="fb-toolbar">
+    <button id="fbUpBtn" type="button" class="icon-btn small" title="Up one folder (Backspace)" aria-label="Parent folder">↑</button>
+    <button id="fbRefreshBtn" type="button" class="icon-btn small" title="Refresh folder" aria-label="Refresh">↻</button>
+    <form id="fbPathForm" class="fb-path-form">
+      <input id="fbPathInput" class="search mono fb-path-input" type="text" placeholder="C:\…" aria-label="Current folder path" spellcheck="false" autocomplete="off">
+      <button type="submit" class="btn">Go</button>
+    </form>
+    <button id="fbNewFolderBtn" type="button" class="btn" title="Create new folder in current directory">+ New Folder</button>
+    <input id="fbFilterInput" class="search fb-filter-input" type="search" placeholder="Filter current folder…" aria-label="Filter items in current folder">
+  </div>
+  <form id="fbMkdirForm" class="fb-mkdir-bar hidden">
+    <span class="mono">New folder name:</span>
+    <input id="fbMkdirInput" class="search mono" type="text" placeholder="my_fpga_project" spellcheck="false" autocomplete="off">
+    <button type="submit" class="btn dark">Create</button>
+    <button id="fbMkdirCancel" type="button" class="btn">Cancel</button>
+  </form>
+  <div class="fb-body">
+    <aside id="fbPlaces" class="fb-places" aria-label="Quick access locations"></aside>
+    <div class="fb-main">
+      <div id="fbCrumbs" class="fb-crumbs mono"></div>
+      <div class="fb-table-wrap">
+        <table class="fb-table">
+          <thead><tr><th>Name</th><th>Type</th><th>Size</th></tr></thead>
+          <tbody id="fbList"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="dialog-foot confirm-foot fb-foot">
+    <label id="fbFileNameWrap" class="fb-filename-wrap">
+      <span id="fbFileNameLabel">File name:</span>
+      <input id="fbFileNameInput" class="search mono" type="text" spellcheck="false" autocomplete="off">
+    </label>
+    <span id="fbSelectionHint" class="hint mono"></span>
+    <div class="confirm-actions">
+      <button id="fbCancelBtn" type="button" class="btn" data-close="fileBrowserDialog">Cancel</button>
+      <button id="fbConfirmBtn" type="button" class="btn dark">Select</button>
+    </div>
+  </div>
+</dialog>
 <dialog id="explorerActionDialog" class="confirm-dialog" aria-labelledby="eaTitle"><div class="dialog-head"><div><span id="eaEyebrow" class="eyebrow">FILE EXPLORER</span><h2 id="eaTitle">Rename</h2></div><button class="icon-btn" type="button" data-close="explorerActionDialog" aria-label="Cancel">×</button></div><form id="eaForm"><div class="confirm-body"><p id="eaText"></p><input id="eaInput" class="search mono hidden" autocomplete="off" spellcheck="false"><p id="eaHint" class="hint hidden"></p></div><div class="dialog-foot confirm-foot"><button id="eaCancel" type="button" class="btn" data-close="explorerActionDialog">Cancel</button><div class="confirm-actions"><button id="eaConfirm" type="submit" class="btn dark">Confirm</button></div></div></form></dialog>
 <div id="explorerMenu" class="ctx-menu hidden" role="menu" aria-label="Explorer context menu"></div>
 <dialog id="aboutDialog"><div class="dialog-head"><h2>What this lab models</h2><button class="icon-btn" data-close="aboutDialog" aria-label="Close capabilities">×</button></div><div class="about-content"><p class="intro">A digital workbench.<br>Not a physical circuit solver.</p><dl><dt>Logic & timing</dt><dd>VHDL compiled and executed by the installed GHDL engine, connected through a native VPI bridge. Nine-state logic, native assertions, event timing, ideal clock stimulus and native VCD capture. The website itself is not a certified verification tool.</dd><dt>Board visualization</dt><dd>Photo-referenced component layout, active-low keys and LEDs, and multiplexed display persistence. The model is illustrative, not a dimensionally certified CAD model.</dd><dt>Not simulated</dt><dd>Voltage, current, power consumption, analog transients, signal integrity, metastability, thermal behavior, or FPGA place-and-route timing. Peripheral chips are visual references, not complete electronic models.</dd><dt>Files & projects</dt><dd>VHD/VHDL and VHO netlists compile locally; vendor netlists require their matching VHDL primitive libraries. CF files are GHDL indexes: include their source files and set the correct libraries. QSF imports pin assignments, not a Quartus build. SDF requires matching VITAL timing models and an instance path. HEX/MIF/MEM/TXT/DAT files are provided to the testbench as data; they do not configure the FPGA. VCD replays digital and real traces with selectable board scope. Verilog/SystemVerilog and proprietary bitstreams cannot execute in this GHDL installation.</dd><dt>Resource limits</dt><dd>Four simultaneous simulations, 100 source/data files, 512 observed native signals, 4096 bits per signal, 16 hierarchy levels. Live sessions use rolling in-memory VCD history (up to 25,000 timestamps) so continuous runs never hit disk-file size limits; VCD replay accepts 32 MB and 250,000 timestamps. Native simulation runs up to ~5 hours of 64-bit femtosecond time per session; high-frequency clocks (such as 50 MHz) automatically burst-step at maximum CPU throughput with adaptive decimated sampling.</dd><dt>Local execution</dt><dd>Run only trusted HDL. GHDL testbenches execute locally and may access files; this workbench is not a security sandbox. Projects autosave in this browser and can be exported as JSON; simulation processes and waveform history are not restored after closing the page.</dd><dt>Physical hardware</dt><dd>No JTAG connection. SOF/POF files are inspected, never “programmed.” Verify pin assignments and I/O standards against your exact board schematic before using real hardware.</dd></dl></div></dialog>
 <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-<input id="fileInput" type="file" multiple accept=".vhd,.vhdl,.vho,.qsf,.sof,.pof,.vo,.v,.sv,.vcd,.cf,.sdf,.hex,.mif,.mem,.txt,.dat,.json" hidden>
+<input id="fileInput" type="file" multiple accept=".vhd,.vhdl,.vho,.qsf,.sof,.pof,.vo,.v,.sv,.vcd,.cf,.sdf,.hex,.mif,.mem,.txt,.dat,.md,.json" hidden>
 <script type="module" src="/src/main.js"></script>
 </body>
 </html>

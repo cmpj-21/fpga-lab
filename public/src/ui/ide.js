@@ -1,5 +1,5 @@
 // IDE shell controller: resizable panes, multi-tab VHDL code editor, problems diagnostics, menus and status bar.
-import { CodeEditor } from './editor.js';
+import { CodeEditor, renderMarkdownHtml } from './editor.js';
 import { DEMO_SRC, DEMO_TOP } from './demo.js';
 
 const $ = selector => document.querySelector(selector);
@@ -7,7 +7,7 @@ const $$ = selector => [...document.querySelectorAll(selector)];
 const LAYOUT_KEY = 'trace.layout.v1';
 const RECENTS_KEY = 'trace.recents.v1';
 const DEFAULT_LAYOUT = { leftW: 256, editorFrac: 42, panelH: 245 };
-const NAME_PATTERN = /^(?:[a-z0-9_][a-z0-9_. -]*\/)*[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i;
+const NAME_PATTERN = /^(?:[a-z0-9_][a-z0-9_. -]*\/)*[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat|md)$/i;
 const STANDARDS = { '93': 'VHDL-1993', '02': 'VHDL-2002', '08': 'VHDL-2008' };
 const FORBIDDEN_SEG = /[<>:"\\|?*\x00-\x1f]/;
 function cleanRelPath(raw) {
@@ -225,6 +225,10 @@ export function parseDiagnostics(text) {
 }
 
 function template(name) {
+  if (/\.md$/i.test(name)) {
+    const title = baseNameOf(name).replace(/\.[^.]+$/, '') || 'Notes';
+    return `# ${title}\n\n## Overview\nAdd your FPGA lab notes, pinout documentation, or test results here.\n`;
+  }
   if (!/\.(vhd|vhdl)$/i.test(name)) return '';
   let entity = baseNameOf(name).replace(/\.[^.]+$/, '').replace(/[^a-z0-9_]/gi, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
   if (!/^[a-z]/i.test(entity)) entity = 'e_' + entity;
@@ -236,6 +240,8 @@ export function createIde(api) {
   const docs = new Map();
   const tabs = [];
   let active = null, problems = [], cursor = null, layout = { ...DEFAULT_LAYOUT };
+  let wordWrap = false, mdMode = 'view';
+  try { wordWrap = localStorage.getItem('trace.wordWrap') === '1'; } catch {}
   try { layout = { ...DEFAULT_LAYOUT, ...JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}') }; } catch {}
   const saveLayout = () => {
     try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch {}
@@ -244,7 +250,7 @@ export function createIde(api) {
   const find = name => S.sources.find(source => source.name === name) || S.sources.find(source => source.name.toLowerCase() === String(name || '').toLowerCase());
   const findByDiagFile = file => find(file) || S.sources.find(source => baseNameOf(source.name).toLowerCase() === baseNameOf(file).toLowerCase());
   const libraryOf = source => source?.library || 'work';
-  const languageFor = name => /\.(vhd|vhdl|vho)$/i.test(name || '') ? 'vhdl' : /\.(qsf|qpf)$/i.test(name || '') ? 'qsf' : 'plain';
+  const languageFor = name => /\.(vhd|vhdl|vho)$/i.test(name || '') ? 'vhdl' : /\.(qsf|qpf)$/i.test(name || '') ? 'qsf' : /\.md$/i.test(name || '') ? 'markdown' : 'plain';
   const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
 
   const fallbackTextarea = document.createElement('textarea');
@@ -473,11 +479,52 @@ export function createIde(api) {
     renderExplorerState();
   }
   function renderExplorerState() {
-    $$('#srcList .tree-row[data-type="file"]').forEach(item => {
+    $$('#srcList .tree-row').forEach(item => {
       const rel = item.dataset.rel;
-      item.classList.toggle('active', rel === active);
-      item.classList.toggle('dirty', isDirty(rel));
+      const type = item.dataset.type;
+      const isSel = !!(selectedNode && selectedNode.rel === rel && selectedNode.type === type);
+      item.classList.toggle('selected', isSel);
+      if (type === 'file') {
+        item.classList.toggle('active', rel === active);
+        item.classList.toggle('dirty', isDirty(rel));
+      }
     });
+  }
+  function syncWordWrapUI() {
+    const btn = $('#btnWordWrap');
+    if (btn) {
+      btn.classList.toggle('active', wordWrap);
+      btn.setAttribute('aria-pressed', String(wordWrap));
+    }
+  }
+  function toggleWordWrap(force) {
+    wordWrap = force !== undefined ? !!force : !wordWrap;
+    try { localStorage.setItem('trace.wordWrap', wordWrap ? '1' : '0'); } catch {}
+    api.persistAppState?.({ wordWrap });
+    for (const doc of docs.values()) doc.editor.setWordWrap(wordWrap);
+    syncWordWrapUI();
+  }
+  function syncMarkdownView() {
+    const isMd = !!(active && /\.md$/i.test(active) && docs.has(active));
+    $('#mdModeSwitch')?.classList.toggle('hidden', !isMd);
+    $$('#mdModeSwitch [data-md-mode]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mdMode === mdMode);
+    });
+    const preview = $('#mdPreviewPane');
+    if (!preview) return;
+    if (isMd && mdMode === 'view') {
+      const doc = docs.get(active);
+      preview.innerHTML = renderMarkdownHtml(doc.editor.value);
+      preview.classList.remove('hidden');
+      doc.editor.show(false);
+    } else {
+      preview.classList.add('hidden');
+      if (active && docs.has(active)) docs.get(active).editor.show(true);
+    }
+  }
+  function setMarkdownMode(mode = 'view') {
+    mdMode = mode === 'raw' ? 'raw' : 'view';
+    syncMarkdownView();
   }
   function updateStatus() {
     if ($('#sbCursor')) {
@@ -489,6 +536,7 @@ export function createIde(api) {
   function activate(name) {
     if (!docs.has(name)) return;
     active = name;
+    selectedNode = { type: 'file', rel: name, name: baseNameOf(name) };
     for (const [other, doc] of docs) {
       doc.editor.show(other === name);
       if (other === name) doc.editor.input.id = 'sourceEditor'; else doc.editor.input.removeAttribute('id');
@@ -504,6 +552,7 @@ export function createIde(api) {
     $('#editorBar')?.classList.remove('hidden');
     $('#editorEmpty')?.classList.add('hidden');
     cursor = doc.editor.cursor();
+    syncMarkdownView();
     renderTabs(); updateStatus();
   }
   function mountDocTab(name, text, { library = 'work', diskOnly = false, line = 0, col = 1, focus = true } = {}) {
@@ -514,6 +563,8 @@ export function createIde(api) {
     if (!doc) {
       const editor = new CodeEditor($('#editorHost'), {
         language: languageFor(name),
+        wordWrap,
+        onToggleWrap: () => toggleWordWrap(),
         onChange: () => {
           const current = docs.get(name);
           if (!current) return;
@@ -577,8 +628,10 @@ export function createIde(api) {
       const next = tabs[Math.min(index, tabs.length - 1)];
       if (next) activate(next);
       else {
+        if (selectedNode?.type === 'file' && selectedNode.rel === name) selectedNode = null;
         syncFallbackId();
         $('#editorBar')?.classList.add('hidden');
+        $('#mdPreviewPane')?.classList.add('hidden');
         $('#editorEmpty')?.classList.remove('hidden');
         if ($('#sourceName')) $('#sourceName').textContent = '';
         if ($('#editorCrumb')) $('#editorCrumb').textContent = '';
@@ -713,15 +766,16 @@ export function createIde(api) {
       return false;
     }
     try {
-      const pickRes = await fetch('/api/project/pick-save-file', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ initialDir: S.projectDir || '', defaultName: baseNameOf(name) }),
+      const picked = await openFileBrowserModal({
+        mode: 'save-file',
+        title: 'Save File As',
+        eyebrow: 'SAVE FILE AS',
+        initialDir: S.projectDir || '',
+        defaultName: baseNameOf(name),
+        confirmText: 'Save File',
       });
-      const picked = await pickRes.json();
-      if (!pickRes.ok) throw new Error(picked.error || 'Save dialog failed.');
-      const targetPath = picked.filePath || picked.file;
-      if (picked.cancelled || !targetPath) return false;
+      const targetPath = picked?.filePath || picked?.file;
+      if (!picked || picked.cancelled || !targetPath) return false;
       const writeRes = await fetch('/api/project/write-path', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1718,6 +1772,29 @@ export function createIde(api) {
       return;
     }
     for (const group of groups) {
+      const card = document.createElement('div');
+      card.className = 'home-hdl-group';
+      const head = document.createElement('div');
+      head.className = 'hhg-head';
+      const titleSpan = document.createElement('span');
+      titleSpan.className = 'hhg-title mono';
+      titleSpan.textContent = group.dir === '.' ? 'Workspace Root' : group.dir;
+      head.append(titleSpan);
+      const qpfFile = group.files.find(f => f.kind === 'qpf') || group.files.find(f => f.kind === 'qsf');
+      if (qpfFile && api.openProjectFromDiskPath) {
+        const openProjBtn = document.createElement('button');
+        openProjBtn.type = 'button';
+        openProjBtn.className = 'hhg-open-btn';
+        openProjBtn.textContent = 'Open Project →';
+        openProjBtn.onclick = e => {
+          e.stopPropagation();
+          api.openProjectFromDiskPath(qpfFile.rel);
+        };
+        head.append(openProjBtn);
+      }
+      card.append(head);
+      const filesBox = document.createElement('div');
+      filesBox.className = 'hhg-files';
       for (const file of group.files) {
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -1728,11 +1805,11 @@ export function createIde(api) {
         kind.textContent = file.kind.toUpperCase();
         const pathSpan = document.createElement('span');
         pathSpan.className = 'mono';
-        pathSpan.textContent = `${group.dir}/${file.name}`;
+        pathSpan.textContent = file.name;
         btn.append(kind, pathSpan);
         btn.onclick = async () => {
           try {
-            if (file.kind === 'qpf' && api.openProjectFromDiskPath) {
+            if ((file.kind === 'qpf' || file.kind === 'qsf') && api.openProjectFromDiskPath) {
               await api.openProjectFromDiskPath(file.rel);
               return;
             }
@@ -1742,12 +1819,347 @@ export function createIde(api) {
             const response = await fetch('/api/hdl/file?path=' + encodeURIComponent(file.rel));
             if (!response.ok) throw new Error('File could not be read.');
             showHome(false);
+            if (/\.md$/i.test(file.name)) {
+              const mdText = await response.text();
+              mountDocTab(file.name, mdText, { diskOnly: true });
+              setMarkdownMode('view');
+              return;
+            }
             await api.loadFiles([new File([await response.blob()], file.name)]);
             captureBaseline(file.name.replace(/\.[^.]+$/, ''), { prevRecents, prevStorage });
           } catch (e) { api.toast(e.message, 'err'); }
         };
-        container.append(btn);
+        filesBox.append(btn);
       }
+      card.append(filesBox);
+      container.append(card);
+    }
+  }
+
+  async function openTutorial() {
+    try {
+      const res = await fetch('/api/tutorial');
+      const data = await res.json();
+      if (!res.ok || !data.text) throw new Error('Could not load TUTORIAL.md.');
+      showHome(false);
+      if (!$('#sourceDialog')?.open) setEditorPaneOpen(true);
+      mountDocTab('TUTORIAL.md', data.text, { diskOnly: true, focus: false });
+      setMarkdownMode('view');
+    } catch (e) {
+      api.toast(e.message, 'err');
+    }
+  }
+
+  function cycleTab(delta = 1) {
+    if (tabs.length < 2) return;
+    const idx = Math.max(0, tabs.indexOf(active));
+    const nextIdx = (idx + delta + tabs.length) % tabs.length;
+    activate(tabs[nextIdx]);
+  }
+
+  // ---------- in-app native GUI file explorer modal ----------
+  let fbState = {
+    resolve: null,
+    mode: 'folder',
+    curDir: '',
+    parentDir: null,
+    entries: [],
+    places: [],
+    selectedPath: '',
+    selectedType: '',
+    extensions: null,
+  };
+
+  function fmtBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  }
+
+  async function fbNavigate(dir = '') {
+    try {
+      const res = await fetch('/api/fs/browse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir, projectDir: S.projectDir || '' }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Could not browse folder.');
+      fbState.curDir = data.dir;
+      fbState.parentDir = data.parent;
+      fbState.entries = data.entries || [];
+      fbState.places = data.places || [];
+      if (fbState.mode === 'folder') {
+        fbState.selectedPath = data.dir;
+        fbState.selectedType = 'dir';
+      } else {
+        fbState.selectedPath = '';
+        fbState.selectedType = '';
+      }
+      renderFileBrowser();
+    } catch (e) {
+      api.toast(e.message, 'err');
+    }
+  }
+
+  function renderFileBrowser() {
+    if ($('#fbPathInput')) $('#fbPathInput').value = fbState.curDir;
+    if ($('#fbUpBtn')) $('#fbUpBtn').disabled = !fbState.parentDir;
+    const placesHost = $('#fbPlaces');
+    if (placesHost) {
+      placesHost.replaceChildren();
+      const iconFor = kind => ({ workspace: '◈', project: '★', docs: '▤', desktop: '▣', downloads: '↓', home: '⌂', drive: '⛁' }[kind] || '▸');
+      for (const p of fbState.places) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = `fb-place-btn${p.path.toLowerCase() === fbState.curDir.toLowerCase() ? ' active' : ''}`;
+        btn.title = p.path;
+        const ico = document.createElement('span');
+        ico.className = 'fb-place-ico';
+        ico.textContent = iconFor(p.kind);
+        const lbl = document.createElement('span');
+        lbl.textContent = p.label;
+        btn.append(ico, lbl);
+        btn.onclick = () => fbNavigate(p.path);
+        placesHost.append(btn);
+      }
+    }
+    const crumbsHost = $('#fbCrumbs');
+    if (crumbsHost) {
+      crumbsHost.replaceChildren();
+      const parts = fbState.curDir.split(/[\\/]/).filter(Boolean);
+      let accum = '';
+      parts.forEach((seg, i) => {
+        accum = i === 0 && seg.endsWith(':') ? `${seg}\\` : `${accum.replace(/\\$/, '')}\\${seg}`;
+        const target = accum;
+        if (i > 0) {
+          const sep = document.createElement('span');
+          sep.textContent = '›';
+          crumbsHost.append(sep);
+        }
+        const cBtn = document.createElement('button');
+        cBtn.type = 'button';
+        cBtn.className = 'fb-crumb';
+        cBtn.textContent = seg;
+        cBtn.onclick = () => fbNavigate(target);
+        crumbsHost.append(cBtn);
+      });
+    }
+    const listHost = $('#fbList');
+    if (!listHost) return;
+    listHost.replaceChildren();
+    const q = ($('#fbFilterInput')?.value || '').trim().toLowerCase();
+    const filtered = fbState.entries.filter(item => {
+      if (q && !item.name.toLowerCase().includes(q)) return false;
+      if (fbState.mode === 'folder') return item.type === 'dir';
+      if (item.type === 'file' && Array.isArray(fbState.extensions) && fbState.extensions.length) {
+        return fbState.extensions.includes(item.ext);
+      }
+      return true;
+    });
+    if (!filtered.length) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 3;
+      td.className = 'empty';
+      td.textContent = fbState.mode === 'folder' ? 'No subfolders in this directory (click Select Folder below to choose this directory).' : 'No matching files or folders in this directory.';
+      tr.append(td);
+      listHost.append(tr);
+    }
+    for (const item of filtered) {
+      const tr = document.createElement('tr');
+      const isSel = fbState.selectedPath && fbState.selectedPath.toLowerCase() === item.path.toLowerCase();
+      tr.className = `fb-row${isSel ? ' selected' : ''}`;
+      const nameTd = document.createElement('td');
+      const nameWrap = document.createElement('div');
+      nameWrap.className = 'fb-name-cell';
+      const badge = document.createElement('span');
+      badge.className = `fb-badge ${item.type === 'dir' ? 'dir' : item.ext}`;
+      badge.textContent = item.type === 'dir' ? 'DIR' : (item.ext || 'FILE').slice(0, 5).toUpperCase();
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'mono';
+      nameSpan.textContent = item.name;
+      nameWrap.append(badge, nameSpan);
+      nameTd.append(nameWrap);
+      const typeTd = document.createElement('td');
+      typeTd.textContent = item.type === 'dir' ? 'Folder' : `${(item.ext || 'File').toUpperCase()} File`;
+      const sizeTd = document.createElement('td');
+      sizeTd.className = 'mono';
+      sizeTd.textContent = item.type === 'dir' ? '—' : fmtBytes(item.size);
+      tr.append(nameTd, typeTd, sizeTd);
+      tr.onclick = () => {
+        fbState.selectedPath = item.path;
+        fbState.selectedType = item.type;
+        if (item.type === 'file' && $('#fbFileNameInput')) {
+          $('#fbFileNameInput').value = item.name;
+        } else if (item.type === 'dir' && fbState.mode === 'folder' && $('#fbFileNameInput')) {
+          $('#fbFileNameInput').value = item.path;
+        }
+        renderFileBrowser();
+      };
+      tr.ondblclick = () => {
+        if (item.type === 'dir') {
+          fbNavigate(item.path);
+        } else {
+          fbState.selectedPath = item.path;
+          fbState.selectedType = 'file';
+          if ($('#fbFileNameInput')) $('#fbFileNameInput').value = item.name;
+          confirmFileBrowserSelection();
+        }
+      };
+      listHost.append(tr);
+    }
+    if (fbState.mode === 'folder' && $('#fbFileNameInput')) {
+      $('#fbFileNameInput').value = fbState.selectedPath || fbState.curDir;
+    }
+    if ($('#fbSelectionHint')) {
+      $('#fbSelectionHint').textContent = fbState.mode === 'folder'
+        ? `Target: ${fbState.selectedPath || fbState.curDir}`
+        : fbState.selectedPath ? baseNameOf(fbState.selectedPath.replace(/\\/g, '/')) : '';
+    }
+  }
+
+  async function confirmFileBrowserSelection() {
+    try {
+      let targetPath = '';
+      if (fbState.mode === 'folder') {
+        targetPath = ($('#fbFileNameInput')?.value || '').trim() || fbState.selectedPath || fbState.curDir;
+      } else if (fbState.mode === 'save-file') {
+        const fname = ($('#fbFileNameInput')?.value || '').trim();
+        if (!fname) { api.toast('Enter a file name first.', 'err'); return; }
+        targetPath = /^[a-z]:[\\/]/i.test(fname) ? fname : `${fbState.curDir.replace(/\\$/, '')}\\${fname}`;
+      } else {
+        if (fbState.selectedType === 'dir' && fbState.selectedPath && fbState.mode !== 'open-project') {
+          await fbNavigate(fbState.selectedPath);
+          return;
+        }
+        const typed = ($('#fbFileNameInput')?.value || '').trim();
+        targetPath = fbState.selectedPath || (typed ? (/^[a-z]:[\\/]/i.test(typed) ? typed : `${fbState.curDir.replace(/\\$/, '')}\\${typed}`) : '');
+        if (!targetPath) { api.toast('Select a file or project folder first.', 'err'); return; }
+      }
+      const res = await fetch('/api/fs/authorize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetPath, mode: fbState.mode }),
+      });
+      const auth = await res.json();
+      if (!res.ok || !auth.ok) throw new Error(auth.error || 'Invalid selection.');
+      const done = fbState.resolve;
+      fbState.resolve = null;
+      $('#fileBrowserDialog')?.close();
+      done?.(auth);
+    } catch (e) {
+      api.toast(e.message, 'err');
+    }
+  }
+
+  function openFileBrowserModal({
+    mode = 'folder',
+    title = 'Choose Folder',
+    eyebrow = 'FILE EXPLORER',
+    initialDir = '',
+    defaultName = '',
+    confirmText = 'Select',
+    extensions = null,
+  } = {}) {
+    const dlg = $('#fileBrowserDialog');
+    if (!dlg) return Promise.resolve({ cancelled: true });
+    if (fbState.resolve) {
+      const prev = fbState.resolve;
+      fbState.resolve = null;
+      prev({ cancelled: true });
+    }
+    fbState.mode = mode;
+    fbState.extensions = extensions;
+    fbState.selectedPath = '';
+    fbState.selectedType = '';
+    if ($('#fbEyebrow')) $('#fbEyebrow').textContent = eyebrow;
+    if ($('#fbTitle')) $('#fbTitle').textContent = title;
+    if ($('#fbConfirmBtn')) $('#fbConfirmBtn').textContent = confirmText;
+    if ($('#fbFileNameLabel')) {
+      $('#fbFileNameLabel').textContent = mode === 'folder' ? 'Folder:' : mode === 'open-project' ? 'Project (.qpf/.qsf):' : 'File name:';
+    }
+    if ($('#fbFileNameInput')) $('#fbFileNameInput').value = defaultName || '';
+    if ($('#fbFilterInput')) $('#fbFilterInput').value = '';
+    $('#fbMkdirForm')?.classList.add('hidden');
+    return new Promise(resolve => {
+      fbState.resolve = resolve;
+      if (!dlg.open) dlg.showModal();
+      fbNavigate(initialDir || S.projectDir || '');
+    });
+  }
+
+  // ---------- integrated terminal in tools dock ----------
+  let termCwd = '';
+  let termBusy = false;
+  const termHistory = [];
+  let termHistIdx = -1;
+
+  function appendTermLine(text, cls = '') {
+    const out = $('#termOut');
+    if (!out) return;
+    const div = document.createElement('div');
+    if (cls) div.className = cls;
+    div.textContent = text;
+    out.append(div);
+    out.scrollTop = out.scrollHeight;
+  }
+
+  function updateTermCwd(nextCwd) {
+    if (!nextCwd) return;
+    termCwd = nextCwd;
+    if ($('#termCwdBadge')) {
+      $('#termCwdBadge').textContent = termCwd;
+      $('#termCwdBadge').title = `Working directory: ${termCwd}`;
+    }
+    if ($('#termPromptLabel')) {
+      const leaf = termCwd.split(/[\\/]/).filter(Boolean).pop() || termCwd;
+      $('#termPromptLabel').textContent = `PS ${leaf}>`;
+      $('#termPromptLabel').title = termCwd;
+    }
+  }
+
+  async function runTerminalCommand(rawCmd) {
+    const cmd = String(rawCmd || '').trim();
+    if (!cmd) return;
+    termHistory.push(cmd);
+    termHistIdx = termHistory.length;
+    if (/^(cls|clear)$/i.test(cmd)) {
+      $('#termOut')?.replaceChildren();
+      return;
+    }
+    const targetCwd = termCwd || S.projectDir || '';
+    appendTermLine(`PS ${targetCwd || '.'}> ${cmd}`, 'term-line-cmd');
+    termBusy = true;
+    $('#termKillBtn')?.classList.remove('hidden');
+    try {
+      const res = await fetch('/api/terminal/exec', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: cmd, cwd: targetCwd }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Terminal command failed.');
+      if (data.cwd) updateTermCwd(data.cwd);
+      if (data.stdout && data.stdout.trim()) appendTermLine(data.stdout.replace(/\r?\n$/, ''));
+      if (data.stderr && data.stderr.trim()) appendTermLine(data.stderr.replace(/\r?\n$/, ''), 'term-line-err');
+    } catch (e) {
+      appendTermLine(e.message, 'term-line-err');
+    } finally {
+      termBusy = false;
+      $('#termKillBtn')?.classList.add('hidden');
+    }
+  }
+
+  function toggleTerminalPane() {
+    const isTermOpen = !$('#right')?.classList.contains('hidden') && $('#rtab-terminal')?.classList.contains('active');
+    if (isTermOpen) {
+      $('#closeRight')?.click();
+    } else {
+      api.openTools('terminal');
+      if (!termCwd && S.projectDir) updateTermCwd(S.projectDir);
+      requestAnimationFrame(() => $('#termInput')?.focus());
     }
   }
 
@@ -1770,9 +2182,13 @@ export function createIde(api) {
     undo: () => { docs.get(active)?.editor.focus(); document.execCommand('undo'); },
     redo: () => { docs.get(active)?.editor.focus(); document.execCommand('redo'); },
     comment: () => docs.get(active)?.editor.toggleComment(),
+    dupLine: () => docs.get(active)?.editor.duplicateLines?.(1),
+    delLine: () => docs.get(active)?.editor.deleteLines?.(),
+    wordWrap: () => toggleWordWrap(),
     viewExplorer: () => $('#btnLibrary').click(),
     viewPins: () => $('#btnPins').click(),
     panelWaves: () => api.openBottomTab?.('waves'),
+    panelTerminal: () => toggleTerminalPane(),
     panelProblems: () => api.openTools('problems'),
     panelConsole: () => api.openTools('console'),
     panelPinout: () => api.openTools('pinout'),
@@ -1792,6 +2208,7 @@ export function createIde(api) {
     restart: () => $('#btnReset').click(),
     step: () => $('#btnStep').click(),
     run: () => $('#btnRun').click(),
+    tutorial: () => openTutorial(),
     limits: () => $('#btnLimits').click(),
     shortcuts: () => $('#keysDialog')?.showModal(),
   };
@@ -1887,6 +2304,108 @@ export function createIde(api) {
     if ($('#saveFileBtn')) $('#saveFileBtn').onclick = () => saveActiveFile();
     $('#saveSource').onclick = saveAndCompile;
     if ($('#btnFlash')) $('#btnFlash').onclick = () => api.flashToBoard?.();
+    $('#btnWordWrap')?.addEventListener('click', () => toggleWordWrap());
+    syncWordWrapUI();
+    $$('#mdModeSwitch [data-md-mode]').forEach(btn => {
+      btn.addEventListener('click', () => setMarkdownMode(btn.dataset.mdMode));
+    });
+    // Native GUI File Explorer Modal wiring
+    $('#fbUpBtn')?.addEventListener('click', () => { if (fbState.parentDir) fbNavigate(fbState.parentDir); });
+    $('#fbRefreshBtn')?.addEventListener('click', () => fbNavigate(fbState.curDir));
+    $('#fbPathForm')?.addEventListener('submit', e => {
+      e.preventDefault();
+      const val = ($('#fbPathInput')?.value || '').trim();
+      if (val) fbNavigate(val);
+    });
+    $('#fbFilterInput')?.addEventListener('input', () => renderFileBrowser());
+    $('#fbNewFolderBtn')?.addEventListener('click', () => {
+      $('#fbMkdirForm')?.classList.toggle('hidden');
+      if (!$('#fbMkdirForm')?.classList.contains('hidden')) {
+        if ($('#fbMkdirInput')) $('#fbMkdirInput').value = '';
+        $('#fbMkdirInput')?.focus();
+      }
+    });
+    $('#fbMkdirCancel')?.addEventListener('click', () => $('#fbMkdirForm')?.classList.add('hidden'));
+    $('#fbMkdirForm')?.addEventListener('submit', async e => {
+      e.preventDefault();
+      const name = ($('#fbMkdirInput')?.value || '').trim();
+      if (!name) return;
+      try {
+        const res = await fetch('/api/fs/mkdir', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dir: fbState.curDir, name }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || 'Could not create folder.');
+        $('#fbMkdirForm')?.classList.add('hidden');
+        await fbNavigate(data.dir);
+        api.toast(`Created folder "${data.name}".`, 'ok');
+      } catch (err) {
+        api.toast(err.message, 'err');
+      }
+    });
+    $('#fbConfirmBtn')?.addEventListener('click', () => confirmFileBrowserSelection());
+    $('#fbFileNameInput')?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); confirmFileBrowserSelection(); }
+    });
+    $('#fileBrowserDialog')?.addEventListener('close', () => {
+      if (fbState.resolve) {
+        const done = fbState.resolve;
+        fbState.resolve = null;
+        done({ cancelled: true });
+      }
+    });
+    // Integrated Terminal wiring
+    appendTermLine('Trace FPGA Workbench Integrated Shell (PowerShell · GHDL / GCC / Node on PATH)', 'term-line-info');
+    $('#termForm')?.addEventListener('submit', e => {
+      e.preventDefault();
+      const inp = $('#termInput');
+      if (!inp || termBusy) return;
+      const cmd = inp.value;
+      inp.value = '';
+      runTerminalCommand(cmd);
+    });
+    $('#termInput')?.addEventListener('keydown', e => {
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (termHistory.length && termHistIdx > 0) {
+          termHistIdx--;
+          e.target.value = termHistory[termHistIdx] || '';
+        }
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (termHistIdx < termHistory.length - 1) {
+          termHistIdx++;
+          e.target.value = termHistory[termHistIdx] || '';
+        } else {
+          termHistIdx = termHistory.length;
+          e.target.value = '';
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        $('#termOut')?.replaceChildren();
+      } else if (e.ctrlKey && e.key.toLowerCase() === 'c' && termBusy) {
+        e.preventDefault();
+        fetch('/api/terminal/kill', { method: 'POST' }).catch(() => {});
+      }
+    });
+    $('#termClearBtn')?.addEventListener('click', () => $('#termOut')?.replaceChildren());
+    $('#termCopyBtn')?.addEventListener('click', async () => {
+      const text = $('#termOut')?.innerText || '';
+      try { await navigator.clipboard.writeText(text); api.toast('Copied terminal output.'); } catch {}
+    });
+    $('#termKillBtn')?.addEventListener('click', () => {
+      fetch('/api/terminal/kill', { method: 'POST' }).catch(() => {});
+    });
+    $('#termCdProject')?.addEventListener('click', () => {
+      if (S.projectDir) {
+        updateTermCwd(S.projectDir);
+        appendTermLine(`Working directory set to ${S.projectDir}`, 'term-line-info');
+      } else {
+        api.toast('Save or open a project folder on disk first.');
+      }
+    });
     $('#sourceLibrary').oninput = event => {
       const doc = docs.get(active);
       if (doc) {
@@ -1957,6 +2476,8 @@ export function createIde(api) {
     $('#psCancel')?.addEventListener('click', () => { pendingSwitch = null; });
     $('#homeThemeBtn')?.addEventListener('click', () => $('#btnTheme')?.click());
     $('#homeAboutBtn')?.addEventListener('click', () => $('#btnAbout')?.click());
+    $('#homeTutorialBtn')?.addEventListener('click', () => openTutorial());
+    $('#homeShortcutsBtn')?.addEventListener('click', () => $('#keysDialog')?.showModal());
     $('#homeOpenProjectBtn')?.addEventListener('click', () => api.openProjectFromDiskPath?.());
     $('#homeOpenBtn')?.addEventListener('click', () => $('#fileInput')?.click());
     $('#homeDemoBtn')?.addEventListener('click', () => {
@@ -1992,13 +2513,28 @@ export function createIde(api) {
     });
     $$('[data-starter]').forEach(btn => btn.addEventListener('click', () => {
       const kind = btn.dataset.starter;
-      const names = { counter: ['Counter & 7-Seg Demo', DEMO_TOP, '93'], board_io: ['Board I/O Starter', 'board_top', '08'], keys_leds: ['Keys & LEDs Logic', 'keys_leds', '08'], uart_tx: ['UART Transmitter', 'uart_hello', '08'] };
+      const names = {
+        counter: ['Counter & 7-Seg Demo', DEMO_TOP, '93'],
+        board_io: ['Board I/O Starter', 'board_top', '08'],
+        keys_leds: ['Keys & LEDs Logic', 'keys_leds', '08'],
+        buzzer: ['Piezo Buzzer Synth', 'buzzer_top', '08'],
+        uart_tx: ['UART Transmitter', 'uart_hello', '08'],
+        blank: ['FPGA Lab Starter', 'fpga_lab', '08'],
+      };
       const [title, ent, std] = names[kind] || ['FPGA Starter', 'fpga_lab', '08'];
       launchTemplateProject({ name: title, entity: ent, standard: std, templateKind: kind });
     }));
     $('#homeHdlSearch')?.addEventListener('input', e => {
       const q = e.target.value.toLowerCase();
-      $$('#homeHdlList .home-hdl-item').forEach(item => { item.hidden = !item.dataset.search.includes(q); });
+      $$('#homeHdlList .home-hdl-group').forEach(grp => {
+        let anyVis = false;
+        grp.querySelectorAll('.home-hdl-item').forEach(item => {
+          const match = !q || item.dataset.search.includes(q);
+          item.hidden = !match;
+          if (match) anyVis = true;
+        });
+        grp.hidden = !anyVis;
+      });
     });
     renderProblems(); updateStatus(); syncEditorVisibility(); syncBoardVisibility();
   }
@@ -2014,6 +2550,7 @@ export function createIde(api) {
     refreshProjectTree, renderProjectTree, showNewFile, showNewFolder, closeExplorerMenu,
     setProblems, reportBuildFailure, resetLayout, setEditorPaneOpen, setBoardPaneOpen,
     showHome, requestReturnHome, requestProjectSwitch, requestAppClose, toggleAppFullscreen, setSkipHomeExitConfirm, openNewProjectWizard, resumeWorkbench, captureBaseline, currentProjectTitle, renderHome, recordRecentProject, populateHomeHdl,
+    openFileBrowserModal, toggleWordWrap, setMarkdownMode, openTutorial, cycleTab, toggleTerminalPane, updateTermCwd,
     get hasActiveSession() { return hasActiveSession; },
     get active() { return active; },
     get tabs() { return [...tabs]; },

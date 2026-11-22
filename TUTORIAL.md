@@ -618,16 +618,32 @@ The console's first compiler error is usually the best starting point. Fix that 
 
 | Key | Action |
 |---|---|
+| `Ctrl + S` / `Ctrl + Alt + S` | Save active file / Save active file as (via built-in GUI File Explorer) |
+| `Ctrl + Shift + S` | Save full FPGA project (`.qpf`, `.qsf`, and `.vhd` sources) |
+| `Ctrl + O` / `Ctrl + Alt + N` | Open files / Create new file in Explorer |
+| `Ctrl + W` | Close active editor tab |
+| `Ctrl + Tab` / `Ctrl + Shift + Tab` | Cycle to next / previous open editor tab |
+| `Alt + Z` | Toggle editor **Word Wrap** |
+| `Ctrl + /` | Toggle line comment (`--` for VHDL, `#` for `.qsf`/`.qpf`) |
+| `Alt + ↑` / `Alt + ↓` | Move current line or selection up / down |
+| `Shift + Alt + ↑` / `Shift + Alt + ↓` | Duplicate current line or selection up / down |
+| `Ctrl + Shift + K` | Delete current line |
+| `Ctrl + D` / `Ctrl + L` | Select current/next word occurrence / Select entire line |
+| `F7` / `Ctrl + Shift + B` | Build & Compile VHDL design |
+| `Ctrl + B` | Flash compiled design to the 3D devboard |
+| `Ctrl + \`` | Toggle built-in **Integrated Terminal** in the bottom Tools dock |
+| `Ctrl + Shift + E` | Toggle Project Explorer sidebar |
+| `Ctrl + E` / `Alt + B` | Toggle Code Editor pane / Toggle 3D Board viewport |
+| `F11` | Toggle Full Screen mode |
 | `Space` | Toggle Run/Pause when not editing a field or activating a focused button |
-| `.` | Step |
+| `.` | Step one clock cycle |
 | Hold `1`, `2`, `3`, `4` | Hold momentary tactile key S1, S2, S3, S4 respectively |
 | `Alt + 1`, `2`, `3`, `4` | Toggle latching DIP switch 1, 2, 3, 4 (ON/OFF, wired in parallel with S1–S4) |
 | Hold `R` | Hold the board's reset input |
 | `F` | Center and frame the 3D camera on the selected board component (or reset view if none is selected) |
 | `V` | Toggle the 3D viewport left-click mode between **Interact** and **Select** |
-| `P` | Toggle **Photo Studio** mode |
-| `H` | Hide or show the studio HUD overlays while inside **Photo Studio** |
-| `Escape` | Exit **Photo Studio**, clear the active 3D component selection, and dismiss open overlay panels |
+| `P` / `H` | Toggle **Photo Studio** mode / Hide or show Photo Studio HUD |
+| `Escape` | Exit **Photo Studio**, clear active 3D component selection, and dismiss open overlay panels |
 
 Mouse and touchpad: Ctrl/⌘ + wheel or pinch zooms the waveform plot around the pointer; Shift + wheel or a horizontal two-finger swipe pans the timeline. Firefox line-mode wheel deltas are normalized so panning has the same speed as other browsers.
 

@@ -36,7 +36,7 @@ async function readAppState() {
 }
 async function patchAppState(patch) {
   if (!patch || typeof patch !== 'object') return readAppState();
-  const allowed = ['recents', 'lastProject', 'theme', 'layout'];
+  const allowed = ['recents', 'lastProject', 'theme', 'layout', 'skipHomeExitConfirm', 'wordWrap'];
   let nextState = {};
   const op = stateWriteQueue.catch(() => {}).then(async () => {
     const current = await readAppState();
@@ -475,7 +475,7 @@ async function revealInExplorer({ dir, rel = '' }) {
   execFile('explorer.exe', args, { windowsHide: false }, () => {});
   return { ok: true };
 }
-const SAFE_SRC_NAME = /^(?:[a-z0-9_][a-z0-9_. -]*\/)*[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i;
+const SAFE_SRC_NAME = /^(?:[a-z0-9_][a-z0-9_. -]*\/)*[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat|md)$/i;
 function sanitizeProjectSlug(name, fallback = 'fpga_project') {
   const clean = String(name || '').trim().replace(/[^a-z0-9_-]/gi, '_').replace(/_+/g, '_').replace(/^[_-]+|[_-]+$/g, '');
   return clean || fallback;
@@ -698,7 +698,7 @@ async function hdlTree() {
       if (e.name.startsWith('.') || ['work', 'greybox_tmp', '.trace-build'].includes(e.name)) continue;
       const full = path.join(dir, e.name), r = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory() && depth < 4) await walk(full, r, depth + 1);
-      else if (e.isFile() && /\.(vhd|vhdl|qpf|qsf|sof|pof|vo|vho|vcd|cf|sdf|hex|mif|mem|txt|dat)$/i.test(e.name)) {
+      else if (e.isFile() && /\.(vhd|vhdl|qpf|qsf|sof|pof|vo|vho|vcd|cf|sdf|hex|mif|mem|txt|dat|md)$/i.test(e.name)) {
         const info = await fs.stat(full).catch(() => null);
         if (info) files.push({ name: e.name, rel: r, size: info.size, kind: path.extname(e.name).slice(1).toLowerCase() });
       }
@@ -707,6 +707,203 @@ async function hdlTree() {
   }
   await walk(hdlRoot, '', 0);
   return groups.sort((a, b) => a.dir.localeCompare(b.dir));
+}
+
+async function listSystemPlaces(projectDir = '') {
+  const places = [];
+  const addPlace = (label, dirPath, kind = 'folder') => {
+    if (!dirPath) return;
+    try {
+      const resolved = path.resolve(dirPath);
+      if (statSync(resolved).isDirectory() && !places.some(p => p.path.toLowerCase() === resolved.toLowerCase())) {
+        places.push({ label, path: resolved, kind });
+      }
+    } catch {}
+  };
+  addPlace('HDL Workspace', hdlRoot, 'workspace');
+  if (projectDir && path.isAbsolute(projectDir)) addPlace('Active Project', projectDir, 'project');
+  const home = os.homedir();
+  addPlace('Documents', path.join(home, 'Documents'), 'docs');
+  addPlace('Desktop', path.join(home, 'Desktop'), 'desktop');
+  addPlace('Downloads', path.join(home, 'Downloads'), 'downloads');
+  addPlace('Home', home, 'home');
+  if (process.platform === 'win32') {
+    for (let code = 67; code <= 90; code++) {
+      const letter = String.fromCharCode(code);
+      const driveRoot = `${letter}:\\`;
+      try {
+        if (statSync(driveRoot).isDirectory()) {
+          places.push({ label: `Local Disk (${letter}:)`, path: driveRoot, kind: 'drive' });
+        }
+      } catch {}
+    }
+  }
+  return places;
+}
+
+async function browseFileSystem({ dir = '', projectDir = '' } = {}) {
+  let target = '';
+  if (typeof dir === 'string' && dir.trim()) {
+    const cand = path.resolve(dir.trim());
+    const st = await fs.stat(cand).catch(() => null);
+    if (st?.isDirectory()) target = cand;
+    else if (st?.isFile()) target = path.dirname(cand);
+  }
+  if (!target && projectDir && path.isAbsolute(projectDir)) {
+    const st = await fs.stat(projectDir).catch(() => null);
+    if (st?.isDirectory()) target = path.resolve(projectDir);
+  }
+  if (!target) {
+    const st = await fs.stat(hdlRoot).catch(() => null);
+    target = st?.isDirectory() ? path.resolve(hdlRoot) : os.homedir();
+  }
+  const parentDir = path.dirname(target) !== target ? path.dirname(target) : null;
+  const rawEntries = await fs.readdir(target, { withFileTypes: true }).catch(() => []);
+  const dirs = [], files = [];
+  for (const e of rawEntries) {
+    if (e.name.startsWith('$') || e.name === 'System Volume Information') continue;
+    const full = path.join(target, e.name);
+    const info = await fs.stat(full).catch(() => null);
+    if (!info) continue;
+    if (info.isDirectory()) {
+      dirs.push({
+        type: 'dir',
+        name: e.name,
+        path: full,
+        mtime: info.mtimeMs || 0,
+      });
+    } else if (info.isFile()) {
+      files.push({
+        type: 'file',
+        name: e.name,
+        path: full,
+        ext: path.extname(e.name).slice(1).toLowerCase(),
+        size: info.size || 0,
+        mtime: info.mtimeMs || 0,
+      });
+    }
+  }
+  dirs.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  files.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  return {
+    ok: true,
+    dir: target,
+    parent: parentDir,
+    places: await listSystemPlaces(projectDir),
+    entries: [...dirs, ...files],
+  };
+}
+
+async function createBrowserFolder({ dir, name } = {}) {
+  if (typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error('Select a valid parent folder first.');
+  const cleanName = String(name || '').trim();
+  if (!cleanName || cleanName === '.' || cleanName === '..' || /[<>:"/\\|?*\x00-\x1f]/.test(cleanName)) {
+    throw new Error('Enter a valid folder name without special characters.');
+  }
+  const target = path.join(path.resolve(dir), cleanName);
+  const exists = await fs.stat(target).then(() => true, () => false);
+  if (exists) throw new Error(`Folder "${cleanName}" already exists.`);
+  await fs.mkdir(target, { recursive: true });
+  authorizeRoot(target);
+  return { ok: true, dir: target, name: cleanName };
+}
+
+async function authorizeBrowserSelection({ targetPath, mode = 'folder' } = {}) {
+  if (typeof targetPath !== 'string' || !path.isAbsolute(targetPath.trim())) {
+    throw new Error('Enter or select an absolute path.');
+  }
+  const resolved = path.resolve(targetPath.trim());
+  if (mode === 'save-file') {
+    const parent = path.dirname(resolved);
+    const st = await fs.stat(parent).catch(() => null);
+    if (!st || !st.isDirectory()) throw new Error(`Destination folder does not exist: ${parent}`);
+    authorizeRoot(parent);
+    const saveToken = randomUUID();
+    saveTokens.set(saveToken, { file: resolved, expires: Date.now() + 5 * 60 * 1000 });
+    for (const [k, v] of saveTokens) if (v.expires < Date.now()) saveTokens.delete(k);
+    return { ok: true, cancelled: false, file: resolved, filePath: resolved, dir: parent, saveToken };
+  }
+  if (mode === 'folder') {
+    await fs.mkdir(resolved, { recursive: true });
+    authorizeRoot(resolved);
+    return { ok: true, cancelled: false, dir: resolved };
+  }
+  const st = await fs.stat(resolved).catch(() => null);
+  if (!st) throw new Error(`Path not found: ${resolved}`);
+  const authDir = st.isDirectory() ? resolved : path.dirname(resolved);
+  authorizeRoot(authDir);
+  return { ok: true, cancelled: false, file: resolved, dir: authDir, isDirectory: st.isDirectory() };
+}
+
+let activeTerminalProc = null;
+async function execTerminalCommand({ command = '', cwd = '' } = {}) {
+  const cmdText = String(command || '').trim();
+  let workDir = '';
+  if (typeof cwd === 'string' && cwd.trim() && path.isAbsolute(cwd.trim())) {
+    const st = await fs.stat(cwd.trim()).catch(() => null);
+    if (st?.isDirectory()) workDir = path.resolve(cwd.trim());
+  }
+  if (!workDir) {
+    const st = await fs.stat(hdlRoot).catch(() => null);
+    workDir = st?.isDirectory() ? path.resolve(hdlRoot) : ROOT;
+  }
+  if (!cmdText) return { ok: true, stdout: '', stderr: '', exitCode: 0, cwd: workDir };
+
+  const extraBins = [
+    path.resolve(ROOT, 'runtime', 'ghdl', 'bin'),
+    path.resolve(ROOT, 'runtime', 'node'),
+    path.resolve(ROOT, '..', 'runtime', 'ghdl', 'bin'),
+    path.resolve(ROOT, '..', 'runtime', 'node'),
+    'C:\\msys64\\ucrt64\\bin',
+  ].filter(p => { try { return statSync(p).isDirectory(); } catch { return false; } });
+  const envPath = [...extraBins, process.env.PATH || ''].filter(Boolean).join(path.delimiter);
+
+  const psScript = [
+    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+    '$ErrorActionPreference = "Continue"',
+    'Set-Location -LiteralPath $env:TRACE_TERM_CWD',
+    'try {',
+    '  Invoke-Expression $env:TRACE_TERM_CMD',
+    '} catch {',
+    '  [Console]::Error.WriteLine($_.Exception.Message)',
+    '  $global:LASTEXITCODE = 1',
+    '}',
+    '$code = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } elseif ($?) { 0 } else { 1 }',
+    'Write-Output "`n__TRACE_CWD__$((Get-Location).ProviderPath)__TRACE_CODE__$code"',
+  ].join('\n');
+
+  return new Promise(resolve => {
+    const child = execFile(
+      process.platform === 'win32' ? 'powershell.exe' : 'sh',
+      process.platform === 'win32'
+        ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', psScript]
+        : ['-c', `${cmdText}\nprintf "\\n__TRACE_CWD__%s__TRACE_CODE__%s" "$(pwd)" "$?"`],
+      {
+        cwd: workDir,
+        windowsHide: true,
+        timeout: 60000,
+        maxBuffer: 1024 * 1024,
+        env: { ...process.env, PATH: envPath, TRACE_TERM_CWD: workDir, TRACE_TERM_CMD: cmdText },
+      },
+      (err, stdout = '', stderr = '') => {
+        if (activeTerminalProc === child) activeTerminalProc = null;
+        let out = String(stdout || '');
+        let errOut = String(stderr || '');
+        let nextCwd = workDir;
+        let exitCode = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
+        const marker = out.match(/\r?\n__TRACE_CWD__(.*?)__TRACE_CODE__(-?\d+)\s*$/);
+        if (marker) {
+          out = out.slice(0, marker.index);
+          if (marker[1] && path.isAbsolute(marker[1].trim())) nextCwd = path.resolve(marker[1].trim());
+          exitCode = Number(marker[2]) || 0;
+        } else if (err && err.killed) {
+          errOut = (errOut ? errOut + '\n' : '') + 'Process terminated.';
+        }
+        resolve({ ok: true, stdout: out, stderr: errOut, exitCode, cwd: nextCwd });
+      }
+    );
+    activeTerminalProc = child;
+  });
 }
 
 const server = http.createServer(async (req, res) => {
@@ -752,6 +949,34 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/hdl/root' && req.method === 'POST') {
       const body = await json(req, 32 * 1024);
       return send(res, 200, await setHdlRoot(body?.path));
+    }
+    if (url.pathname === '/api/fs/browse' && req.method === 'POST') {
+      const body = await json(req, 32 * 1024).catch(() => ({}));
+      return send(res, 200, await browseFileSystem(body));
+    }
+    if (url.pathname === '/api/fs/mkdir' && req.method === 'POST') {
+      const body = await json(req, 32 * 1024);
+      return send(res, 200, await createBrowserFolder(body));
+    }
+    if (url.pathname === '/api/fs/authorize' && req.method === 'POST') {
+      const body = await json(req, 32 * 1024);
+      return send(res, 200, await authorizeBrowserSelection(body));
+    }
+    if (url.pathname === '/api/terminal/exec' && req.method === 'POST') {
+      const body = await json(req, 64 * 1024);
+      return send(res, 200, await execTerminalCommand(body));
+    }
+    if (url.pathname === '/api/terminal/kill' && req.method === 'POST') {
+      if (activeTerminalProc) {
+        try { activeTerminalProc.kill(); } catch {}
+        activeTerminalProc = null;
+      }
+      return send(res, 200, { ok: true });
+    }
+    if (url.pathname === '/api/tutorial' && req.method === 'GET') {
+      const tutPath = path.join(ROOT, 'TUTORIAL.md');
+      const text = await fs.readFile(tutPath, 'utf8').catch(() => '# Trace Tutorial\n\nTutorial file not found.');
+      return send(res, 200, { ok: true, name: 'TUTORIAL.md', text });
     }
     if (url.pathname === '/api/project/pick-folder' && req.method === 'POST') {
       const body = await json(req, 32 * 1024).catch(() => ({}));
@@ -800,7 +1025,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/hdl/file') {
       const full = await fs.realpath(path.resolve(hdlRoot, url.searchParams.get('path') || ''));
       if (!within(await fs.realpath(hdlRoot), full)) return send(res, 403, { error: 'Path outside HDL root.' });
-      if (!/\.(vhd|vhdl|vho|cf|sdf|qsf|vcd|sof|pof|vo|hex|mif|mem|txt|dat)$/i.test(full)) return send(res, 400, { error: 'Not a supported HDL/data artifact.' });
+      if (!/\.(vhd|vhdl|vho|cf|sdf|qsf|vcd|sof|pof|vo|hex|mif|mem|txt|dat|md)$/i.test(full)) return send(res, 400, { error: 'Not a supported HDL/data artifact.' });
       if ((await fs.stat(full)).size > 32 * 1024 * 1024) return send(res, 413, { error: 'Artifact exceeds 32 MB.' });
       return send(res, 200, await fs.readFile(full), 'application/octet-stream');
     }

@@ -417,7 +417,15 @@ async function saveProjectToDisk({ saveAs = false, quiet = false } = {}) {
   let dir = saveAs ? null : S.projectDir;
   if (!dir) {
     try {
-      const picked = await api('/api/project/pick-folder', { initialDir: S.projectDir || '' });
+      const picked = ide?.openFileBrowserModal
+        ? await ide.openFileBrowserModal({
+            mode: 'folder',
+            title: 'Choose FPGA Project Folder',
+            eyebrow: 'SAVE PROJECT TO DISK',
+            initialDir: S.projectDir || currentHdlRoot || '',
+            confirmText: 'Select Folder',
+          })
+        : await api('/api/project/pick-folder', { initialDir: S.projectDir || '' });
       if (picked.cancelled || !picked.dir) return false;
       dir = picked.dir;
     } catch (e) {
@@ -431,6 +439,7 @@ async function saveProjectToDisk({ saveAs = false, quiet = false } = {}) {
     S.projectDir = result.dir;
     S.projectName = result.projectName;
     saveProject();
+    ide?.updateTermCwd?.(S.projectDir);
     ide?.recordRecentProject(S.projectName, S.projectDir, result.qpf);
     ide?.captureBaseline(S.projectName);
     syncProjectSaveUI();
@@ -448,9 +457,18 @@ async function openProjectFromDiskPath(targetPath = '', { promptIfInWorkbench = 
   try {
     let chosen = targetPath;
     if (!chosen) {
-      const picked = await api('/api/project/pick-open', { initialDir: S.projectDir || '' });
-      if (picked.cancelled || !picked.file) return false;
-      chosen = picked.file;
+      const picked = ide?.openFileBrowserModal
+        ? await ide.openFileBrowserModal({
+            mode: 'open-project',
+            title: 'Open Trace / Quartus FPGA Project',
+            eyebrow: 'OPEN PROJECT',
+            initialDir: S.projectDir || currentHdlRoot || '',
+            confirmText: 'Open Project',
+            extensions: ['qpf', 'qsf', 'json'],
+          })
+        : await api('/api/project/pick-open', { initialDir: S.projectDir || '' });
+      if (picked.cancelled || !(picked.file || picked.dir)) return false;
+      chosen = picked.file || picked.dir;
     }
     if (promptIfInWorkbench && ide?.requestProjectSwitch && $('#homeView')?.classList.contains('hidden')) {
       const label = chosen.split(/[\\/]/).filter(Boolean).pop() || chosen;
@@ -468,6 +486,7 @@ async function openProjectFromDiskPath(targetPath = '', { promptIfInWorkbench = 
     S.projectDir = result.dir;
     S.projectName = result.projectName;
     saveProject();
+    ide?.updateTermCwd?.(S.projectDir);
     ide?.openFirst();
     ide?.recordRecentProject(result.projectName, result.dir, result.qpf);
     ide?.captureBaseline(result.projectName);
@@ -490,7 +509,7 @@ function saveProject() {
   persistAppState({ lastProject: data });
 }
 function restoreProject(project) {
-  if (!project || project.format !== 'trace-project' || project.version !== 1 || !Array.isArray(project.sources) || project.sources.length > 100 || !project.sources.every(s => s && typeof s.name === 'string' && typeof s.text === 'string' && /^(?:[a-z0-9_][a-z0-9_. -]*\/)*[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i.test(s.name) && (!s.library || /^[a-z][a-z0-9_]*$/i.test(s.library))) || !['93','02','08'].includes(project.standard) || !/^[a-z][a-z0-9_]*$/i.test(project.topLibrary || 'work') || typeof project.generics !== 'string' || !Array.isArray(project.assignments) || !project.assignments.every(p => Array.isArray(p) && p.length === 2 && Number.isInteger(p[0]) && p[0] >= 1 && p[0] <= 144 && typeof p[1] === 'string') || (project.sdf && (typeof project.sdf.text !== 'string' || typeof project.sdf.instance !== 'string' || !['min','typ','max'].includes(project.sdf.corner)))) throw new Error('Invalid Trace project file.');
+  if (!project || project.format !== 'trace-project' || project.version !== 1 || !Array.isArray(project.sources) || project.sources.length > 100 || !project.sources.every(s => s && typeof s.name === 'string' && typeof s.text === 'string' && /^(?:[a-z0-9_][a-z0-9_. -]*\/)*[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat|md)$/i.test(s.name) && (!s.library || /^[a-z][a-z0-9_]*$/i.test(s.library))) || !['93','02','08'].includes(project.standard) || !/^[a-z][a-z0-9_]*$/i.test(project.topLibrary || 'work') || typeof project.generics !== 'string' || !Array.isArray(project.assignments) || !project.assignments.every(p => Array.isArray(p) && p.length === 2 && Number.isInteger(p[0]) && p[0] >= 1 && p[0] <= 144 && typeof p[1] === 'string') || (project.sdf && (typeof project.sdf.text !== 'string' || typeof project.sdf.instance !== 'string' || !['min','typ','max'].includes(project.sdf.corner)))) throw new Error('Invalid Trace project file.');
   S.sources = project.sources; S.assignments = new Map(project.assignments); S.sdf = project.sdf || null;
   S.projectDir = typeof project.projectDir === 'string' && project.projectDir ? project.projectDir : null;
   S.projectName = typeof project.projectName === 'string' ? project.projectName : '';
@@ -1458,7 +1477,7 @@ async function loadFiles(files) {
   if (files.reduce((n, f) => n + f.size, 0) > limit * 1024 * 1024) throw new Error(`This import exceeds ${limit} MB.`);
   for (const ext of extensions) {
     if (['vo','v','sv'].includes(ext)) throw new Error('Verilog requires a native Verilog simulator and matching vendor libraries. This installation executes VHDL with GHDL; use a VHDL netlist or replay its VCD.');
-    if (!['vhd','vhdl','vho','cf','hex','mif','mem','txt','dat','qsf','sdf','vcd','json','sof','pof'].includes(ext)) throw new Error(`Unsupported artifact: .${ext}. See About for supported formats.`);
+    if (!['vhd','vhdl','vho','cf','hex','mif','mem','txt','dat','md','qsf','sdf','vcd','json','sof','pof'].includes(ext)) throw new Error(`Unsupported artifact: .${ext}. See About for supported formats.`);
   }
   pause(); S.importing = true; setStatus();
   ide?.showHome(false);
@@ -1471,7 +1490,7 @@ async function loadFiles(files) {
     let nextSources = S.sources.map(s => ({ ...s }));
     const qsfFiles = loaded.filter(f => f.ext === 'qsf').map(f => ({ ...f, data: parseQsf(f.text) }));
     for (const file of loaded.filter(f => !['qsf','sdf'].includes(f.ext))) {
-      if (!/^[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat)$/i.test(file.name)) throw new Error(`Invalid filename: ${file.name}. Use a simple filename without directory separators.`);
+      if (!/^[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat|md)$/i.test(file.name)) throw new Error(`Invalid filename: ${file.name}. Use a simple filename without directory separators.`);
       if (nextSources.length === 1 && nextSources[0].name === DEMO_NAME && file.name !== DEMO_NAME) nextSources = [];
       const old = nextSources.find(s => s.name.toLowerCase() === file.name.toLowerCase());
       if (old) old.text = file.text; else nextSources.push({ name: file.name, text: file.text });
@@ -1543,15 +1562,30 @@ async function fetchTree() {
 }
 async function changeHdlRoot() {
   try {
-    const res = await fetch('/api/hdl/pick-root', { method: 'POST' });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Could not change Local HDL library folder.');
-    if (data.cancelled) return;
+    let chosenDir = '';
+    if (ide?.openFileBrowserModal) {
+      const picked = await ide.openFileBrowserModal({
+        mode: 'folder',
+        title: 'Choose Local HDL Library Folder',
+        eyebrow: 'LOCAL HDL WORKSPACE',
+        initialDir: currentHdlRoot || S.projectDir || '',
+        confirmText: 'Set Library Folder',
+      });
+      if (!picked || picked.cancelled || !picked.dir) return;
+      chosenDir = picked.dir;
+    } else {
+      const res = await fetch('/api/hdl/pick-root', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Could not change Local HDL library folder.');
+      if (data.cancelled || !data.root) return;
+      chosenDir = data.root;
+    }
+    const updated = await api('/api/hdl/root', { path: chosenDir });
     if ($('#libSearch')) $('#libSearch').value = '';
     if ($('#homeHdlSearch')) $('#homeHdlSearch').value = '';
-    renderHdlTree(data);
-    recordLogEvent('info', `Local HDL library folder changed to ${data.root}`);
-    toast(`Local HDL library set to ${data.root}`);
+    renderHdlTree(updated);
+    recordLogEvent('info', `Local HDL library folder changed to ${updated.root}`);
+    toast(`Local HDL library set to ${updated.root}`);
   } catch (e) { toast(e.message, 'err'); }
 }
 async function loadBitstream(buffer, name) {
@@ -1636,6 +1670,10 @@ function openBottomTab(tab = 'console') {
     $('#right').classList.remove('hidden');
     $$('.dock-tab').forEach(t => { const active = t.dataset.docktab === lastBottomTab; t.classList.toggle('active', active); t.setAttribute('aria-selected', String(active)); });
     $$('.rtab').forEach(t => t.classList.toggle('active', t.id === 'rtab-' + lastBottomTab));
+    if (lastBottomTab === 'terminal') {
+      if (S.projectDir || currentHdlRoot) ide?.updateTermCwd?.(S.projectDir || currentHdlRoot);
+      requestAnimationFrame(() => $('#termInput')?.focus());
+    }
   }
   syncNavigation();
 }
@@ -1768,6 +1806,12 @@ function wire() {
     }
     if (mod && e.altKey && !e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); ide?.saveActiveFileAs(); return; }
     if (mod && e.altKey && !e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); ide?.showNewFile(); return; }
+    if (!mod && e.altKey && !e.shiftKey && e.key.toLowerCase() === 'z') { e.preventDefault(); ide?.toggleWordWrap?.(); return; }
+    if (mod && !e.altKey && !e.shiftKey && (e.key === '`' || e.code === 'Backquote')) { e.preventDefault(); ide?.toggleTerminalPane?.(); return; }
+    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'w') { e.preventDefault(); if (ide?.active) ide.closeTab(ide.active); return; }
+    if (mod && !e.altKey && (e.key === 'Tab' || e.key === 'PageDown' || e.key === 'PageUp')) { e.preventDefault(); ide?.cycleTab?.(e.shiftKey || e.key === 'PageUp' ? -1 : 1); return; }
+    if (mod && !e.altKey && e.shiftKey && e.key.toLowerCase() === 'e') { e.preventDefault(); $('#btnLibrary')?.click(); return; }
+    if (mod && !e.altKey && e.shiftKey && e.key.toLowerCase() === 'b') { e.preventDefault(); ide?.saveAndCompile(); return; }
     if (mod && !e.altKey && e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); saveProjectToDisk({ saveAs: false }); return; }
     if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); ide?.saveActiveFile(); return; }
     if (!mod && !e.altKey && !e.shiftKey && e.key === 'F7') { e.preventDefault(); ide?.saveAndCompile(); return; }
@@ -2094,6 +2138,9 @@ async function hydrateDiskState() {
         if (st.skipHomeExitConfirm) localStorage.setItem('trace.skipHomeExitConfirm', '1');
         else localStorage.removeItem('trace.skipHomeExitConfirm');
       } catch {}
+    }
+    if (typeof st.wordWrap === 'boolean') {
+      try { localStorage.setItem('trace.wordWrap', st.wordWrap ? '1' : '0'); } catch {}
     }
   } catch {}
 }
