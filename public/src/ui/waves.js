@@ -1,10 +1,68 @@
 import { fmtTime } from '../sim/types.js';
 const COLORS = ['#69904b', '#aa874f', '#628d93', '#847aa1', '#b57165', '#819955', '#6787a0', '#9b8971'];
 const DARK_COLORS = ['#b7d98c', '#ddba7c', '#8bc8ce', '#bdb0e0', '#eca292', '#c4d68b', '#98c0e1', '#d4bda0'];
-const ROW = 32, HEADER = 24;
+const ROW = 32, HEADER = 24, LOD_BLOCK = 64;
 export function hexOf(bits) {
   if (!/^[01]+$/.test(bits)) return bits;
   return BigInt('0b' + bits).toString(16).toUpperCase().padStart(Math.ceil(bits.length / 4), '0');
+}
+function summarizeBitMask(signal, block) {
+  const { width, kind } = signal;
+  const real = ['real', 'realtime'].includes(kind);
+  if (real) return { real: true, s0: 0, s1: 0, su: 0, bits: null, first: block[0]?.v, last: block[block.length - 1]?.v, uniform: block.every(s => s.v === block[0]?.v) };
+  if (width <= 30) {
+    let s0 = 0, s1 = 0, su = 0, uniform = true;
+    const first = block[0]?.v;
+    for (let i = 0; i < block.length; i++) {
+      const v = block[i].v;
+      if (v !== first) uniform = false;
+      for (let b = 0; b < width; b++) {
+        const ch = v[b];
+        const m = 1 << b;
+        if (ch === '0' || ch === 'L') s0 |= m;
+        else if (ch === '1' || ch === 'H') s1 |= m;
+        else su |= m;
+      }
+    }
+    return { real: false, s0, s1, su, bits: null, first, last: block[block.length - 1]?.v, uniform };
+  }
+  const bits = new Uint8Array(width);
+  let uniform = true;
+  const first = block[0]?.v;
+  for (let i = 0; i < block.length; i++) {
+    const v = block[i].v;
+    if (v !== first) uniform = false;
+    for (let b = 0; b < width; b++) {
+      const ch = v[b];
+      bits[b] |= (ch === '0' || ch === 'L') ? 1 : (ch === '1' || ch === 'H') ? 2 : 4;
+    }
+  }
+  return { real: false, s0: 0, s1: 0, su: 0, bits, first, last: block[block.length - 1]?.v, uniform };
+}
+function ensureSignalLod(signal) {
+  const samples = signal.samples;
+  const n = samples.length;
+  let lod = signal._lod;
+  if (!lod || lod.firstRef !== samples[0] || lod.builtLen > n) {
+    lod = { firstRef: samples[0], builtLen: 0, blocks: [] };
+    signal._lod = lod;
+  }
+  const fullBlocks = Math.floor(n / LOD_BLOCK);
+  const startBlock = Math.floor(lod.builtLen / LOD_BLOCK);
+  for (let b = startBlock; b < fullBlocks; b++) {
+    const off = b * LOD_BLOCK;
+    lod.blocks[b] = summarizeBitMask(signal, samples.slice(off, off + LOD_BLOCK));
+  }
+  lod.builtLen = fullBlocks * LOD_BLOCK;
+  return lod;
+}
+function sampleIndexGe(samples, time, loHint = 0) {
+  let lo = Math.max(0, loHint), hi = samples.length - 1, ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (samples[mid].t <= time) { ans = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return ans;
 }
 export class WaveViewer {
   constructor(canvas, namesEl, scrollTrackEl = null, scrollThumbEl = null) {
@@ -12,6 +70,11 @@ export class WaveViewer {
     this.scrollTrack = scrollTrackEl; this.scrollThumb = scrollThumbEl; this.scrollDrag = null;
     this.signals = []; this.tStart = 0; this.tEnd = 1e9; this.cursorT = 0; this.lastTime = 0; this.maxSamples = 40000; this.drag = null; this.timeUnit = 'auto';
     this.dpr = Math.min(devicePixelRatio || 1, 2);
+    this.dataVersion = 1; this.themeVersion = 1; this.cacheKey = '';
+    this.cacheCanvas = document.createElement('canvas');
+    this.cacheCtx = this.cacheCanvas.getContext('2d');
+    this.scrollHost = canvas.parentElement?.parentElement || null;
+    this.scrollHost?.addEventListener('scroll', () => this.draw(), { passive: true });
     this.setTheme();
     new ResizeObserver(() => this.resize()).observe(canvas.parentElement);
     canvas.addEventListener('pointerdown', e => {
@@ -148,27 +211,30 @@ export class WaveViewer {
     const fallbackColors = isDarkCanvas ? DARK_COLORS : COLORS;
     this.colors = Array.from({ length: 8 }, (_, i) => style.getPropertyValue(`--wave-c${i}`).trim() || fallbackColors[i]);
     this.signals.forEach((signal, i) => signal.color = this.colors[i % this.colors.length]);
+    this.themeVersion = (this.themeVersion || 0) + 1;
     this.renderNames(); this.draw();
   }
   setMaxSamples(limit) {
     const next = Math.max(2000, Math.min(200000, Number(limit) || 40000));
     this.maxSamples = next;
     for (const s of this.signals) {
-      if (s.samples.length > next) s.samples.splice(0, s.samples.length - next);
+      if (s.samples.length > next) { s.samples.splice(0, s.samples.length - next); s._lod = null; }
     }
+    this.dataVersion++;
   }
   setTimeUnit(unit = 'auto') {
     this.timeUnit = unit || 'auto';
+    this.dataVersion++;
     this.draw();
     this.onCursor?.(this.cursorT);
   }
   setSignals(list) {
-    this.signals = list.map((s, i) => ({ ...s, width: s.width || 1, visible: s.visible !== false, expanded: !!s.expanded, color: this.colors[i % this.colors.length], samples: [], last: null }));
-    this.tStart = 0; this.tEnd = 1e9; this.cursorT = 0; this.lastTime = 0; this.renderNames(); this.resize();
+    this.signals = list.map((s, i) => ({ ...s, width: s.width || 1, visible: s.visible !== false, expanded: !!s.expanded, color: this.colors[i % this.colors.length], samples: [], last: null, _lod: null }));
+    this.tStart = 0; this.tEnd = 1e9; this.cursorT = 0; this.lastTime = 0; this.dataVersion++; this.renderNames(); this.resize();
     if (!this.signals.length) this.onCursor?.(null);
   }
-  toggle(name) { const signal = this.signals.find(s => s.name === name); if (!signal) return false; signal.visible = !signal.visible; this.renderNames(); this.resize(); return signal.visible; }
-  toggleExpand(name) { const signal = this.signals.find(s => s.name === name); if (!signal || signal.width <= 1) return false; signal.expanded = !signal.expanded; this.renderNames(); this.resize(); return signal.expanded; }
+  toggle(name) { const signal = this.signals.find(s => s.name === name); if (!signal) return false; signal.visible = !signal.visible; this.dataVersion++; this.renderNames(); this.resize(); return signal.visible; }
+  toggleExpand(name) { const signal = this.signals.find(s => s.name === name); if (!signal || signal.width <= 1) return false; signal.expanded = !signal.expanded; this.dataVersion++; this.renderNames(); this.resize(); return signal.expanded; }
   renderNames() {
     this.namesEl.replaceChildren(); this.valueElements = new Map();
     const head = document.createElement('div'); head.className = 'wave-names-head';
@@ -202,15 +268,25 @@ export class WaveViewer {
   }
   push(time, values) {
     this.lastTime = Math.max(this.lastTime, time);
+    let dirty = false;
     for (const signal of this.signals) {
       const value = values.get(signal.name); if (value === undefined || value === signal.last) continue;
-      if (signal.samples.at(-1)?.t === time) signal.samples[signal.samples.length - 1] = { t: time, v: value };
-      else signal.samples.push({ t: time, v: value });
+      if (signal.samples.at(-1)?.t === time) {
+        signal.samples[signal.samples.length - 1] = { t: time, v: value };
+        if (signal._lod && signal.samples.length - 1 < signal._lod.builtLen) signal._lod = null;
+      } else {
+        signal.samples.push({ t: time, v: value });
+      }
       signal.last = value;
-      if (signal.samples.length > this.maxSamples) signal.samples.splice(0, 1000);
+      dirty = true;
+      if (signal.samples.length > this.maxSamples) {
+        signal.samples.splice(0, 1000);
+        signal._lod = null;
+      }
     }
+    if (dirty) this.dataVersion++;
   }
-  clear() { for (const s of this.signals) { s.samples = []; s.last = null; } this.lastTime = 0; this.tStart = 0; this.tEnd = 1e9; this.draw(); }
+  clear() { for (const s of this.signals) { s.samples = []; s.last = null; s._lod = null; } this.lastTime = 0; this.tStart = 0; this.tEnd = 1e9; this.dataVersion++; this.draw(); }
   fit() {
     const first = Math.min(...this.signals.filter(s => s.samples.length).map(s => s.samples[0].t));
     this.tStart = Number.isFinite(first) ? first : 0; this.tEnd = Math.max(this.lastTime, this.tStart + 1e6); this.tEnd += (this.tEnd - this.tStart) * .03; this.draw();
@@ -226,58 +302,389 @@ export class WaveViewer {
     return answer;
   }
   valueAt(signal, time) { const index = this.sampleIndex(signal, time); return index < 0 ? null : signal.samples[index].v; }
-  draw() {
-    const g = this.ctx, width = this.canvas.width / this.dpr, height = this.canvas.height / this.dpr;
-    if (!width || !height) return;
-    g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); g.clearRect(0, 0, width, height); g.fillStyle = this.palette.bg; g.fillRect(0, 0, width, height);
-    g.fillStyle = this.palette.header; g.fillRect(0, 0, width, HEADER);
+  drawSingleBitLod(g, signal, bitOffset, rowTop, high, low, mid, width, startIdx, endIdx, span) {
+    const samples = signal.samples, lod = ensureSignalLod(signal);
+    const pxWidth = Math.max(1, Math.ceil(width));
+    const mask = (bitOffset === null && signal.width === 1) ? 1 : (signal.width <= 30 && bitOffset !== null) ? (1 << bitOffset) : 0;
+    const bitIdx = bitOffset ?? 0;
+    let idx = startIdx, previousY = null;
+    const solidPath = new Path2D();
+    const unkPath = new Path2D();
+    let hasSolid = false, hasUnk = false;
+    let barStartPx = -1, barUnk = false;
+    const flushBar = px => {
+      if (barStartPx < 0) return;
+      g.fillStyle = barUnk ? this.palette.unknown : signal.color;
+      g.fillRect(barStartPx, high, Math.max(1, px - barStartPx), low - high);
+      barStartPx = -1;
+      barUnk = false;
+    };
+
+    for (let px = 0; px < pxWidth; px++) {
+      const t0 = this.tStart + (px / width) * span;
+      const t1 = this.tStart + ((px + 1) / width) * span;
+      if (t0 > (this.lastTime > 0 ? Math.max(this.lastTime, samples[samples.length - 1].t) : this.tEnd) && samples.length) break;
+      while (idx + 1 < endIdx && samples[idx + 1].t <= t0) idx++;
+      if (samples[idx].t > t1) continue;
+
+      let endInPx = idx;
+      if (idx + 1 < endIdx && samples[idx + 1].t < t1) {
+        if (idx + 16 < endIdx && samples[idx + 16].t < t1) {
+          endInPx = sampleIndexGe(samples, t1, idx);
+          if (endInPx >= endIdx) endInPx = endIdx - 1;
+        } else {
+          while (endInPx + 1 < endIdx && samples[endInPx + 1].t < t1) endInPx++;
+        }
+      }
+
+      let saw0 = false, saw1 = false, sawU = false;
+      if (endInPx === idx) {
+        const ch = samples[idx].v[bitIdx] ?? 'U';
+        if (ch === '0' || ch === 'L') saw0 = true;
+        else if (ch === '1' || ch === 'H') saw1 = true;
+        else sawU = true;
+      } else {
+        let p = idx;
+        const bStart = Math.floor(idx / LOD_BLOCK);
+        const bEnd = Math.floor(endInPx / LOD_BLOCK);
+        if (bEnd > bStart + 1) {
+          const headEnd = (bStart + 1) * LOD_BLOCK;
+          for (; p < headEnd; p++) {
+            const ch = samples[p].v[bitIdx] ?? 'U';
+            if (ch === '0' || ch === 'L') saw0 = true;
+            else if (ch === '1' || ch === 'H') saw1 = true;
+            else sawU = true;
+          }
+          for (let b = bStart + 1; b < bEnd; b++) {
+            const blk = lod.blocks[b];
+            if (!blk) continue;
+            if (mask) {
+              if (blk.s0 & mask) saw0 = true;
+              if (blk.s1 & mask) saw1 = true;
+              if (blk.su & mask) sawU = true;
+            } else if (blk.bits) {
+              const f = blk.bits[bitIdx];
+              if (f & 1) saw0 = true;
+              if (f & 2) saw1 = true;
+              if (f & 4) sawU = true;
+            }
+          }
+          p = bEnd * LOD_BLOCK;
+        }
+        for (; p <= endInPx; p++) {
+          const ch = samples[p].v[bitIdx] ?? 'U';
+          if (ch === '0' || ch === 'L') saw0 = true;
+          else if (ch === '1' || ch === 'H') saw1 = true;
+          else sawU = true;
+          if (saw0 && saw1 && sawU) break;
+        }
+      }
+
+      const toggled = (saw0 && saw1) || (sawU && (saw0 || saw1));
+      if (toggled) {
+        const lastCh = samples[endInPx].v[bitIdx] ?? 'U';
+        const exitY = (lastCh === '0' || lastCh === 'L') ? low : (lastCh === '1' || lastCh === 'H') ? high : mid;
+        if (previousY !== null) {
+          solidPath.moveTo(px, previousY);
+          solidPath.lineTo(px, exitY);
+          hasSolid = true;
+        }
+        if (barStartPx < 0) { barStartPx = px; barUnk = sawU; }
+        else if (barUnk !== sawU) { flushBar(px); barStartPx = px; barUnk = sawU; }
+        previousY = exitY;
+      } else {
+        flushBar(px);
+        const y = sawU ? mid : saw1 ? high : low;
+        if (sawU) {
+          if (previousY !== null && previousY !== y) { unkPath.moveTo(px, previousY); unkPath.lineTo(px, y); }
+          else unkPath.moveTo(px, y);
+          unkPath.lineTo(px + 1, y);
+          hasUnk = true;
+        } else {
+          if (previousY !== null && previousY !== y) { solidPath.moveTo(px, previousY); solidPath.lineTo(px, y); }
+          else solidPath.moveTo(px, y);
+          solidPath.lineTo(px + 1, y);
+          hasSolid = true;
+        }
+        previousY = y;
+      }
+      idx = endInPx;
+    }
+    flushBar(pxWidth);
+
+    g.lineWidth = 1.4;
+    if (hasSolid) {
+      g.strokeStyle = signal.color;
+      g.setLineDash([]);
+      g.stroke(solidPath);
+    }
+    if (hasUnk) {
+      g.strokeStyle = this.palette.unknown;
+      g.setLineDash([3, 3]);
+      g.stroke(unkPath);
+      g.setLineDash([]);
+    }
+  }
+  drawBusLod(g, signal, real, high, low, mid, width, startIdx, endIdx, span) {
+    const samples = signal.samples;
+    const pxWidth = Math.max(1, Math.ceil(width));
+    let idx = startIdx;
+    let runStartPx = -1, runSample = null, runDense = false, runDenseUnknown = false;
+    const solidPath = new Path2D();
+    let hasSolid = false;
+
+    const flushFlat = px => {
+      if (runStartPx < 0 || !runSample) return;
+      const x1 = runStartPx, x2 = px, w = x2 - x1;
+      const val = runSample.v;
+      const unk = !real && /[^01LH]/.test(val);
+      if (unk) {
+        g.fillStyle = this.palette.unknown;
+        g.strokeStyle = this.palette.unknown;
+        g.globalAlpha = 0.09;
+        g.fillRect(x1, high, w, low - high);
+        g.globalAlpha = 1;
+        g.lineWidth = 1.4;
+        g.strokeRect(x1 + 0.5, high + 0.5, Math.max(1, w - 1), low - high - 1);
+      } else {
+        g.fillStyle = signal.color;
+        g.globalAlpha = 0.07;
+        g.fillRect(x1, high, w, low - high);
+        g.globalAlpha = 1;
+        const bevel = Math.min(3, w / 2);
+        solidPath.moveTo(x1, mid); solidPath.lineTo(x1 + bevel, high); solidPath.lineTo(x2 - bevel, high);
+        solidPath.lineTo(x2, mid); solidPath.lineTo(x2 - bevel, low); solidPath.lineTo(x1 + bevel, low);
+        solidPath.closePath();
+        hasSolid = true;
+      }
+      if (w > 24) {
+        g.save(); g.beginPath(); g.rect(x1, high, w, low - high); g.clip();
+        g.fillStyle = unk ? this.palette.unknown : signal.color;
+        g.font = '9px Consolas, monospace'; g.textBaseline = 'middle';
+        g.fillText(real ? val : hexOf(val), x1 + 6, mid);
+        g.restore();
+      }
+      runStartPx = -1; runSample = null;
+    };
+
+    const flushDense = px => {
+      if (!runDense || runStartPx < 0) return;
+      const w = Math.max(1, px - runStartPx);
+      g.fillStyle = runDenseUnknown ? this.palette.unknown : signal.color;
+      g.globalAlpha = 0.34;
+      g.fillRect(runStartPx, high, w, low - high);
+      g.globalAlpha = 1;
+      solidPath.moveTo(runStartPx, high); solidPath.lineTo(px, high);
+      solidPath.moveTo(runStartPx, low); solidPath.lineTo(px, low);
+      hasSolid = true;
+      runStartPx = -1; runDense = false; runDenseUnknown = false;
+    };
+
+    for (let px = 0; px < pxWidth; px++) {
+      const t0 = this.tStart + (px / width) * span;
+      const t1 = this.tStart + ((px + 1) / width) * span;
+      if (t0 > (this.lastTime > 0 ? Math.max(this.lastTime, samples[samples.length - 1].t) : this.tEnd) && samples.length) break;
+      while (idx + 1 < endIdx && samples[idx + 1].t <= t0) idx++;
+      if (samples[idx].t > t1) continue;
+
+      let endInPx = idx;
+      if (idx + 1 < endIdx && samples[idx + 1].t < t1) {
+        if (idx + 16 < endIdx && samples[idx + 16].t < t1) {
+          endInPx = sampleIndexGe(samples, t1, idx);
+          if (endInPx >= endIdx) endInPx = endIdx - 1;
+        } else {
+          while (endInPx + 1 < endIdx && samples[endInPx + 1].t < t1) endInPx++;
+        }
+      }
+
+      if (endInPx > idx) {
+        if (!runDense) flushFlat(px);
+        const unk = !real && /[^01LH]/.test(samples[idx].v);
+        if (!runDense) { runStartPx = px; runDense = true; runDenseUnknown = unk; }
+        else if (unk) runDenseUnknown = true;
+      } else {
+        if (runDense) flushDense(px);
+        if (runStartPx < 0) { runStartPx = px; runSample = samples[idx]; }
+        else if (runSample !== samples[idx] && runSample.v !== samples[idx].v) {
+          flushFlat(px);
+          runStartPx = px; runSample = samples[idx];
+        }
+      }
+      idx = endInPx;
+    }
+    if (runDense) flushDense(pxWidth);
+    else flushFlat(pxWidth);
+
+    if (hasSolid) {
+      g.strokeStyle = signal.color;
+      g.lineWidth = 1.4;
+      g.setLineDash([]);
+      g.stroke(solidPath);
+    }
+  }
+  renderStaticWaveforms(rows, firstRow, lastRow, width, height) {
+    const g = this.cacheCtx;
+    if (!g) return;
+    if (this.cacheCanvas.width !== this.canvas.width || this.cacheCanvas.height !== this.canvas.height) {
+      this.cacheCanvas.width = this.canvas.width;
+      this.cacheCanvas.height = this.canvas.height;
+    }
+    g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    g.clearRect(0, 0, width, height);
+    g.fillStyle = this.palette.bg;
+    g.fillRect(0, 0, width, height);
+    g.fillStyle = this.palette.header;
+    g.fillRect(0, 0, width, HEADER);
+
     const span = this.tEnd - this.tStart || 1, xOf = time => (time - this.tStart) / span * width;
     const raw = span / Math.max(3, width / 100), magnitude = 10 ** Math.floor(Math.log10(raw)), normalized = raw / magnitude;
     const grid = (normalized < 1.5 ? 1 : normalized < 3 ? 2 : normalized < 7 ? 5 : 10) * magnitude;
+
     g.font = '8.5px Consolas, monospace'; g.textBaseline = 'middle'; g.lineWidth = 1;
+    const gridPath = new Path2D(), tickPath = new Path2D();
+    g.fillStyle = this.palette.text;
     for (let t = Math.ceil(this.tStart / grid) * grid; t <= this.tEnd; t += grid) {
-      const x = xOf(t); g.strokeStyle = this.palette.grid; g.beginPath(); g.moveTo(x, HEADER); g.lineTo(x, height); g.stroke();
-      g.strokeStyle = this.palette.line; g.beginPath(); g.moveTo(x, HEADER - 5); g.lineTo(x, HEADER); g.stroke();
-      g.fillStyle = this.palette.text; g.fillText(fmtTime(t, this.timeUnit), x + 5, HEADER / 2);
+      const x = xOf(t);
+      gridPath.moveTo(x, HEADER); gridPath.lineTo(x, height);
+      tickPath.moveTo(x, HEADER - 5); tickPath.lineTo(x, HEADER);
+      g.fillText(fmtTime(t, this.timeUnit), x + 5, HEADER / 2);
     }
-    g.strokeStyle = this.palette.line; g.lineWidth = 1; g.beginPath(); g.moveTo(0, HEADER - 0.5); g.lineTo(width, HEADER - 0.5); g.stroke();
-    this.displayRows().forEach((entry, row) => {
-      const { signal, bitOffset, key } = entry;
+    g.strokeStyle = this.palette.grid; g.stroke(gridPath);
+    g.strokeStyle = this.palette.line;
+    tickPath.moveTo(0, HEADER - 0.5); tickPath.lineTo(width, HEADER - 0.5);
+    g.stroke(tickPath);
+
+    const divPath = new Path2D();
+    for (let r = firstRow; r <= lastRow; r++) {
+      const y = HEADER + (r + 1) * ROW;
+      divPath.moveTo(0, y); divPath.lineTo(width, y);
+    }
+    g.strokeStyle = this.palette.row; g.lineWidth = 1; g.stroke(divPath);
+
+    const lodThreshold = Math.max(600, width * 1.5);
+    for (let row = firstRow; row <= lastRow; row++) {
+      const entry = rows[row];
+      if (!entry) continue;
+      const { signal, bitOffset } = entry;
       const top = HEADER + row * ROW, high = top + 6, low = top + ROW - 7, mid = (high + low) / 2;
-      g.strokeStyle = this.palette.row; g.beginPath(); g.moveTo(0, top + ROW); g.lineTo(width, top + ROW); g.stroke();
-      const samples = signal.samples; let previousY = null;
-      const start = Math.max(0, this.sampleIndex(signal, this.tStart));
+      const samples = signal.samples;
+      if (!samples.length) continue;
+      const startIdx = Math.max(0, this.sampleIndex(signal, this.tStart));
+      let endIdx = sampleIndexGe(samples, this.tEnd, startIdx) + 1;
+      if (endIdx <= startIdx) endIdx = startIdx + 1;
+      if (endIdx > samples.length) endIdx = samples.length;
+      const visCount = endIdx - startIdx;
       const real = ['real', 'realtime'].includes(signal.kind);
       const isSingleBit = bitOffset !== null || (signal.width === 1 && !real);
-      for (let i = start; i < samples.length; i++) {
-        const sample = samples[i]; if (sample.t > this.tEnd) break;
-        const nextTime = samples[i + 1]?.t ?? (this.lastTime > sample.t ? this.lastTime : this.tEnd);
-        if (nextTime < this.tStart) continue;
-        const x1 = Math.max(0, xOf(sample.t)), x2 = Math.min(width, xOf(nextTime));
-        const val = bitOffset !== null ? (sample.v[bitOffset] ?? 'U') : sample.v;
-        const unknown = !real && /[^01LH]/.test(val); g.strokeStyle = unknown ? this.palette.unknown : signal.color; g.fillStyle = g.strokeStyle; g.lineWidth = 1.4;
-        if (isSingleBit) {
+
+      if (visCount > lodThreshold) {
+        if (isSingleBit) this.drawSingleBitLod(g, signal, bitOffset, top, high, low, mid, width, startIdx, endIdx, span);
+        else this.drawBusLod(g, signal, real, high, low, mid, width, startIdx, endIdx, span);
+        continue;
+      }
+
+      if (isSingleBit) {
+        let previousY = null;
+        const solidPath = new Path2D(), unkPath = new Path2D();
+        let hasSolid = false, hasUnk = false;
+        const unkLabels = [];
+        for (let i = startIdx; i < endIdx; i++) {
+          const sample = samples[i]; if (sample.t > this.tEnd) break;
+          const nextTime = samples[i + 1]?.t ?? (this.lastTime > sample.t ? this.lastTime : this.tEnd);
+          if (nextTime < this.tStart) continue;
+          const x1 = Math.max(0, xOf(sample.t)), x2 = Math.min(width, xOf(nextTime));
+          const val = bitOffset !== null ? (sample.v[bitOffset] ?? 'U') : sample.v;
+          const unknown = !real && /[^01LH]/.test(val);
           const y = unknown ? mid : /[1H]/.test(val) ? high : low;
-          g.setLineDash(unknown ? [3, 3] : []); g.beginPath();
-          if (previousY !== null) { g.moveTo(x1, previousY); g.lineTo(x1, y); } else g.moveTo(x1, y);
-          g.lineTo(x2, y); g.stroke(); g.setLineDash([]); previousY = y;
-          if (unknown && x2 - x1 > 20) { g.font = '9px Consolas, monospace'; g.fillText(val, x1 + 5, mid - 3); }
-        } else if (x2 - x1 > .5) {
-          g.globalAlpha = .07; g.fillRect(x1, high, x2 - x1, low - high); g.globalAlpha = 1;
-          const bevel = Math.min(3, (x2 - x1) / 2);
-          g.beginPath(); g.moveTo(x1, mid); g.lineTo(x1 + bevel, high); g.lineTo(x2 - bevel, high); g.lineTo(x2, mid); g.lineTo(x2 - bevel, low); g.lineTo(x1 + bevel, low); g.closePath(); g.stroke();
-          if (x2 - x1 > 24) { g.save(); g.beginPath(); g.rect(x1, high, x2 - x1, low - high); g.clip(); g.font = '9px Consolas, monospace'; g.textBaseline = 'middle'; g.fillText(real ? val : hexOf(val), x1 + 6, mid); g.restore(); }
+          if (unknown) {
+            if (previousY !== null) { unkPath.moveTo(x1, previousY); unkPath.lineTo(x1, y); } else unkPath.moveTo(x1, y);
+            unkPath.lineTo(x2, y); hasUnk = true;
+            if (x2 - x1 > 20) unkLabels.push([val, x1 + 5, mid - 3]);
+          } else {
+            if (previousY !== null) { solidPath.moveTo(x1, previousY); solidPath.lineTo(x1, y); } else solidPath.moveTo(x1, y);
+            solidPath.lineTo(x2, y); hasSolid = true;
+          }
+          previousY = y;
         }
+        g.lineWidth = 1.4;
+        if (hasSolid) { g.strokeStyle = signal.color; g.setLineDash([]); g.stroke(solidPath); }
+        if (hasUnk) {
+          g.strokeStyle = this.palette.unknown; g.setLineDash([3, 3]); g.stroke(unkPath); g.setLineDash([]);
+          if (unkLabels.length) {
+            g.fillStyle = this.palette.unknown; g.font = '9px Consolas, monospace';
+            for (const [txt, lx, ly] of unkLabels) g.fillText(txt, lx, ly);
+          }
+        }
+      } else {
+        const solidPath = new Path2D(), unkPath = new Path2D();
+        let hasSolid = false, hasUnk = false;
+        for (let i = startIdx; i < endIdx; i++) {
+          const sample = samples[i]; if (sample.t > this.tEnd) break;
+          const nextTime = samples[i + 1]?.t ?? (this.lastTime > sample.t ? this.lastTime : this.tEnd);
+          if (nextTime < this.tStart) continue;
+          const x1 = Math.max(0, xOf(sample.t)), x2 = Math.min(width, xOf(nextTime));
+          if (x2 - x1 <= 0.5) continue;
+          const val = sample.v;
+          const unknown = !real && /[^01LH]/.test(val);
+          const col = unknown ? this.palette.unknown : signal.color;
+          g.fillStyle = col; g.globalAlpha = 0.07; g.fillRect(x1, high, x2 - x1, low - high); g.globalAlpha = 1;
+          const bevel = Math.min(3, (x2 - x1) / 2);
+          const targetPath = unknown ? unkPath : solidPath;
+          targetPath.moveTo(x1, mid); targetPath.lineTo(x1 + bevel, high); targetPath.lineTo(x2 - bevel, high);
+          targetPath.lineTo(x2, mid); targetPath.lineTo(x2 - bevel, low); targetPath.lineTo(x1 + bevel, low); targetPath.closePath();
+          if (unknown) hasUnk = true; else hasSolid = true;
+          if (x2 - x1 > 24) {
+            g.save(); g.beginPath(); g.rect(x1, high, x2 - x1, low - high); g.clip();
+            g.fillStyle = col; g.font = '9px Consolas, monospace'; g.textBaseline = 'middle';
+            g.fillText(real ? val : hexOf(val), x1 + 6, mid); g.restore();
+          }
+        }
+        g.lineWidth = 1.4; g.setLineDash([]);
+        if (hasSolid) { g.strokeStyle = signal.color; g.stroke(solidPath); }
+        if (hasUnk) { g.strokeStyle = this.palette.unknown; g.stroke(unkPath); }
       }
-      const rawVal = this.valueAt(signal, this.cursorT); const element = this.valueElements?.get(key);
-      if (element) {
-        if (rawVal === null) element.textContent = '—';
-        else if (bitOffset !== null) element.textContent = rawVal[bitOffset] ?? 'U';
-        else element.textContent = signal.width === 1 || real ? rawVal : hexOf(rawVal);
+    }
+  }
+  draw() {
+    const g = this.ctx, width = this.canvas.width / this.dpr, height = this.canvas.height / this.dpr;
+    if (!width || !height) return;
+    const rows = this.displayRows();
+    const scrollTop = this.scrollHost?.scrollTop || 0;
+    const viewH = this.scrollHost?.clientHeight || height;
+    const firstRow = rows.length ? Math.max(0, Math.floor((scrollTop - HEADER) / ROW) - 1) : 0;
+    const lastRow = rows.length ? Math.min(rows.length - 1, Math.ceil((scrollTop + viewH - HEADER) / ROW) + 1) : -1;
+
+    const key = `${this.canvas.width}x${this.canvas.height}|${this.dpr}|${this.tStart}|${this.tEnd}|${this.lastTime}|${this.dataVersion}|${this.themeVersion}|${this.timeUnit}|${firstRow}:${lastRow}`;
+    if (key !== this.cacheKey) {
+      this.renderStaticWaveforms(rows, firstRow, lastRow, width, height);
+      this.cacheKey = key;
+    }
+
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.drawImage(this.cacheCanvas, 0, 0);
+    g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+
+    const span = this.tEnd - this.tStart || 1;
+    const cursor = (this.cursorT - this.tStart) / span * width;
+    if (cursor >= 0 && cursor <= width) {
+      g.strokeStyle = this.palette.cursor; g.lineWidth = 1; g.setLineDash([3, 3]);
+      g.beginPath(); g.moveTo(cursor, HEADER); g.lineTo(cursor, height); g.stroke();
+      g.setLineDash([]);
+    }
+
+    for (let row = 0; row < rows.length; row++) {
+      const { signal, bitOffset, key: rKey } = rows[row];
+      const element = this.valueElements?.get(rKey);
+      if (!element) continue;
+      const real = ['real', 'realtime'].includes(signal.kind);
+      const rawVal = this.valueAt(signal, this.cursorT);
+      let nextTxt = '—';
+      if (rawVal !== null) {
+        if (bitOffset !== null) nextTxt = rawVal[bitOffset] ?? 'U';
+        else nextTxt = (signal.width === 1 || real) ? rawVal : hexOf(rawVal);
       }
-    });
-    const cursor = xOf(this.cursorT);
-    if (cursor >= 0 && cursor <= width) { g.strokeStyle = this.palette.cursor; g.lineWidth = 1; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(cursor, HEADER); g.lineTo(cursor, height); g.stroke(); g.setLineDash([]); }
+      if (element.textContent !== nextTxt) element.textContent = nextTxt;
+    }
     this.syncScrollbar();
   }
   scrollMetrics() {
