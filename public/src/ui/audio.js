@@ -2,7 +2,7 @@
 let ctx = null;
 let master = null;
 let muted = false;
-let buzzerOsc = null, buzzerFilter = null, buzzerGain = null, buzzerStopTimer = null;
+let buzzerOsc = null, buzzerFilters = null, buzzerGain = null, buzzerStopTimer = null, buzzerWave = null;
 
 function ensure() {
   if (ctx) return ctx;
@@ -67,30 +67,40 @@ export function tick() {
   osc.start(t); osc.stop(t + 0.04);
 }
 
+function getBuzzerWave(c) {
+  if (buzzerWave || !c.createPeriodicWave) return buzzerWave;
+  const imag = new Float32Array([0, 1.0, 0.32, 0.62, 0.18, 0.40, 0.11, 0.26, 0.07, 0.16, 0.04, 0.10]);
+  const real = new Float32Array(imag.length);
+  buzzerWave = c.createPeriodicWave(real, imag);
+  return buzzerWave;
+}
 export function startBuzzer(freq = 2048) {
   const c = ensure(); if (!c || muted) return;
   const t = c.currentTime;
   const f = Math.max(55, Math.min(6000, Number(freq) || 2048));
-  const cutoff = Math.max(900, Math.min(4800, f * 2.4));
   if (buzzerStopTimer) { clearTimeout(buzzerStopTimer); buzzerStopTimer = null; }
-  if (buzzerOsc && buzzerGain && buzzerFilter) {
+  if (buzzerOsc && buzzerGain && buzzerFilters) {
     buzzerOsc.frequency.setTargetAtTime(f, t, 0.008);
-    buzzerFilter.frequency.setTargetAtTime(cutoff, t, 0.015);
     buzzerGain.gain.cancelScheduledValues(t);
-    buzzerGain.gain.setTargetAtTime(0.075, t, 0.008);
+    buzzerGain.gain.setTargetAtTime(0.055, t, 0.008);
     return;
   }
   buzzerOsc = c.createOscillator();
-  buzzerFilter = c.createBiquadFilter();
-  buzzerGain = c.createGain();
-  buzzerOsc.type = 'square';
+  const wave = getBuzzerWave(c);
+  if (wave) buzzerOsc.setPeriodicWave(wave);
+  else buzzerOsc.type = 'square';
   buzzerOsc.frequency.setValueAtTime(f, t);
-  buzzerFilter.type = 'lowpass';
-  buzzerFilter.frequency.setValueAtTime(cutoff, t);
-  buzzerFilter.Q.value = 1.2;
+
+  // 12mm PCB electromagnetic/piezo buzzer acoustic body: bass rolloff, ~2.25 kHz diaphragm resonance, gentle HF rolloff
+  const hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 240; hp.Q.value = 0.7;
+  const peak = c.createBiquadFilter(); peak.type = 'peaking'; peak.frequency.value = 2250; peak.Q.value = 2.0; peak.gain.value = 9;
+  const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 5600; lp.Q.value = 0.8;
+  buzzerFilters = [hp, peak, lp];
+
+  buzzerGain = c.createGain();
   buzzerGain.gain.setValueAtTime(0.0001, t);
-  buzzerGain.gain.setTargetAtTime(0.075, t, 0.008);
-  buzzerOsc.connect(buzzerFilter); buzzerFilter.connect(buzzerGain); buzzerGain.connect(master);
+  buzzerGain.gain.setTargetAtTime(0.055, t, 0.008);
+  buzzerOsc.connect(hp); hp.connect(peak); peak.connect(lp); lp.connect(buzzerGain); buzzerGain.connect(master);
   buzzerOsc.start(t);
 }
 export function stopBuzzer() {
@@ -99,13 +109,13 @@ export function stopBuzzer() {
   if (buzzerStopTimer) { clearTimeout(buzzerStopTimer); buzzerStopTimer = null; }
   buzzerGain.gain.cancelScheduledValues(t);
   buzzerGain.gain.setTargetAtTime(0.0001, t, 0.018);
-  const o = buzzerOsc, g = buzzerGain, flt = buzzerFilter;
+  const o = buzzerOsc, g = buzzerGain, flts = buzzerFilters;
   buzzerStopTimer = setTimeout(() => {
     buzzerStopTimer = null;
     if (buzzerOsc !== o) return;
     try { o.stop(); } catch {}
-    try { o.disconnect(); flt.disconnect(); g.disconnect(); } catch {}
-    buzzerOsc = null; buzzerFilter = null; buzzerGain = null;
+    try { o.disconnect(); for (const f of flts || []) f.disconnect(); g.disconnect(); } catch {}
+    buzzerOsc = null; buzzerFilters = null; buzzerGain = null;
   }, 80);
 }
 
