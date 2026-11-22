@@ -506,7 +506,7 @@ function restoreProject(project) {
   } else {
     S.clkHz = Number($('#clkHz')?.value) || 50000000;
   }
-  renderSources(); $('#topSelect').value = project.top || ''; renderSdf(); renderPins(); syncProjectSaveUI();
+  renderSources(); $('#topSelect').value = (project.top || '').toLowerCase(); renderSdf(); renderPins(); syncProjectSaveUI();
   const topName = project.top || allEntities()[0] || S.sources[0]?.name || 'No design';
   $('#designTitle').textContent = S.projectName || (topName === DEMO_TOP ? 'Counter demo' : topName);
   $('#designSubtitle').textContent = `Build needed · VHDL-${project.standard === '08' ? '2008' : project.standard === '93' ? '1993' : '2002'}`;

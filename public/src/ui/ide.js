@@ -674,10 +674,21 @@ export function createIde(api) {
       if (source) {
         source.text = text;
         source.library = doc.library;
+        if (baselineProject && Array.isArray(baselineProject.sources)) {
+          const bSrc = baselineProject.sources.find(s => s.name === source.name);
+          if (bSrc) { bSrc.text = text; bSrc.library = doc.library || 'work'; }
+          else baselineProject.sources.push({ name: source.name, text, library: doc.library || 'work' });
+        }
       }
       doc.saved = text;
-      if (/\.qsf$/i.test(name)) api.reloadQsfText?.(text, name);
+      if (/\.qsf$/i.test(name)) {
+        api.reloadQsfText?.(text, name);
+        if (baselineProject) baselineProject.assignments = [...S.assignments];
+      }
       if (sourceChanged) { api.saveProject?.(); api.markDirty?.(); }
+      if (detectProjectChanges().length === 0) {
+        captureBaseline(projectTitle);
+      }
       renderTabs();
       refreshProjectTree();
       api.toast(`Saved ${name}.`);
@@ -721,12 +732,27 @@ export function createIde(api) {
       const savedPath = written.filePath || written.file || targetPath;
       if (doc) {
         doc.saved = text;
-        if (!doc.diskOnly && find(name)) { find(name).text = text; find(name).library = doc.library; }
+        if (!doc.diskOnly && find(name)) {
+          const src = find(name);
+          src.text = text;
+          src.library = doc.library;
+          if (baselineProject && Array.isArray(baselineProject.sources)) {
+            const bSrc = baselineProject.sources.find(s => s.name === src.name);
+            if (bSrc) { bSrc.text = text; bSrc.library = doc.library || 'work'; }
+            else baselineProject.sources.push({ name: src.name, text, library: doc.library || 'work' });
+          }
+        }
       }
       renderTabs();
       refreshProjectTree();
       const shortName = savedPath.split(/[\\/]/).filter(Boolean).pop() || baseNameOf(name);
-      if (/\.qsf$/i.test(savedPath)) api.reloadQsfText?.(text, shortName);
+      if (/\.qsf$/i.test(savedPath)) {
+        api.reloadQsfText?.(text, shortName);
+        if (baselineProject) baselineProject.assignments = [...S.assignments];
+      }
+      if (detectProjectChanges().length === 0) {
+        captureBaseline(projectTitle);
+      }
       api.toast(`Saved ${shortName} to ${savedPath}.`, 'ok');
       api.logEvent?.('info', `Saved file as: ${savedPath}`);
       return true;
@@ -1433,7 +1459,7 @@ export function createIde(api) {
       return;
     }
     const changes = detectProjectChanges();
-    const hasChanges = changes.length > 0 || !S.projectDir;
+    const hasChanges = changes.length > 0;
     pendingSwitch = { label, newWindowUrl, onSwitchHere, hasChanges };
     if ($('#psTitle')) $('#psTitle').textContent = `Open ${label}?`;
     if ($('#psCurrentProject')) $('#psCurrentProject').textContent = currentProjectTitle();
@@ -1471,9 +1497,9 @@ export function createIde(api) {
     }
     pendingFocusWizard = focusWizard;
     const changes = detectProjectChanges();
-    const hasUnsavedOrSim = changes.length > 0 || !S.projectDir || !!S.sim;
+    const hasUnsaved = changes.length > 0;
     const dlg = $('#homeConfirmDialog');
-    if (!dlg || !hasUnsavedOrSim) {
+    if (!dlg || !hasUnsaved) {
       api.stopAllSimulations?.();
       showHome(true, { clearSession: true });
       if (focusWizard) { pendingFocusWizard = false; openNewProjectWizard(); }
@@ -1567,7 +1593,8 @@ export function createIde(api) {
   function requestAppClose() {
     const view = $('#homeView');
     const inHome = !!(view && !view.classList.contains('hidden'));
-    if (inHome) {
+    const changes = inHome ? [] : detectProjectChanges();
+    if (inHome || changes.length === 0) {
       if (isSkipHomeExitConfirm()) {
         executeNativeExit();
         return;
