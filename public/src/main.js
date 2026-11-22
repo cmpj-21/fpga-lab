@@ -10,6 +10,7 @@ import { WaveViewer } from './ui/waves.js';
 import { DEMO_SRC, DEMO_NAME, DEMO_TOP } from './ui/demo.js';
 import { createIde, parseDiagnostics } from './ui/ide.js';
 import * as audio from './ui/audio.js';
+import { initCustomSelects } from './ui/selects.js';
 import {
   THEME_PRESETS,
   TOKEN_GROUPS,
@@ -3081,6 +3082,7 @@ async function boot() {
   wire();
   wireSettingsAndThemes();
   applyAllSettings({ persist: false });
+  initCustomSelects();
   wireActionLogger();
   fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);
