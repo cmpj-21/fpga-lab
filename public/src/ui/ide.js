@@ -2127,13 +2127,19 @@ export function createIde(api) {
     return termSessionsList.find(t => t.id === activeTermId) || termSessionsList[0] || null;
   }
 
-  function computeTermColsRows() {
+  function computeTermColsRows(xtermInstance = null) {
     const screen = $('#termScreen');
     const rect = screen?.getBoundingClientRect();
-    const w = Math.max(240, (rect?.width || 800) - 24);
-    const h = Math.max(80, (rect?.height || 220) - 12);
-    const cols = Math.max(40, Math.min(400, Math.floor(w / 7.22)));
-    const rows = Math.max(5, Math.min(160, Math.floor(h / 16.8)));
+    const cs = screen ? getComputedStyle(screen) : null;
+    const padX = cs ? (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0) : 20;
+    const padY = cs ? (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0) : 12;
+    const w = Math.max(240, (rect?.width || 800) - padX - 12);
+    const h = Math.max(80, (rect?.height || 220) - padY);
+    const cell = xtermInstance?._core?._renderService?.dimensions?.css?.cell;
+    const cellW = (cell?.width && cell.width > 3) ? cell.width : 7.22;
+    const cellH = (cell?.height && cell.height > 6) ? cell.height : 16.8;
+    const cols = Math.max(40, Math.min(400, Math.floor(w / cellW)));
+    const rows = Math.max(5, Math.min(160, Math.floor(h / cellH)));
     return { cols, rows };
   }
 
@@ -2142,7 +2148,7 @@ export function createIde(api) {
     if (!term || !term.xterm) return;
     const screen = $('#termScreen');
     if (!screen || screen.offsetParent === null) return;
-    const { cols, rows } = computeTermColsRows();
+    const { cols, rows } = computeTermColsRows(term.xterm);
     if (term.xterm.cols !== cols || term.xterm.rows !== rows) {
       try { term.xterm.resize(cols, rows); } catch {}
       fetch('/api/terminal/resize', {
@@ -2275,6 +2281,7 @@ export function createIde(api) {
       };
 
       xterm.open(hostDiv);
+      requestAnimationFrame(() => fitActiveXterm());
       xterm.attachCustomKeyEventHandler(ev => {
         if (ev.type !== 'keydown') return true;
         const mod = ev.ctrlKey || ev.metaKey;
@@ -2284,6 +2291,7 @@ export function createIde(api) {
           return false;
         }
         if (mod && !ev.altKey && ev.key.toLowerCase() === 'c' && xterm.hasSelection()) {
+          ev.preventDefault();
           navigator.clipboard?.writeText(xterm.getSelection()).catch(() => {});
           xterm.clearSelection();
           return false;
@@ -2587,6 +2595,9 @@ export function createIde(api) {
     });
     // Multi-Tab xterm.js + ConPTY Integrated Terminal wiring
     ensureShellInfo();
+    $('#termScreen')?.addEventListener('mousedown', () => {
+      requestAnimationFrame(() => activeTerm()?.xterm?.focus());
+    });
     $('#termNewTabBtn')?.addEventListener('click', () => createTerminalTab());
     $('#termClearBtn')?.addEventListener('click', () => {
       const term = activeTerm();

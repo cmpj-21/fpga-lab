@@ -27,15 +27,18 @@
 #include <vector>
 
 static HPCON  g_hPC = nullptr;
+static HANDLE g_hostInRead = INVALID_HANDLE_VALUE;
+static HANDLE g_hostOutWrite = INVALID_HANDLE_VALUE;
 static HANDLE g_ptyInWrite = INVALID_HANDLE_VALUE;
 static HANDLE g_ptyOutRead = INVALID_HANDLE_VALUE;
 static HANDLE g_childProc  = INVALID_HANDLE_VALUE;
 
 static DWORD WINAPI OutputPumpThread(LPVOID) {
-    HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE hStdOut = g_hostOutWrite;
     char buf[8192];
     DWORD bytesRead = 0;
-    while (g_ptyOutRead != INVALID_HANDLE_VALUE &&
+    while (hStdOut != INVALID_HANDLE_VALUE &&
+           g_ptyOutRead != INVALID_HANDLE_VALUE &&
            ReadFile(g_ptyOutRead, buf, sizeof(buf), &bytesRead, nullptr) &&
            bytesRead > 0) {
         DWORD totalWritten = 0;
@@ -95,10 +98,12 @@ static void HandleInputChunk(const char* data, size_t len) {
 }
 
 static DWORD WINAPI InputPumpThread(LPVOID) {
-    HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE);
+    HANDLE hStdIn = g_hostInRead;
     char buf[4096];
     DWORD bytesRead = 0;
-    while (ReadFile(hStdIn, buf, sizeof(buf), &bytesRead, nullptr) && bytesRead > 0) {
+    while (hStdIn != INVALID_HANDLE_VALUE &&
+           ReadFile(hStdIn, buf, sizeof(buf), &bytesRead, nullptr) &&
+           bytesRead > 0) {
         HandleInputChunk(buf, bytesRead);
     }
     // Stdin closed by parent Node server -> terminate child & exit
@@ -115,6 +120,23 @@ static DWORD WINAPI InputPumpThread(LPVOID) {
 
 int wmain(int argc, wchar_t* argv[]) {
     if (argc < 4) return 1;
+    // Detach any console and isolate Node's stdio pipes into non-inheritable handles so CreatePseudoConsole / child shells never read our stdin pipe
+    FreeConsole();
+    HANDLE origIn  = GetStdHandle(STD_INPUT_HANDLE);
+    HANDLE origOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE me = GetCurrentProcess();
+    if (origIn != INVALID_HANDLE_VALUE && origIn != nullptr) {
+        DuplicateHandle(me, origIn, me, &g_hostInRead, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    }
+    if (origOut != INVALID_HANDLE_VALUE && origOut != nullptr) {
+        DuplicateHandle(me, origOut, me, &g_hostOutWrite, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    }
+    SetStdHandle(STD_INPUT_HANDLE, INVALID_HANDLE_VALUE);
+    SetStdHandle(STD_OUTPUT_HANDLE, INVALID_HANDLE_VALUE);
+    SetStdHandle(STD_ERROR_HANDLE, INVALID_HANDLE_VALUE);
+    if (origIn != INVALID_HANDLE_VALUE && origIn != nullptr) CloseHandle(origIn);
+    if (origOut != INVALID_HANDLE_VALUE && origOut != nullptr && origOut != origIn) CloseHandle(origOut);
+
     int cols = _wtoi(argv[1]);
     int rows = _wtoi(argv[2]);
     if (cols < 10) cols = 120;

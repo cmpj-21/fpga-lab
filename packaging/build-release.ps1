@@ -145,7 +145,7 @@ $stubExe = Join-Path $buildDir 'portable_stub.exe'
 if ($LASTEXITCODE -ne 0) { throw "Failed to compile portable_stub.exe" }
 
 $conptyExe = Join-Path $buildDir 'conpty_host.exe'
-& $gpp -O2 -std=c++17 -municode -mconsole `
+& $gpp -O2 -std=c++17 -municode -mwindows `
   (Join-Path $nativeDir 'conpty_host.cpp') `
   -static-libgcc -static-libstdc++ "-Wl,-Bstatic" -lwinpthread "-Wl,-Bdynamic" `
   -lkernel32 -lshell32 `
