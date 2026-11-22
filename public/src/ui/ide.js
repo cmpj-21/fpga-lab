@@ -1,7 +1,7 @@
 // IDE shell controller: resizable panes, multi-tab VHDL code editor, problems diagnostics, menus and status bar.
 import { CodeEditor, renderMarkdownHtml } from './editor.js';
 import { DEMO_SRC, DEMO_TOP } from './demo.js';
-import { Terminal } from '/vendor/xterm.mjs';
+import { Terminal } from '/vendor/xterm.mjs?v=2';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];

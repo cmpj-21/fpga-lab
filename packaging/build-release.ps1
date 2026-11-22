@@ -42,6 +42,16 @@ if ($lockProcs) {
   Start-Sleep -Milliseconds 350
 }
 
+# Clear stale WebView2 HTTP/JS cache so rebuilt assets take effect immediately (preserves LocalStorage & app state)
+foreach ($staleCache in @(
+  (Join-Path $distDir 'TraceData\webview2\EBWebView\Default\Cache'),
+  (Join-Path $distDir 'TraceData\webview2\EBWebView\Default\Code Cache')
+)) {
+  if (Test-Path $staleCache) {
+    Remove-Item -Recurse -Force $staleCache -ErrorAction SilentlyContinue
+  }
+}
+
 # 1. Verify required local tools
 $gpp     = Join-Path $MsysBin 'g++.exe'
 $gcc     = Join-Path $MsysBin 'gcc.exe'

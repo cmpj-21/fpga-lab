@@ -1227,7 +1227,7 @@ const server = http.createServer(async (req, res) => {
     const actual = await fs.realpath(full).catch(() => null);
     const actualStat = actual ? await fs.stat(actual).catch(() => null) : null;
     if (!actual || !actualStat?.isFile() || !within(PUBLIC, actual)) return send(res, 404, 'Not found', 'text/plain');
-    const cacheHeaders = IS_PACKAGED && /^\/(vendor|assets)\//.test(url.pathname) ? { 'Cache-Control': 'public, max-age=31536000, immutable' } : null;
+    const cacheHeaders = IS_PACKAGED && /^\/(vendor|assets)\//.test(url.pathname) ? { 'Cache-Control': 'no-cache, must-revalidate' } : null;
     return send(res, 200, await fs.readFile(actual), MIME[path.extname(actual)] || 'application/octet-stream', cacheHeaders);
   } catch (e) {
     if (ownsLog && /^\/api\/(sim|hdl)\//.test(req.url || '')) {
