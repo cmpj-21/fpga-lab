@@ -330,12 +330,12 @@ export const PCB_THEMES = {
 };
 
 export const LED_THEMES = {
-  default: { on: 0xf55f48, em: 0xff2921, off: 0x491c20, segOn: 0xe84e3c, segOff: 0x361c22, pwrOn: 0x4fd577, pwrEm: 0x39d66b },
-  amber: { on: 0xffb340, em: 0xff8800, off: 0x4a3014, segOn: 0xffa62b, segOff: 0x382612, pwrOn: 0xffcc44, pwrEm: 0xffaa00 },
-  emerald: { on: 0x48f582, em: 0x00e65c, off: 0x163d24, segOn: 0x3ce875, segOff: 0x163320, pwrOn: 0x4fd577, pwrEm: 0x39d66b },
-  'ice-blue': { on: 0x5ce6ff, em: 0x00c8ff, off: 0x153542, segOn: 0x47dcff, segOff: 0x142c36, pwrOn: 0x70f5ff, pwrEm: 0x00e1ff },
-  ultraviolet: { on: 0xe26eff, em: 0xc829ff, off: 0x381745, segOn: 0xd959ff, segOff: 0x2f1538, pwrOn: 0xff55b8, pwrEm: 0xff1f9c },
-  'pure-white': { on: 0xf5f9ff, em: 0xdcebff, off: 0x333840, segOn: 0xf0f6ff, segOff: 0x2a2e33, pwrOn: 0xd4ffe4, pwrEm: 0x8cffb5 },
+  default: { on: 0xf55f48, em: 0xff2921, off: 0x491c20, segOn: 0xe84e3c, segOff: 0x050304, pwrOn: 0x4fd577, pwrEm: 0x39d66b },
+  amber: { on: 0xffb340, em: 0xff8800, off: 0x4a3014, segOn: 0xffa62b, segOff: 0x050402, pwrOn: 0xffcc44, pwrEm: 0xffaa00 },
+  emerald: { on: 0x48f582, em: 0x00e65c, off: 0x163d24, segOn: 0x3ce875, segOff: 0x020503, pwrOn: 0x4fd577, pwrEm: 0x39d66b },
+  'ice-blue': { on: 0x5ce6ff, em: 0x00c8ff, off: 0x153542, segOn: 0x47dcff, segOff: 0x020405, pwrOn: 0x70f5ff, pwrEm: 0x00e1ff },
+  ultraviolet: { on: 0xe26eff, em: 0xc829ff, off: 0x381745, segOn: 0xd959ff, segOff: 0x040205, pwrOn: 0xff55b8, pwrEm: 0xff1f9c },
+  'pure-white': { on: 0xf5f9ff, em: 0xdcebff, off: 0x333840, segOn: 0xf0f6ff, segOff: 0x040505, pwrOn: 0xd4ffe4, pwrEm: 0x8cffb5 },
 };
 
 const CHAR_7SEG = {
@@ -1600,8 +1600,9 @@ export function createGfxStudio(ctx) {
     if (gfx.ledTheme === 'custom') {
       const c = new THREE.Color(gfx.ledCustomColor);
       const off = c.clone().multiplyScalar(0.22);
+      const segOff = c.clone().multiplyScalar(0.015);
       const hex = c.getHex(), offHex = off.getHex();
-      return { on: hex, em: hex, off: offHex, segOn: hex, segOff: offHex, pwrOn: 0x4fd577, pwrEm: 0x39d66b };
+      return { on: hex, em: hex, off: offHex, segOn: hex, segOff: segOff.getHex(), pwrOn: 0x4fd577, pwrEm: 0x39d66b };
     }
     return LED_THEMES[gfx.ledTheme] || LED_THEMES.default;
   }
@@ -1670,6 +1671,8 @@ export function createGfxStudio(ctx) {
         }
         material.emissiveIntensity = on ? 1.6 + segGlowNorm * 2.6 + segOverdrive * 2.2 : 0;
         material.color.setHex(on ? pal.segOn : pal.segOff);
+        material.roughness = on ? 0.35 : 0.96;
+        material.envMapIntensity = on ? 1.0 : 0.04;
       }
       const dLight = digitPointLights[d];
       const dHalo = digitHalos[d];

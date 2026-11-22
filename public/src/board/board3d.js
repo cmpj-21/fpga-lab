@@ -67,9 +67,11 @@ export async function createBoard3D(canvas, opts = {}) {
     meshes: Array.from({ length: 8 }, (_, bit) => {
       const mesh = model.getObjectByName(`segment_${digit}_${bit}`);
       mesh.material = mesh.material.clone();
-      mesh.material.color.set(0x361c22);
+      mesh.material.color.set(0x050304);
       mesh.material.emissive.set(0xff2921);
       mesh.material.emissiveIntensity = 0;
+      mesh.material.roughness = 0.96;
+      mesh.material.envMapIntensity = 0.04;
       return mesh;
     })
   }));
@@ -411,7 +413,9 @@ export async function createBoard3D(canvas, opts = {}) {
         const on = state.power && digit.enabled && !!(digit.segs & (1 << bit));
         const material = digit.meshes[bit].material;
         material.emissiveIntensity = on ? 1 + state.glow * 1.7 : 0;
-        material.color.setHex(on ? 0xe84e3c : 0x361c22);
+        material.color.setHex(on ? 0xe84e3c : 0x050304);
+        material.roughness = on ? 0.35 : 0.96;
+        material.envMapIntensity = on ? 1.0 : 0.04;
       }
     }
     studio?.updateLedsAndSegments(now, state);
