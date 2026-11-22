@@ -63,15 +63,22 @@ export async function createBoard3D(canvas, opts = {}) {
   }
   syncCameraButtons();
   canvas.addEventListener('contextmenu', event => event.preventDefault());
+  const displayFaceMat = model.getObjectByName('display_geometry_4')?.material || null;
+  const displayFaceHex = displayFaceMat ? displayFaceMat.color.getHex() : 0x15191d;
+  const displayFaceRough = displayFaceMat ? displayFaceMat.roughness : 0.78;
+  const displayFaceEnv = displayFaceMat && displayFaceMat.envMapIntensity !== undefined ? displayFaceMat.envMapIntensity : 0.34;
+  const segDefaultOffHex = displayFaceHex;
   const segments = Array.from({ length: 4 }, (_, digit) => ({ segs: 0, latched: 0, enabled: false,
     meshes: Array.from({ length: 8 }, (_, bit) => {
       const mesh = model.getObjectByName(`segment_${digit}_${bit}`);
+      mesh.castShadow = false;
       mesh.material = mesh.material.clone();
-      mesh.material.color.set(0x050304);
+      mesh.material.color.setHex(segDefaultOffHex);
       mesh.material.emissive.set(0xff2921);
       mesh.material.emissiveIntensity = 0;
-      mesh.material.roughness = 0.96;
-      mesh.material.envMapIntensity = 0.04;
+      mesh.material.metalness = 0;
+      mesh.material.roughness = displayFaceRough;
+      mesh.material.envMapIntensity = displayFaceEnv;
       return mesh;
     })
   }));
@@ -413,9 +420,9 @@ export async function createBoard3D(canvas, opts = {}) {
         const on = state.power && digit.enabled && !!(digit.segs & (1 << bit));
         const material = digit.meshes[bit].material;
         material.emissiveIntensity = on ? 1 + state.glow * 1.7 : 0;
-        material.color.setHex(on ? 0xe84e3c : 0x050304);
-        material.roughness = on ? 0.35 : 0.96;
-        material.envMapIntensity = on ? 1.0 : 0.04;
+        material.color.setHex(on ? 0xe84e3c : segDefaultOffHex);
+        material.roughness = on ? 0.35 : displayFaceRough;
+        material.envMapIntensity = on ? 1.0 : displayFaceEnv;
       }
     }
     studio?.updateLedsAndSegments(now, state);

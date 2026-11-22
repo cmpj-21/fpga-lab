@@ -330,12 +330,12 @@ export const PCB_THEMES = {
 };
 
 export const LED_THEMES = {
-  default: { on: 0xf55f48, em: 0xff2921, off: 0x491c20, segOn: 0xe84e3c, segOff: 0x050304, pwrOn: 0x4fd577, pwrEm: 0x39d66b },
-  amber: { on: 0xffb340, em: 0xff8800, off: 0x4a3014, segOn: 0xffa62b, segOff: 0x050402, pwrOn: 0xffcc44, pwrEm: 0xffaa00 },
-  emerald: { on: 0x48f582, em: 0x00e65c, off: 0x163d24, segOn: 0x3ce875, segOff: 0x020503, pwrOn: 0x4fd577, pwrEm: 0x39d66b },
-  'ice-blue': { on: 0x5ce6ff, em: 0x00c8ff, off: 0x153542, segOn: 0x47dcff, segOff: 0x020405, pwrOn: 0x70f5ff, pwrEm: 0x00e1ff },
-  ultraviolet: { on: 0xe26eff, em: 0xc829ff, off: 0x381745, segOn: 0xd959ff, segOff: 0x040205, pwrOn: 0xff55b8, pwrEm: 0xff1f9c },
-  'pure-white': { on: 0xf5f9ff, em: 0xdcebff, off: 0x333840, segOn: 0xf0f6ff, segOff: 0x040505, pwrOn: 0xd4ffe4, pwrEm: 0x8cffb5 },
+  default: { on: 0xf55f48, em: 0xff2921, off: 0x491c20, segOn: 0xe84e3c, segOff: 0x15191d, pwrOn: 0x4fd577, pwrEm: 0x39d66b },
+  amber: { on: 0xffb340, em: 0xff8800, off: 0x4a3014, segOn: 0xffa62b, segOff: 0x15191d, pwrOn: 0xffcc44, pwrEm: 0xffaa00 },
+  emerald: { on: 0x48f582, em: 0x00e65c, off: 0x163d24, segOn: 0x3ce875, segOff: 0x15191d, pwrOn: 0x4fd577, pwrEm: 0x39d66b },
+  'ice-blue': { on: 0x5ce6ff, em: 0x00c8ff, off: 0x153542, segOn: 0x47dcff, segOff: 0x15191d, pwrOn: 0x70f5ff, pwrEm: 0x00e1ff },
+  ultraviolet: { on: 0xe26eff, em: 0xc829ff, off: 0x381745, segOn: 0xd959ff, segOff: 0x15191d, pwrOn: 0xff55b8, pwrEm: 0xff1f9c },
+  'pure-white': { on: 0xf5f9ff, em: 0xdcebff, off: 0x333840, segOn: 0xf0f6ff, segOff: 0x15191d, pwrOn: 0xd4ffe4, pwrEm: 0x8cffb5 },
 };
 
 const CHAR_7SEG = {
@@ -1596,15 +1596,30 @@ export function createGfxStudio(ctx) {
     renderer.shadowMap.needsUpdate = true;
   }
 
+  const dispFaceMesh = model.getObjectByName('display_geometry_4');
+  const dispFaceFallbackCol = new THREE.Color(0x15191d);
+  const tmpDispBgCol = new THREE.Color();
+  const tmpSegTintCol = new THREE.Color();
+  const paletteCache = new Map();
   function getLedPalette() {
     if (gfx.ledTheme === 'custom') {
-      const c = new THREE.Color(gfx.ledCustomColor);
-      const off = c.clone().multiplyScalar(0.22);
-      const segOff = c.clone().multiplyScalar(0.015);
-      const hex = c.getHex(), offHex = off.getHex();
-      return { on: hex, em: hex, off: offHex, segOn: hex, segOff: segOff.getHex(), pwrOn: 0x4fd577, pwrEm: 0x39d66b };
+      const baseCol = dispFaceMesh?.material?.color || dispFaceFallbackCol;
+      tmpSegTintCol.set(gfx.ledCustomColor);
+      const hex = tmpSegTintCol.getHex();
+      const offHex = tmpDispBgCol.copy(tmpSegTintCol).multiplyScalar(0.22).getHex();
+      return { on: hex, em: hex, off: offHex, segOn: hex, segOff: baseCol.getHex(), pwrOn: 0x4fd577, pwrEm: 0x39d66b };
     }
-    return LED_THEMES[gfx.ledTheme] || LED_THEMES.default;
+    const base = LED_THEMES[gfx.ledTheme] || LED_THEMES.default;
+    const baseCol = dispFaceMesh?.material?.color;
+    if (!baseCol) return base;
+    const bgHex = baseCol.getHex();
+    const key = `${gfx.ledTheme}:${bgHex}`;
+    let cached = paletteCache.get(key);
+    if (!cached) {
+      cached = { ...base, segOff: bgHex };
+      paletteCache.set(key, cached);
+    }
+    return cached;
   }
 
   const ledCoreCol = new THREE.Color(0xfff4d8);
@@ -1669,10 +1684,12 @@ export function createGfxStudio(ctx) {
           const coreMix = Math.min(0.45, 0.14 + segOverdrive * 0.22);
           material.emissive.lerp(segCoreCol, coreMix);
         }
+        const bgRough = dispFaceMesh?.material ? dispFaceMesh.material.roughness : 0.78;
+        const bgEnv = dispFaceMesh?.material && dispFaceMesh.material.envMapIntensity !== undefined ? dispFaceMesh.material.envMapIntensity : 0.34;
         material.emissiveIntensity = on ? 1.6 + segGlowNorm * 2.6 + segOverdrive * 2.2 : 0;
         material.color.setHex(on ? pal.segOn : pal.segOff);
-        material.roughness = on ? 0.35 : 0.96;
-        material.envMapIntensity = on ? 1.0 : 0.04;
+        material.roughness = on ? 0.35 : bgRough;
+        material.envMapIntensity = on ? 1.0 : bgEnv;
       }
       const dLight = digitPointLights[d];
       const dHalo = digitHalos[d];
