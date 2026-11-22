@@ -235,7 +235,7 @@ function trackUiAction(kind, el, detail = '') {
     recordActionLine(`#${id} ${kind.padEnd(8)} ${target} -> BLOCKED (0ms) [reason:control disabled | status:${before.status} | view:${before.view}]`);
     return;
   }
-  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnTruthCopy|#btnTruthExport|#saveFileBtn|#btnRefreshExplorer|#homeConfirmSave|#psSave|#btnVcd|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#btnChangeHdlRoot|#homeChangeHdlRoot|#waveZoomIn|#waveZoomOut|#waveModeGroup|#btnResetView|#btnCenterComp|#ciCenter|#ciPins|#btnOpenPinoutRef|#btnLedView|#btnResetGfx|#pmResetFxBtn)\b/;
+  const IMPERATIVE = /^(#btnShot|#pmShutterBtn|#pmCopyBtn|#consoleCopy|#btnTruthCopy|#btnTruthExport|#saveFileBtn|#btnRefreshExplorer|#homeConfirmSave|#psSave|#btnVcd|#dropZone|#btnQsf|#progDrop|#homeOpenBtn|#homeOpenProjectBtn|#btnChangeHdlRoot|#homeChangeHdlRoot|#waveZoomIn|#waveZoomOut|#waveModeGroup|button\.wave-mode-btn|#btnResetView|#btnCenterComp|#ciCenter|#ciPins|#btnOpenPinoutRef|#btnLedView|#btnResetGfx|#pmResetFxBtn|#btnSettings|#btnTheme|button\.set-nav-btn|\[data-close|\[aria-label="Browse pins|button\.pin-pop-opt)\b/;
   setTimeout(async () => {
     await new Promise(r => requestAnimationFrame(r));
     const waitStart = performance.now();
@@ -334,8 +334,8 @@ async function copyConsole() {
 }
 addEventListener('error', event => { if (!/^ResizeObserver loop/.test(event.message)) log(`Uncaught error: ${event.message.replace(/^Uncaught /, '')}${event.filename ? ` (${event.filename.replace(location.origin, '')}:${event.lineno}:${event.colno})` : ''}`, 'error', event.error?.stack); });
 addEventListener('unhandledrejection', event => log(`Unhandled promise rejection: ${event.reason?.message ?? event.reason}`, 'error', event.reason?.stack));
-async function api(url, body, method = 'POST') {
-  const response = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+async function api(url, body, method = 'POST', signal = undefined) {
+  const response = await fetch(url, { method, ...(signal ? { signal } : {}), headers: { 'Content-Type': 'application/json' }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
   const result = await response.json(); if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`); return result;
 }
 function setStatus() {
@@ -460,6 +460,7 @@ async function saveProjectToDisk({ saveAs = false, quiet = false } = {}) {
   }
   const name = S.projectName || ide?.currentProjectTitle?.() || $('#topSelect').value || S.sources[0]?.name.replace(/\.[^.]+$/, '') || 'fpga_project';
   try {
+    ide?.suppressExternalWatch?.(2000);
     const result = await api('/api/project/save', { dir, projectName: name, project: projectData() });
     S.projectDir = result.dir;
     S.projectName = result.projectName;
@@ -597,12 +598,21 @@ function renderSources() {
   if (S.projectDir) ide?.refreshProjectTree?.();
   else ide?.renderProjectTree?.();
 }
+let stepAbortController = null;
+function abortPendingStep() {
+  if (stepAbortController) {
+    try { stepAbortController.abort(); } catch {}
+    stepAbortController = null;
+  }
+  S.busy = false;
+}
 async function closeSession(sim) { if (sim?.id) await api(`/api/sim/${sim.id}`, undefined, 'DELETE').catch(() => {}); }
 async function stopAllSimulations() {
   pause();
   releaseKeys();
   clearRtlRunner();
   ++S.generation;
+  abortPendingStep();
   S.pending = [];
   S.building = false;
   S.busy = false;
@@ -648,7 +658,7 @@ async function build(top = $('#topSelect').value, { quiet = false } = {}) {
   if (!/^[a-z][a-z0-9_]*$/i.test(S.topLibrary)) return toast('Enter a valid top library name.', 'err');
   if (S.sdf) { S.sdf.instance = $('#sdfInstance').value.trim(); S.sdf.corner = $('#sdfCorner').value; if (!S.sdf.instance) return toast('Enter / for the top level, or a child instance path such as /u1.', 'err'); }
   try { S.generics = parseGenerics($('#genericInput').value); } catch (e) { return toast(e.message, 'err'); }
-  pause(); S.building = true; S.error = false; const generation = ++S.generation; setStatus();
+  pause(); S.building = true; S.error = false; const generation = ++S.generation; abortPendingStep(); setStatus();
   clearRtlRunner();
   S.pending = []; await closeSession(S.sim); S.sim = null; S.vcd = null;
   board?.clearOutputs(); sampleOutputs();
@@ -883,6 +893,7 @@ async function restartSimulation() {
   pause();
   S.building = true; setStatus();
   const generation = ++S.generation;
+  abortPendingStep();
   try {
     const restarted = await api(`/api/sim/${S.sim.id}/restart`, {});
     if (generation !== S.generation) { await closeSession(restarted); return; }
@@ -894,6 +905,13 @@ async function restartSimulation() {
     toast('Simulation restarted.');
   } catch (e) {
     if (generation !== S.generation) return;
+    if (String(e?.message || '').includes('Simulation session ended') && S.sources.length && !S.dirty) {
+      S.building = false;
+      log('Previous simulation session closed — rebuilding design cleanly.');
+      await build(undefined, { quiet: true });
+      if (S.sim && !S.error) await flashToBoard({ quiet: true, preserveBoardPane: true });
+      return;
+    }
     fail(e);
   } finally { S.building = false; setStatus(); }
 }
@@ -907,6 +925,7 @@ async function flashToBoard({ quiet = false, preserveBoardPane = false } = {}) {
   if (S.flashed || S.time > 0 || S.cycles > 0 || S.sim.ended) {
     S.building = true; setStatus();
     const generation = ++S.generation;
+    abortPendingStep();
     try {
       const restarted = await api(`/api/sim/${S.sim.id}/restart`, {});
       if (generation !== S.generation) { await closeSession(restarted); return; }
@@ -1321,11 +1340,20 @@ function consume(result, stepFs = 0, skipLegacyBuzzer = false) {
 function reloadQsfText(text, fileName = 'project.qsf') {
   try {
     const parsed = parseQsf(text);
-    S.assignments = new Map(parsed.pins.map(({ pin, target }) => [pin, target.toLowerCase()]));
+    const nextMap = new Map(parsed.pins.map(({ pin, target }) => [pin, target.toLowerCase()]));
+    let same = nextMap.size === S.assignments.size;
+    if (same) {
+      for (const [pin, target] of nextMap) {
+        if ((S.assignments.get(pin) || '').toLowerCase() !== target) { same = false; break; }
+      }
+    }
+    if (same) return false;
+    S.assignments = nextMap;
     renderPins();
     markDirty();
     log(`Reloaded ${parsed.pins.length} pin assignment(s) from ${fileName}.`);
-  } catch {}
+    return true;
+  } catch { return false; }
 }
 const MAX_SIM_FS = 1.8e19;
 let adaptiveMaxCycles = 53249;
@@ -1355,6 +1383,8 @@ async function advance(cycles = 1, wallSec = 0) {
     if (cycles > maxCycles) cycles = maxCycles;
   }
   S.busy = true; const generation = S.generation;
+  const abortCtrl = new AbortController();
+  stepAbortController = abortCtrl;
   const stepStart = performance.now();
   const pending = S.pending.splice(0);
   const batches = [[]]; let ids = new Set();
@@ -1369,7 +1399,7 @@ async function advance(cycles = 1, wallSec = 0) {
     for (let i = 0; i < batches.length; i++) {
       const isLast = i === batches.length - 1;
       const batchCycles = isLast ? cycles : 0;
-      const result = await api(`/api/sim/${S.sim.id}/step`, { cycles: batchCycles, stride: batchCycles > 64 ? stride : 1, halfPeriod: stepHalfPeriod, clock: clockId(), inputs: batches[i] });
+      const result = await api(`/api/sim/${S.sim.id}/step`, { cycles: batchCycles, stride: batchCycles > 64 ? stride : 1, halfPeriod: stepHalfPeriod, clock: clockId(), inputs: batches[i] }, 'POST', abortCtrl.signal);
       if (generation !== S.generation) return;
       consume(result, stepFs);
       if (S.sim.ended) break;
@@ -1388,7 +1418,20 @@ async function advance(cycles = 1, wallSec = 0) {
       log('Reached 64-bit simulation time ceiling (~5 hours at 1 fs). Click Restart to continue from 0 ns.', 'info');
       toast('Reached simulation time limit. Click Restart to continue from 0 ns.');
     }
-  } catch (e) { if (generation === S.generation) fail(e); } finally { S.busy = false; }
+  } catch (e) {
+    if (e?.name === 'AbortError' || generation !== S.generation) return;
+    if (String(e?.message || '').includes('Simulation session ended') && S.sources.length && !S.dirty) {
+      pause();
+      toast('Simulation session was closed — rebuilding cleanly…');
+      await build(undefined, { quiet: true });
+      if (S.sim && !S.error) await flashToBoard({ quiet: true, preserveBoardPane: true });
+      return;
+    }
+    fail(e);
+  } finally {
+    if (stepAbortController === abortCtrl) stepAbortController = null;
+    if (generation === S.generation) S.busy = false;
+  }
 }
 function setInput(id, value) {
   if (!S.power || S.vcd || S.building || S.importing || S.exporting || S.dirty || S.error || !S.sim || !S.flashed || S.sim.ended || S.inputs[id] === value) return;

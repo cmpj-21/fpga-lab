@@ -1020,8 +1020,15 @@ export function createIde(api) {
     } catch {}
   }
 
+  let suppressExternalWatchUntil = 0;
+  function suppressExternalWatch(ms = 2000) {
+    suppressExternalWatchUntil = Math.max(suppressExternalWatchUntil, Date.now() + ms);
+  }
+
   async function syncExternalDiskChanges(changedRels = []) {
     if (!watchExternalEnabled) return;
+    if (Date.now() < suppressExternalWatchUntil) return;
+    if ($('#homeView') && !$('#homeView').classList.contains('hidden')) return;
     const dir = S.projectDir;
     if (!dir) return;
     const candidates = new Set();
@@ -1091,8 +1098,13 @@ export function createIde(api) {
           anySourceReloaded = true;
         }
         if (isQsf) {
-          api.reloadQsfText?.(diskText, rel);
-          if (baselineProject) baselineProject.assignments = [...S.assignments];
+          const qsfChanged = api.reloadQsfText?.(diskText, rel);
+          if (qsfChanged) {
+            if (baselineProject) baselineProject.assignments = [...S.assignments];
+            externalWarned.delete(rel);
+            reloadedNames.push(rel);
+          }
+          continue;
         }
         externalWarned.delete(rel);
         reloadedNames.push(rel);
@@ -1645,7 +1657,7 @@ export function createIde(api) {
     const view = $('#homeView');
     if (!view) return;
     if (!visible) hasActiveSession = true;
-    else if (clearSession) hasActiveSession = false;
+    else if (clearSession) { hasActiveSession = false; closeProjectWatcher(); }
     syncHomeContinue();
     if (visible) renderHome();
     view.classList.toggle('hidden', !visible);
@@ -3029,7 +3041,7 @@ export function createIde(api) {
     setProblems, reportBuildFailure, resetLayout, setEditorPaneOpen, setBoardPaneOpen,
     showHome, requestReturnHome, requestProjectSwitch, requestAppClose, toggleAppFullscreen, setSkipHomeExitConfirm, openNewProjectWizard, resumeWorkbench, captureBaseline, currentProjectTitle, renderHome, recordRecentProject, populateHomeHdl,
     openFileBrowserModal, toggleWordWrap, setMarkdownMode, openTutorial, cycleTab, toggleTerminalPane, ensureTerminalInitialized, updateTermCwd,
-    applyEditorOptions, applyTerminalOptions, setWatchExternalEnabled,
+    applyEditorOptions, applyTerminalOptions, setWatchExternalEnabled, suppressExternalWatch,
     get hasActiveSession() { return hasActiveSession; },
     get active() { return active; },
     get tabs() { return [...tabs]; },

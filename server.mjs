@@ -1281,10 +1281,11 @@ const server = http.createServer(async (req, res) => {
     const cacheHeaders = IS_PACKAGED && /^\/(vendor|assets)\//.test(url.pathname) ? { 'Cache-Control': 'no-cache, must-revalidate' } : null;
     return send(res, 200, await fs.readFile(actual), MIME[path.extname(actual)] || 'application/octet-stream', cacheHeaders);
   } catch (e) {
-    if (ownsLog && /^\/api\/(sim|hdl)\//.test(req.url || '')) {
+    const isIntentionalClose = e?.message === 'Simulation session closed.';
+    if (ownsLog && !isIntentionalClose && /^\/api\/(sim|hdl)\//.test(req.url || '')) {
       appendLogLine('warn', 'engine', `${req.method} ${req.url} failed: ${String(e.message || e).split(/\r?\n/)[0]}`);
     }
-    return send(res, 400, { error: e.message });
+    return send(res, isIntentionalClose ? 409 : 400, { error: e.message, ...(isIntentionalClose ? { closed: true } : {}) });
   }
 });
 let address = `http://127.0.0.1:${activePort}`;

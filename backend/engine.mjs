@@ -546,6 +546,7 @@ class EngineSession {
 }
 
 const idleCleanup = setInterval(() => {
-  for (const session of sessions.values()) if (Date.now() - session.lastUsed > 30 * 60 * 1000 && !session.busy) session.close().catch(() => {});
+  if (sessions.size <= 1) return;
+  for (const session of sessions.values()) if (Date.now() - session.lastUsed > 4 * 60 * 60 * 1000 && !session.busy) session.close().catch(() => {});
 }, 60000);
 idleCleanup.unref();
