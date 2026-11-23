@@ -9,16 +9,18 @@ Welcome to the **Trace FPGA Workbench** repository (`fpga-lab`). This file provi
 Trace FPGA Workbench is a browser-based virtual laboratory environment for simulating VHDL digital logic on an **RZ-EasyFPGA A2.2** development board (Intel/Altera Cyclone IV `EP4CE6E22C8N`).
 
 ### Core Architecture:
-1. **Backend Server (`server.mjs`):** Lightweight Node.js HTTP server providing static file serving and JSON API endpoints (`/api/sim/compile`, `/api/sim/:id/step`, `/api/sim/:id/vcd`).
-2. **Simulation Engine (`backend/engine.mjs` & `backend/bridge.c`):** 
+1. **Backend Server (`server.mjs`):** Lightweight Node.js HTTP server for static assets plus JSON APIs covering simulation, session state, logs, local HDL/library browsing, project files, `.qpf`/`.qsf` generation, VCD export, and the integrated terminal.
+2. **Simulation Engine (`backend/engine.mjs`, `backend/rtlCompiler.mjs` & `backend/bridge.c`):**
    - Uses local **GHDL** (VHDL-93/2002/2008).
    - Dynamically compiles a native C VPI plugin (`bridge.c` $\rightarrow$ `bridge.vpi`) linked against `libghdlvpi`.
-   - Spawns GHDL as a child process and communicates via bidirectional stdio pipes using a custom ASCII command protocol (`R <cycles> <halfPeriod> <clock> <inputs>` $\rightarrow$ returns observable signal samples).
+   - Can also synthesize GHDL output to Verilog and compile it into an ESM RTL stepper for high-frequency burst execution (`backend/rtlCompiler.mjs`). SDF-annotated runs remain on the GHDL/VPI path.
+   - Spawns GHDL as a child process and communicates via bidirectional stdio pipes using a custom ASCII command protocol (`R <cycles> <halfPeriod> <clock> <inputs> [sample_stride]`, followed by one line per pending input $\rightarrow$ returns observable signal samples).
 3. **Frontend Application (`public/`):**
    - **3D Interactive Model (`public/src/board/board3d.js`):** Three.js WebGL visualization of the PCB, 3D tactile push buttons, LEDs, and multiplexed 7-segment displays.
    - **Hardware Definitions (`public/src/board/boardDef.js`):** Net names, pin numbers, and component geometry.
-   - **Logic Analyzer (`public/src/ui/waves.js`):** HTML5 Canvas waveform viewer with cursor time measurements and signal buses.
-   - **Audio Engine (`public/src/ui/audio.js`):** Web Audio API synthesized feedback for switch clicks and buzzer tones.
+   - **Logic Analyzer (`public/src/ui/waves.js`):** HTML5 Canvas waveform viewer with cursor time measurements, signal buses, Follow/Fit/Free viewport modes, and 64-sample level-of-detail binning.
+   - **Audio Engine (`public/src/ui/audio.js`, `public/src/ui/buzzer-worklet.js`):** 48 kHz AudioWorklet PCM stream shaped by a modeled 12 mm buzzer transducer. Switch-click feedback has been removed; the remaining click sample is the Photo Studio shutter.
+   - **IDE & Tooling (`public/src/ui/ide.js`, `public/src/ui/selects.js`, `public/src/ui/colorpicker.js`, `public/src/ui/themes.js`):** Disk-backed Project Explorer, editor, ConPTY terminal, custom themed selects/color pickers, 13 built-in themes, and the Settings & Theme Studio.
 
 ---
 
@@ -32,7 +34,7 @@ Any agent touching this repository must adhere to the following rules:
 2. **Preserve Code Integrity:**
    - **Do NOT remove, refactor, or "simplify" working code logic** for brevity or aesthetic cleanliness. Original working code is sacred and must be preserved during feature additions and bug fixes.
 3. **Respect Cellular Data & Storage Headroom:**
-   - The user runs on a metered cellular connection and has limited disk space. Avoid introducing heavy multi-gigabyte build tools (such as Rust/Cargo/MSVC) when lightweight alternatives exist (e.g. native Windows Edge app mode).
+    - The user runs on a metered cellular connection and has limited disk space. Avoid introducing heavy multi-gigabyte build tools (such as Rust/Cargo/MSVC) when lightweight alternatives exist (e.g. the native Windows WebView2 host).
 4. **Surgical Line Edits:**
    - Always use precise, targeted edits on existing configuration and source files.
 5. **Git Discipline:**
@@ -69,16 +71,14 @@ The net names in this table are canonical. Vendor-sheet labels (such as `IR`) an
 
 Before modifying simulation or timing code, review these known architectural considerations:
 
-### A. The 9-Second / 53-Bit Integer Limit:
-* **Issue:** GHDL uses 1 femtosecond ($10^{-15}\text{ s}$) resolution. JavaScript's `Number.MAX_SAFE_INTEGER` ($2^{53} - 1$) is reached at $\sim 9.007\text{ seconds}$ of simulated time.
-* **Resolution Plan:** Keep femtosecond resolution using `BigInt` on the backend to avoid rounding sub-ns delays. Decouple continuous disk VCD dumping from live board stepping so the simulation can run continuously without hitting file size (64MB) or timestamp caps.
+### A. Femtosecond Timing & VCD History (Resolved):
+* **Implementation:** Backend timing uses `BigInt` femtoseconds (`backend/engine.mjs`), so the old ~9 second JavaScript `Number` ceiling no longer applies. Live sessions keep a rolling in-memory VCD history (25,000 timestamps) and export on demand instead of continuously writing an unbounded disk file; a ~5 hour session ceiling remains in the frontend.
 
-### B. Frame Delta Clamping:
-* **Issue:** In `public/src/main.js`, `dt` can evaluate to a negative number if `lastFrame` is updated after the animation frame timestamp `now`, causing negative cycle steps (`advance(-1)`).
-* **Fix:** Clamp `dt = Math.max(0, Math.min(0.1, ...))` and guard calls with `if (cycles > 0) advance(cycles);`.
+### B. Frame Delta Clamping (Resolved):
+* **Implementation:** `public/src/main.js` clamps frame delta to `[0, 0.1]` and guards stepping with `cycles > 0`, preventing negative cycle counts.
 
-### C. Touchpad & Waveform Gestures:
-* **Issue:** Firefox reports wheel events in `DOM_DELTA_LINE` (`deltaMode === 1`), making touchpad panning crawl unless scaled by line height (~20px). Touchpad pinch-to-zoom emits `e.ctrlKey === true` and should use exponential scaling `Math.exp(-deltaPixels * 0.005)`.
+### C. Touchpad & Waveform Gestures (Resolved):
+* **Implementation:** `public/src/ui/waves.js` normalizes `DOM_DELTA_LINE` wheel deltas and applies exponential scaling for Ctrl/ pinch zoom gestures.
 
 ### D. Single Cursor Limitation (Hardware DIP Switch Controls vs. Artificial Latch Mode):
 * **Architectural Decision:** Do **NOT** implement an artificial software "latch mode" for the tactile push buttons `S1`–`S4`.
@@ -90,20 +90,22 @@ Before modifying simulation or timing code, review these known architectural con
   4. Animates the 3D DIP switch model dynamically via `board?.setDip(mask)` in `public/src/board/board3d.js` so the virtual 3D levers visually slide into position.
 
 ### E. Desktop Launching:
-* **Recommendation:** Rather than downloading heavy Rust/Tauri toolchains on metered data, launch Edge in application mode (`msedge.exe --app="http://127.0.0.1:8044"`) inside [start.bat](file:///C:/Users/cmpj/dev/fpga-lab/start.bat).
+* **Current launcher:** `start.bat` sets `OPEN_BROWSER=1` and runs `node server.mjs`; the server opens the default browser with `cmd /c start` when that flag is set.
+* **Packaged builds:** Use a lightweight native Win32/WebView2 host (`packaging/RELEASE.md`) instead of a heavy Rust/Tauri toolchain on metered data.
 
 ---
 
 ## 5. Documentation Maintenance Guidelines (`TUTORIAL.md` vs `#aboutDialog`)
 
-Whenever making code modifications or feature enhancements, determine which documentation files require updates using this 4-question checklist:
+Whenever making code modifications or feature enhancements, determine which documentation files require updates using this checklist:
 
 | Trigger / Change Type | Document(s) to Update | Target Sections |
 |---|---|---|
 | **1. UI Controls & Gestures:** Added or changed buttons, sliders, shortcuts, or mouse/touchpad gestures. | **`TUTORIAL.md` only** | Section 3 (*Find your way around*), Section 7 (*Waveforms*), Section 15 (*Keyboard reference*). |
 | **2. Hardware Pin Mappings:** Modified default pin assignments or board net names in `boardDef.js`. | **`TUTORIAL.md` only** | Section 6 (*Common reference mappings table*). |
-| **3. Hard Limits & Resource Caps:** Altered session limits, VCD buffer caps (64MB), or timing ceilings (9s limit). | **BOTH `TUTORIAL.md` & `About` Dialog** | `TUTORIAL.md` Section 15 (*Practical limits*) AND `public/index.html` (`#aboutDialog` `<dt>Resource limits</dt>`). |
+| **3. Hard Limits & Resource Caps:** Altered session limits, VCD/waveform history caps, or the ~5 hour timing ceiling. | **BOTH `TUTORIAL.md` & `About` Dialog** | `TUTORIAL.md` Section 15 (*Practical limits*) AND `public/index.html` (`#aboutDialog` `<dt>Resource limits</dt>`). |
 | **4. Engine Physics & Formats:** Added file extensions, vendor libraries (e.g. `altera_mf`), or peripheral models. | **`About` Dialog primarily** (+ `TUTORIAL.md` Sec 13) | `public/index.html` (`#aboutDialog` `<dt>Logic & timing</dt>` or `<dt>Not simulated</dt>`) AND `TUTORIAL.md` Section 13. |
+| **5. Entry-Point Documentation:** Changed quick-start steps, requirements, or the supported test commands. | **`README.md` + `TUTORIAL.md`** | `README.md` overview/quick start/tests AND `TUTORIAL.md` Section 1 (*Launch the website*). |
 
 ---
 
@@ -112,12 +114,21 @@ Whenever making code modifications or feature enhancements, determine which docu
 Always provide these to the user for manual execution:
 
 ```powershell
-# Start the local server
+# Start the local server (start.bat also opens the default browser)
 node "C:\Users\cmpj\dev\fpga-lab\server.mjs"
 
 # Run backend API and compiler tests
 node "C:\Users\cmpj\dev\fpga-lab\test\api.mjs"
 
-# Run browser integration tests (requires headless Firefox)
+# Run browser integration tests (hardcoded headless Chrome)
 node "C:\Users\cmpj\dev\fpga-lab\test\browser.mjs"
+
+# Other focused suites
+node "C:\Users\cmpj\dev\fpga-lab\test\engine.mjs"
+node "C:\Users\cmpj\dev\fpga-lab\test\formats.mjs"
+node "C:\Users\cmpj\dev\fpga-lab\test\importers.mjs"
+node "C:\Users\cmpj\dev\fpga-lab\test\native.mjs"
+node "C:\Users\cmpj\dev\fpga-lab\test\real.mjs"
+node "C:\Users\cmpj\dev\fpga-lab\test\server.mjs"
+node "C:\Users\cmpj\dev\fpga-lab\test\demo.mjs"
 ```

@@ -46,10 +46,10 @@ The configured installation uses Node.js, GHDL, and a native bridge. Its website
 
 ## 2. Try the built-in counter demo
 
-> If you already have work open, choose **Files > Sources > Save project** first. **Load demo** replaces the current source set and resets its pin assignments and compiler settings.
+> If you already have work open, choose **File > Save Project As…** or **File > Export Project JSON…** first. **File > Load Counter Demo** replaces the current source set and resets its pin assignments and compiler settings.
 
-1. Click **Files** on the left rail.
-2. In the **Sources** tab, find **Local HDL library** and click **Load demo**.
+1. Open the **File** menu in the top menubar.
+2. Choose **Load Counter Demo**.
 3. Wait for **Counter demo** and the **Paused** status.
 4. Set **Clock** to **1 kHz** for an easy first experiment.
 5. Click **Run**.
@@ -84,7 +84,7 @@ Click **LEDs** beside the four small indicators below the board. The camera move
 - **Board Reset / R** drives the design's active-low `reset_btn` input. The demo uses a synchronous reset, so it needs a clock edge. While paused, hold **R** and click **Step**.
 - The **circular-arrow button at the top** restarts the native simulation timeline from time zero without recompiling or reflashing your design, preserving your selected Logic Analyzer signals.
 
-Click blank space before using global shortcuts if a text field is focused.
+Global shortcuts are ignored while a text field has focus. Click blank space, or hover the 3D board or waveform plot when using board/input shortcuts, before pressing them.
 
 ## 3. Find your way around
 
@@ -98,10 +98,10 @@ Screenshots illustrate the layout; your design, clock, open panels, and signal v
 | Top circular arrow | Restart the current simulation timeline from time zero without recompiling, or rewind a VCD replay |
 | Top Step icon | Advance one generated clock cycle; in replay, advance one recorded timestamp |
 | Run / Pause | Start or pause automatic advancement |
-| File > Open / Add Files | Import local source files, artifacts, or a saved Trace project (`Ctrl+O`) |
-| Files | Sources, top entity, compiler options, Quartus `.qpf`/`.qsf` Save Project / Save Project As…, and local HDL library |
-| Pins | Quartus-style Pin Planner listing detected design ports where you assign board pin numbers (`PIN_xx`); includes a **Board Pinout ↗** button to open the Master Pinout Reference |
-| Signals | Show or hide the logic analyzer |
+| File menu | New File / New Folder, Open Project (`.qpf` / `.qsf`), Add / Open Files (`Ctrl+O`), Save File, Save Project As… (`Ctrl+Shift+S`), Export Project JSON, Load Counter Demo, and Settings & Themes… |
+| Files rail / Project Explorer | Disk-backed source tree, New File / New Folder, Local HDL library with **Change…** folder picker, and the gear button for **Project & compiler settings** |
+| Pins | Quartus-style Pin Planner listing detected design ports where you assign board pin numbers (`PIN_xx`); includes **Import QSF**, **Clear all**, and a **Board Pinout ↗** button |
+| View > Logic Analyzer (Waveforms) | Show or hide the waveform dock; other bottom docks are Terminal, Console, Problems, Pinout, Truth table, UART, and Bitstream |
 | Tools | Console, Problems, Master Board Pinout Reference, Truth table, UART, and Bitstream inspection |
 | About / Model limits | Explain supported behavior and what is not simulated |
 | Board I/O | S1–S4 tactile keys, 4-position DIP switches, Reset, LED indicators, and virtual Power |
@@ -118,10 +118,10 @@ Screenshots illustrate the layout; your design, clock, open panels, and signal v
 - Use **Perspective**, **Top**, or **Detail** for quick views.
 - Open the sliders-shaped **View settings** button for more camera views, including **Four LEDs**, **Display detail**, **Connectors**, and **Underside**.
 - **Exploded view** separates component assemblies for inspection.
-- **Display persistence** changes how multiplexed digits remain visible between activations; it does not change VHDL timing.
+- **Auto-rotate** slowly orbits the camera; it is a viewing aid only and does not affect simulation timing.
 - **LED intensity** changes rendering brightness, not an electrical current.
 - **Labels**, **Grid**, and **Net guides** are visual aids. Net guides are not a complete PCB routing or connectivity verification tool.
-- **Render quality** ranges from **Low** (for slower computers) up to **Ultra** and **Extreme** (supersampled with 4K shadow maps).
+- **Render quality** ranges from **Low** (for slower computers) through **Medium** and **High** up to **Ultra** (2.25x) and **Extreme** (2.75x, 4K).
 - **Save image** downloads a PNG of the board viewport, not the whole website.
 - **Graphics & FX Suite** (inside **View & graphics**):
   - **Visual presets:** One-click studio looks including *Studio Product Shot*, *Cyberpunk Neon*, *Automata Bunker*, *Golden Hour Sun*, *Macro Tilt-Shift Bokeh*, *Engineering Blueprint*, *FLIR Thermal Imaging*, *1980s Lab CRT*, *Holographic X-Ray*, *Studio Clay Maquette*, and *Technical Cel / Ink*.
@@ -130,6 +130,13 @@ Screenshots illustrate the layout; your design, clock, open panels, and signal v
   - **Post-FX, optics & color grading:** Perspective vs. Orthographic CAD projection, FOV/focal length, Dutch roll tilt, tone mapping operators (*ACES*, *AgX*, *Khronos Neutral*, *Reinhard*, *Cineon*, *Linear*), HDR bloom, SSAO cavity shading, depth-of-field bokeh blur, CAS sharpening, Sobel ink outlines, chromatic aberration, lens distortion, vignette, film grain, color grading, LUT filters, shadow controls, floor surfaces, and studio backdrops.
 - **Photo Studio (`P` or camera icon in the viewport toolbar):**
   - Opens a dedicated viewfinder with aspect-ratio framing (*Free*, *16:9*, *21:9*, *4:3*, *1:1*, *9:16*), composition grids (*Rule of Thirds*, *Golden Ratio*, *Crosshair*, *Diagonals*, *Safe Area*), **Focus pick** (click any component on the 3D board to lock DoF focus distance), **Maximize** theater mode, **Hide HUD (`H`)**, custom board pose staging (custom 7-segment text and LED states), optional metadata watermark stamps, multi-resolution capture (*Viewport*, *1080p*, *1440p*, *4K UHD*) in *PNG*, *WebP*, or *JPEG* (with optional transparent alpha cutout), clipboard copy, and a session filmstrip.
+
+### Themes, settings, and integrated tools
+
+- The **Theme** rail button opens the quick theme switcher; **Theme > Customize / Settings…** or `Ctrl+,` opens **Settings & Theme Studio** with 13 built-in templates plus saved custom themes. The Logic Analyzer canvas can stay oscilloscope-dark regardless of the IDE theme.
+- The Settings modal also controls editor fonts and indentation, waveform defaults (time unit, Follow/Fit/Free mode, 10k/40k/100k sample cap, clock, VHDL standard), integrated terminal appearance, automatic reload of external file edits, the Local HDL library folder, master buzzer volume, and 3D render/glow settings.
+- **View > Integrated Terminal** (`Ctrl + \``) opens a persistent ConPTY shell with multiple tabs, shell profiles, and a **CWD: Project** shortcut.
+- Dropdowns and color swatches use the themed `TraceSelect` and `TraceColorPicker` controls instead of native OS popups.
 
 On smaller screens, **Files** opens a drawer. Close it with its **×** button to uncover the board.
 
@@ -162,15 +169,15 @@ end architecture rtl;
 ### B. Import and build it
 
 1. Save any existing project you want to keep.
-2. In **Files > Sources**, remove the old source entries using their **×** buttons. Loading ordinary sources generally adds to the current source set; importing a saved project replaces it.
+2. In the **Files** rail / Project Explorer, remove the old source entries using their context menu or **×** buttons. Loading ordinary sources generally adds to the current source set; importing a saved project replaces it.
 3. Click **Open files** and select `tutorial_and.vhd`.
-4. Open **Compiler options** and select **VHDL-2008**.
+4. Open **Build & Sim > Project & Compiler Settings…** (or the gear button in the Files rail) and select **VHDL-2008**.
 5. Use **Top library: work** and leave **Generic overrides** empty.
 6. If a previous project had SDF timing loaded, choose **Remove annotation**.
-7. Choose **tutorial_and** under **Top entity**, then click **Build design** if needed.
+7. Choose **tutorial_and** under **Top entity**, then click **Compile** / **Build & Compile** if needed.
 8. Wait for **Paused**, not **Error** or **Build needed**.
 
-Imports and top-entity changes can trigger a build automatically. Changing compiler options requires rebuilding. If compilation happens before you finish the settings and fails, correct the settings and build again.
+Imports and top-entity changes mark the project **Build needed**; compilation runs only when you choose **Build & Compile** (or **Flash**). Changing compiler options requires rebuilding. If a build fails, correct the settings and compile again.
 
 ### C. Exercise the inputs
 
@@ -198,6 +205,8 @@ The board LEDs are not connected to this example by default. That is normal: the
 2. Select **a** and **b**.
 3. Click **Generate table**.
 4. Confirm the output column is `0, 0, 0, 1`.
+
+Use the delimiter selector (TSV, CSV, or PSV) with **Copy** or **Export** to place the generated table on the clipboard or download it as a text file.
 
 This uses a separate GHDL simulation, so it does not change your active input settings or running design. Select between one and eight scalar inputs.
 
@@ -227,7 +236,7 @@ begin
 end architecture rtl;
 ```
 
-Open **Pins > Reset map** to remove any custom mappings left from a previous experiment. This restores the default board-net mappings and restarts a native design.
+Open **Pins > Clear all** to remove any custom mappings left from a previous experiment. This restores the default board-net mappings and restarts a native design.
 
 The port names now match the board automatically:
 
@@ -333,14 +342,14 @@ A QSF imports pin assignments and supported project metadata. It does not run Qu
 ### Analyzer controls
 
 - Click a **signal chip** above the plot to show or hide that signal.
-- **Follow** keeps the view following advancing simulation time.
-- **+ / −** zoom the timeline.
-- **Fit** fits the recorded range and turns off Follow.
-- **Ctrl/⌘ + scroll** or **pinch** over the plot zooms smoothly around the pointer.
-- **Shift + scroll** or a two-finger horizontal swipe pans sideways through time.
+- The **Follow / Fit / Free** segmented control is a locked mode: **Follow** tracks the live simulation head with an automatic VHDL/clock window, **Fit** continuously shows the whole recorded span, and **Free** keeps your view while samples update in the background. Pan and zoom are available only in **Free** mode; the default for new projects is **Fit**, and each project remembers its last mode.
+- **+ / −** zoom the timeline in **Free** mode; the horizontal scrollbar below the plot also moves the visible window.
+- **Ctrl/⌘ + scroll** or **pinch** over the plot zooms smoothly around the pointer in **Free** mode.
+- **Shift + scroll** or a two-finger horizontal swipe pans sideways through time in **Free** mode; line-mode wheel deltas are normalized so touchpads match mouse speed.
 - Scroll vertically over the plot to scroll up and down through the signal list.
-- Drag horizontally inside the plot to pan.
+- Drag horizontally inside the plot to pan in **Free** mode.
 - Move the pointer over the plot to inspect a time with the cursor. The value column corresponds to the cursor position, which may be earlier than the current simulation time.
+- Large runs use 64-sample level-of-detail blocks and vertical row culling. The Settings modal can cap live history at 10,000, 40,000 (default), or 100,000 samples per signal.
 
 Scalar digital signals appear as high/low traces. Binary vectors are displayed in hexadecimal; unknown logic values remain distinguishable. Imported real-valued VCD signals retain their numeric values rather than being converted into binary logic.
 
@@ -362,7 +371,7 @@ An `X` or `U` is not automatically a website bug. It can indicate an uninitializ
 2. Click **Finish & export**.
 3. Save the downloaded `.vcd` file.
 
-**This ends the native simulation.** It is not a non-destructive screenshot of a still-running session. The status becomes **Complete**; click the top restart button or **Build design** to run again.
+**This ends the native simulation.** It is not a non-destructive screenshot of a still-running session. The status becomes **Complete**; click the top restart button or **Build & Compile** to run again.
 
 A testbench that finishes normally can also export its final waveform. The button then reads **Export VCD**.
 
@@ -403,7 +412,7 @@ Input changes while paused settle at zero physical time. They do not by themselv
 
 ### Build and Power
 
-- **Build design** recompiles and starts a fresh simulation. It is not a resume button.
+- **Build & Compile** recompiles and starts a fresh simulation. It is not a resume button.
 - **Build needed** means settings or sources changed; rebuild before running.
 - **Power off** pauses and blanks the board's outputs. It is a virtual control, not an electrical power model.
 - Turning **Power on** again rebuilds an existing native design. In VCD replay, it restores the recorded outputs instead.
@@ -461,7 +470,7 @@ A failing `severity error` assertion stops execution and appears in the console.
 
 ### Save a portable copy
 
-Choose **Files > Sources > Save project**. The browser downloads a Trace JSON project containing:
+Choose **File > Export Project JSON…** for a portable browser download, or **File > Save Project As…** to write a native `.qpf` / `.qsf` project folder. The downloaded Trace JSON contains:
 
 - Source and data-file contents.
 - Per-file VHDL library assignments.
@@ -469,6 +478,8 @@ Choose **Files > Sources > Save project**. The browser downloads a Trace JSON pr
 - Generic overrides.
 - Pin mappings.
 - Loaded SDF annotation settings and text, if present.
+
+A native **Save Project As…** prompts for a folder, creates an auto-subfolder when needed, and writes the VHDL sources plus `.qpf` / `.qsf` files. Source files and pin assignments are then editable on disk with automatic external-file reload.
 
 Rename the downloaded file to something useful, such as `and-gate-lab.json`. Browser settings determine the download location.
 
@@ -488,16 +499,16 @@ Autosave is not a backup:
 
 ### Edit source code
 
-1. Click a source filename in **Files > Sources**.
+1. Click a source filename in the **Files** rail / Project Explorer.
 2. Edit the text in the source editor.
 3. Check its **Library** field.
-4. Click **Save & build**.
+4. Save the file, then click **Build & Compile** when you are ready to rebuild.
 
 **This edits the copy inside the web project, not the original `.vhd` file on your disk.** Save the Trace project to retain it. To update a standalone source file, copy the edited text into your external editor and save it there.
 
 Importing a source with an existing filename replaces that source's text. Distinct sources need distinct filenames; imported project files are handled by filename, not preserved directory trees.
 
-The **Local HDL library** lists supported files under the configured local HDL folder, currently `C:\Users\cmpj\dev\HDL`. Its search box filters the list. Clicking a file imports it; it is not a file editor or a Quartus project loader.
+The **Local HDL library** lists supported files under the folder stored in `trace.config.json`; use **Change…** in the Files rail or **Settings > Terminal & Workspace > Local HDL Library Folder** to choose it. Its search box filters the list. Clicking a file imports it; it is not a file editor or a Quartus project loader.
 
 ## 11. Use libraries, generics, and data files
 
@@ -515,7 +526,7 @@ If auto-detection finds multiple possible top entities, select the intended one 
 
 ### Generic overrides
 
-Enter comma-separated values in **Compiler options > Generic overrides**. For a design that declares these generic names and types, valid examples are:
+Enter comma-separated values in **Project & Compiler Settings… > Generic overrides**. For a design that declares these generic names and types, valid examples are:
 
 ```text
 WIDTH=8, DEPTH=16, FLAG=true, MODE="fast", START=-3, LETTER='a'
@@ -523,7 +534,7 @@ WIDTH=8, DEPTH=16, FLAG=true, MODE="fast", START=-3, LETTER='a'
 
 Do not paste arbitrary generic names into a design that does not declare them. Leave the field empty for the tutorial examples. Duplicate names are rejected. Quoted strings may contain commas, for example `MODE="fast,debug"`.
 
-Click **Build design** after changing overrides.
+Click **Build & Compile** after changing overrides.
 
 ### Testbench data files
 
@@ -554,15 +565,15 @@ Skip this unless you have a timing model/netlist and its matching SDF file.
 
 1. Load the compatible VHDL/VITAL timing model and its dependencies.
 2. Import the `.sdf` file.
-3. Open **Compiler options**; the annotation controls should appear.
+3. Open **Project & Compiler Settings…**; the annotation controls should appear.
 4. Set **SDF instance** to `/` for the top level, or the appropriate child path such as `/u1`.
 5. Select **Minimum**, **Typical**, or **Maximum** timing corner.
-6. Click **Build design**.
+6. Click **Build & Compile**.
 7. Drive inputs and advance simulated time, then inspect the analyzer.
 
 An SDF file alone does not turn behavioral VHDL into a gate-level timing model. The model must expose compatible timing constructs for annotation. For example, a validated 2:3:4 ns delay produces 2 ns at Minimum, 3 ns at Typical, and 4 ns at Maximum.
 
-Use **Remove annotation**, then rebuild, to run without it. This feature is not an automatic Quartus place-and-route timing flow.
+Use **Remove annotation**, then **Build & Compile**, to run without it. This feature is not an automatic Quartus place-and-route timing flow.
 
 ## 13. Choose the right file format
 
@@ -572,6 +583,8 @@ Use **Remove annotation**, then rebuild, to run without it. This feature is not 
 | `.vho` | Compiles a VHDL netlist, provided its required models/libraries are supplied |
 | `.cf` | Reads a GHDL library index and rebuilds the accompanying referenced sources; not a standalone executable |
 | `.qsf` | Imports supported pin assignments and project metadata; does not execute Tcl or run Quartus |
+| `.qpf` | Opens a Quartus project file together with its associated sources and pin assignments |
+| `.md` | Displays in view/raw mode as documentation alongside the HDL project |
 | `.sdf` | Annotates compatible native timing models after you choose instance and corner |
 | `.hex`, `.mif`, `.mem`, `.txt`, `.dat` | Supplies data files for the testbench to read |
 | `.vcd` | Replays a recorded waveform; does not execute the original design |
@@ -606,7 +619,7 @@ In **Tools > Bitstream**, **Inspect bitstream** shows available metadata and a S
 | UART text is missing or wrong | Check the TX mapping, selected baud, idle-high polarity, 8-N-1 framing, and enough elapsed simulated time. |
 | Four simulations already open | Close unused Trace tabs; truth-table generation also temporarily uses a separate simulation. |
 | Simulation did not respond / event limit | Inspect for infinite loops or zero-delay oscillation. Reduce activity per step where possible and rebuild after correcting the design. |
-| Browser storage is full/unavailable | Use Save project and keep its downloaded JSON; do not depend on autosave. |
+| Browser storage is full/unavailable | Use **File > Export Project JSON…** or **File > Save Project As…** and keep the resulting files; do not depend on autosave. |
 | Project edits are absent from the original source file | The web editor edits its project copy. Save JSON or copy the text back into your external source editor. |
 | 3D board is slow or unavailable | Enable WebGL/hardware acceleration where supported, try another modern browser, or lower Render quality. Digital controls and analyzer do not require a visible board. |
 
@@ -621,6 +634,9 @@ The console's first compiler error is usually the best starting point. Fix that 
 | `Ctrl + S` / `Ctrl + Alt + S` | Save active file / Save active file as (via built-in GUI File Explorer) |
 | `Ctrl + Shift + S` | Save full FPGA project (`.qpf`, `.qsf`, and `.vhd` sources) |
 | `Ctrl + O` / `Ctrl + Alt + N` | Open files / Create new file in Explorer |
+| `Ctrl + ,` | Open **Settings & Theme Studio** |
+| `F2` | Rename selected file or folder in the Project Explorer |
+| `Tab` / `Shift + Tab` | Indent / outdent the selection in the editor |
 | `Ctrl + W` | Close active editor tab |
 | `Ctrl + Tab` / `Ctrl + Shift + Tab` | Cycle to next / previous open editor tab |
 | `Alt + Z` | Toggle editor **Word Wrap** |
@@ -645,7 +661,7 @@ The console's first compiler error is usually the best starting point. Fix that 
 | `P` / `H` | Toggle **Photo Studio** mode / Hide or show Photo Studio HUD |
 | `Escape` | Exit **Photo Studio**, clear active 3D component selection, and dismiss open overlay panels |
 
-Mouse and touchpad: Ctrl/⌘ + wheel or pinch zooms the waveform plot around the pointer; Shift + wheel or a horizontal two-finger swipe pans the timeline. Firefox line-mode wheel deltas are normalized so panning has the same speed as other browsers.
+Mouse and touchpad: Ctrl/⌘ + wheel or pinch zooms the waveform plot around the pointer in **Free** mode; Shift + wheel or a horizontal two-finger swipe pans the timeline in **Free** mode. Firefox line-mode wheel deltas are normalized so panning has the same speed as other browsers. Simulation keys also work while the pointer hovers over the 3D board or waveform plot, not only when the canvas has focus.
 
 ### Practical limits
 
@@ -654,13 +670,13 @@ The current application limits include:
 - Four simultaneous native simulations, including temporary truth-table runs.
 - 100 source/data files; ordinary source/project imports are limited to 6 MB.
 - 512 observed native signals, 4096 bits per signal, and 16 hierarchy levels.
-- Live sessions capture a rolling in-memory VCD history (up to 25,000 timestamps) instead of writing unbounded VCD files to disk, so continuous board runs do not hit a 64 MB capture crash.
+- Live sessions capture a rolling in-memory VCD history (up to 25,000 timestamps) instead of writing unbounded VCD files to disk, so continuous board runs do not hit a 64 MB capture crash. The on-screen waveform analyzer keeps a separate configurable rolling history of 10,000, 40,000 (default), or 100,000 samples per signal.
 - VCD replay imports limited to 32 MB and 250,000 timestamps.
-- 64-bit femtosecond simulation time (~5 hours per session). Clocks from `1 Hz` up to `1 MHz` run at 1:1 real-world time; `50 MHz` runs at maximum single-core GHDL burst throughput (up to 131,072 cycles per frame) so hardware clock dividers and multiplexed 7-segment displays render steadily.
+- 64-bit femtosecond simulation time (~5 hours per session). The GHDL/VPI path runs `1 Hz` through `1 MHz` at 1:1 real-world time and burst-steps `50 MHz` up to 131,072 cycles per frame; the compiled RTL runner can step up to 2,500,000 cycles per frame for high-frequency designs. SDF-annotated runs stay on the GHDL/VPI path.
 
 ### What this website is — and is not
 
-Trace executes compiled VHDL using GHDL and visualizes digital results on a reference board. It supports native assertions, event timing, waveform recording, and compatible timing annotations.
+Trace compiles and executes VHDL using GHDL and, when timing annotation is absent, can synthesize it to an RTL stepper for fast high-frequency runs; results are visualized on a reference board. It supports native assertions, event timing, waveform recording, and compatible timing annotations.
 
 It does **not** provide analog voltage/current simulation, power or thermal analysis, physical metastability or signal-integrity modeling, full peripheral-chip emulation, JTAG programming, or execution of proprietary FPGA bitstreams. Visible SDRAM, connectors, and other components are not automatically functioning electronic models. The board model is photo-referenced, not certified manufacturing CAD.
 
