@@ -1,0 +1,91 @@
+name: Release Windows builds
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, e.g. 1.0.0'
+        required: true
+        default: '1.0.0'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up MSYS2 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: mingw-w64-ucrt-x86_64-gcc
+
+      - name: Set up GHDL
+        uses: ghdl/setup-ghdl@v1
+        with:
+          version: latest
+          backend: mcode
+          runtime: ucrt64
+
+      - name: Ensure Inno Setup 6
+        shell: powershell
+        run: choco install innosetup -y --no-progress
+
+      - name: Resolve release version
+        shell: powershell
+        env:
+          RAW_VERSION: ${{ github.event.inputs.version || github.ref_name }}
+        run: |
+          $version = $env:RAW_VERSION -replace '^v', ''
+          if (!$version) { throw 'Release version is empty.' }
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Fetch WebView2 SDK
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File "packaging\fetch-webview2.ps1"
+
+      - name: Build portable and installer artifacts
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File "packaging\build-release.ps1" -Version $env:RELEASE_VERSION
+
+      - name: Create source archive and versioned asset names
+        shell: powershell
+        run: |
+          $v = $env:RELEASE_VERSION
+          $setup = 'dist\Trace-FPGA-Workbench-Setup-x64.exe'
+          if (!(Test-Path -LiteralPath $setup)) { throw "Installer was not produced: $setup" }
+          git archive --format=zip --output="dist\Trace-FPGA-Workbench-$v-Source.zip" HEAD
+          Copy-Item "dist\Trace-FPGA-Workbench-Portable-x64.exe" "dist\Trace-FPGA-Workbench-$v-Portable-x64.exe" -Force
+          Copy-Item "dist\Trace-FPGA-Workbench-Portable-x64.zip" "dist\Trace-FPGA-Workbench-$v-Portable-x64.zip" -Force
+          Copy-Item $setup "dist\Trace-FPGA-Workbench-$v-Setup-x64.exe" -Force
+          Get-ChildItem dist -File | Where-Object Name -like "Trace-FPGA-Workbench-$v-*" | Select-Object Name, @{n='MB';e={[math]::Round($_.Length / 1MB, 2)}} | Format-Table -AutoSize
+
+      - name: Publish GitHub release
+        shell: powershell
+        run: |
+          $v = $env:RELEASE_VERSION
+          gh release create "v$v" `
+            --title "Trace FPGA Workbench $v" `
+            --generate-notes `
+            "dist\Trace-FPGA-Workbench-$v-Portable-x64.exe" `
+            "dist\Trace-FPGA-Workbench-$v-Portable-x64.zip" `
+            "dist\Trace-FPGA-Workbench-$v-Setup-x64.exe" `
+            "dist\Trace-FPGA-Workbench-$v-Source.zip"

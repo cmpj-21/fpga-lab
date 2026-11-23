@@ -32,6 +32,10 @@ To skip the Inno Setup installer step and build only the Portable `.exe` + Porta
 powershell -ExecutionPolicy Bypass -File "C:\Users\cmpj\dev\fpga-lab\packaging\build-release.ps1" -Version "1.0.0" -SkipInstaller
 ```
 
+## GitHub-hosted release build
+
+The `Release Windows builds` workflow (`.github/workflows/release.yml`) builds on a GitHub-hosted Windows runner, so no local toolchain or download is needed. Push a `v*` tag, or run the workflow manually with a version such as `1.0.0`. It publishes a GitHub release containing the versioned portable EXE, portable ZIP, setup EXE, and source ZIP.
+
 ## Debugging a Packaged Build
 
 Launch `Trace.exe` with `--devtools` to enable DevTools (`F12` / `Ctrl+Shift+I`):
