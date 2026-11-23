@@ -113,7 +113,10 @@ $combined = New-Object byte[] ($srcBytes.Length + $verBytes.Length)
 $hashHex = ([BitConverter]::ToString($sha.ComputeHash($combined)) -replace '-', '').ToLower().Substring(0, 16)
 $vpiOut = Join-Path $buildDir "bridge-$hashHex.vpi"
 
-& $gcc -shared -O2 -Wall "-I$vpiInclude" $bridgeSrc "-L$vpiLib" -lghdlvpi -o $vpiOut
+Write-Host "  VPI include: $vpiInclude"
+Write-Host "  VPI library: $vpiLib"
+$vpiBuildOutput = & $gcc -shared -O2 -Wall "-I$vpiInclude" $bridgeSrc "-L$vpiLib" -lghdlvpi -o $vpiOut 2>&1
+$vpiBuildOutput | ForEach-Object { Write-Host $_ }
 if ($LASTEXITCODE -ne 0) { throw "Failed to compile $vpiOut" }
 Write-Host "  Built VPI plugin: $(Split-Path -Leaf $vpiOut)" -ForegroundColor Green
 
