@@ -12,6 +12,18 @@ trace.vcd
 research/ffprofile/
 research/ffshot2/
 research/crop_*.png
+research/overhaul-*.png
+research/sidebar-closed.png
+research/blender-browser-*.png
+research/product-truth.png
+research/product-pins.png
+research/product-replay.png
+research/product-uart.png
+research/product-timing.png
+research/console-copy.png
+research/camera-dtubes-*.png
+research/theme-dark-*.png
+research/work-obj08.cf
 dump_modules.txt
 
 # Compiled native bridge artifacts (compiled on the fly by GCC)

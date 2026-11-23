@@ -1,4 +1,0 @@
-v 4
-file / "C:/Users/cmpj/dev/fpga-lab/research/bridge_probe.vhd" "179026847ab34af942f803435c922f4603bf1dd1" "20261116134225.237":
-  entity bridge_probe at 1( 0) + 0 on 11;
-  architecture rtl of bridge_probe at 7( 172) + 0 on 12;
