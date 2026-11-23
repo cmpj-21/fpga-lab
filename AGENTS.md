@@ -41,6 +41,8 @@ Any agent touching this repository must adhere to the following rules:
    - Always execute `git add -A` and `git commit` for every significant change or fix. Ensure commit messages are concise and descriptive.
 6. **Release Asset Discipline:**
    - Do not upload a duplicate source ZIP. GitHub automatically provides `Source code (zip)` and `Source code (tar.gz)` on tagged releases; release workflows upload only built artifacts.
+7. **Documentation Paths:**
+   - Never write machine-specific absolute paths in `README.md`, `TUTORIAL.md`, `AGENTS.md`, or packaging docs. Use paths relative to the repository root.
 
 ---
 
@@ -116,21 +118,21 @@ Whenever making code modifications or feature enhancements, determine which docu
 Always provide these to the user for manual execution:
 
 ```powershell
-# Start the local server (start.bat also opens the default browser)
-node "C:\Users\cmpj\dev\fpga-lab\server.mjs"
+# Start the local server from the repository root (start.bat also opens the default browser)
+node server.mjs
 
 # Run backend API and compiler tests
-node "C:\Users\cmpj\dev\fpga-lab\test\api.mjs"
+node test\api.mjs
 
 # Run browser integration tests (hardcoded headless Chrome)
-node "C:\Users\cmpj\dev\fpga-lab\test\browser.mjs"
+node test\browser.mjs
 
 # Other focused suites
-node "C:\Users\cmpj\dev\fpga-lab\test\engine.mjs"
-node "C:\Users\cmpj\dev\fpga-lab\test\formats.mjs"
-node "C:\Users\cmpj\dev\fpga-lab\test\importers.mjs"
-node "C:\Users\cmpj\dev\fpga-lab\test\native.mjs"
-node "C:\Users\cmpj\dev\fpga-lab\test\real.mjs"
-node "C:\Users\cmpj\dev\fpga-lab\test\server.mjs"
-node "C:\Users\cmpj\dev\fpga-lab\test\demo.mjs"
+node test\engine.mjs
+node test\formats.mjs
+node test\importers.mjs
+node test\native.mjs
+node test\real.mjs
+node test\server.mjs
+node test\demo.mjs
 ```

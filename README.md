@@ -5,7 +5,7 @@ A local, browser-based virtual laboratory for VHDL digital logic targeting the R
 ## Quick start
 
 ```powershell
-node "C:\Users\cmpj\dev\fpga-lab\server.mjs"
+node server.mjs
 ```
 
 Or double-click `start.bat`, which sets `OPEN_BROWSER=1` and starts the same server. Open <http://127.0.0.1:8044/> and use **File > Load Counter Demo** for a first run.
@@ -24,18 +24,18 @@ Requirements: Node.js, GHDL, a C compiler for the VPI bridge, and a modern brows
 
 ## Tests
 
-Run these manually from a terminal:
+Run these manually from the repository root:
 
 ```powershell
-node "C:\Users\cmpj\dev\fpga-lab\test\api.mjs"
-node "C:\Users\cmpj\dev\fpga-lab\test\browser.mjs"
-node "C:\Users\cmpj\dev\fpga-lab\test\engine.mjs"
-node "C:\Users\cmpj\dev\fpga-lab\test\formats.mjs"
-node "C:\Users\cmpj\dev\fpga-lab\test\importers.mjs"
-node "C:\Users\cmpj\dev\fpga-lab\test\native.mjs"
-node "C:\Users\cmpj\dev\fpga-lab\test\real.mjs"
-node "C:\Users\cmpj\dev\fpga-lab\test\server.mjs"
-node "C:\Users\cmpj\dev\fpga-lab\test\demo.mjs"
+node test\api.mjs
+node test\browser.mjs
+node test\engine.mjs
+node test\formats.mjs
+node test\importers.mjs
+node test\native.mjs
+node test\real.mjs
+node test\server.mjs
+node test\demo.mjs
 ```
 
 The browser integration test launches headless Chrome from `C:\Program Files\Google\Chrome\Application\chrome.exe`.

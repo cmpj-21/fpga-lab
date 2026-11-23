@@ -24,7 +24,7 @@ For CJ and anyone learning to use this local VHDL workbench.
 
 ## 1. Launch the website
 
-1. Open `C:\Users\cmpj\dev\fpga-lab` in File Explorer.
+1. Open the repository folder in File Explorer.
 2. Double-click **start.bat**.
 3. The launcher starts the local server and opens your browser.
 4. If no browser opens, visit **http://127.0.0.1:8044/** manually.
@@ -35,7 +35,7 @@ If the server is already running, launching again reuses it. Closing that second
 You can also run this command in a terminal:
 
 ```powershell
-node "C:\Users\cmpj\dev\fpga-lab\server.mjs"
+node server.mjs
 ```
 
 Then open the same address manually. Do not double-click the HTML file: the app needs its local server to compile and run VHDL.

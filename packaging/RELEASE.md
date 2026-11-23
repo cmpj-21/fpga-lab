@@ -15,7 +15,7 @@ End users do **not** need Node.js, GHDL, MSYS2, or GCC installed.
 Run once to download `WebView2.h` and `x64\WebView2Loader.dll` into `packaging\webview2\`:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Users\cmpj\dev\fpga-lab\packaging\fetch-webview2.ps1"
+powershell -ExecutionPolicy Bypass -File "packaging\fetch-webview2.ps1"
 ```
 
 *(Optional, for the Setup installer `.exe`: install [Inno Setup 6](https://jrsoftware.org/isinfo.php), ~5 MB.)*
@@ -23,13 +23,13 @@ powershell -ExecutionPolicy Bypass -File "C:\Users\cmpj\dev\fpga-lab\packaging\f
 ## Step 2 — Build All Release Artifacts
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Users\cmpj\dev\fpga-lab\packaging\build-release.ps1" -Version "1.0.0"
+powershell -ExecutionPolicy Bypass -File "packaging\build-release.ps1" -Version "1.0.0"
 ```
 
 To skip the Inno Setup installer step and build only the Portable `.exe` + Portable `.zip`:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Users\cmpj\dev\fpga-lab\packaging\build-release.ps1" -Version "1.0.0" -SkipInstaller
+powershell -ExecutionPolicy Bypass -File "packaging\build-release.ps1" -Version "1.0.0" -SkipInstaller
 ```
 
 ## GitHub-hosted release build
@@ -41,7 +41,7 @@ The `Release Windows builds` workflow (`.github/workflows/release.yml`) builds o
 Launch `Trace.exe` with `--devtools` to enable DevTools (`F12` / `Ctrl+Shift+I`):
 
 ```powershell
-& "C:\Users\cmpj\dev\fpga-lab\dist\Trace\Trace.exe" --devtools
+& "dist\Trace\Trace.exe" --devtools
 ```
 
 Packaged runtime logs and config live in `%LOCALAPPDATA%\TraceFPGA\logs\latest.log`.
