@@ -777,6 +777,15 @@ function syncAllInputsToRtl() {
   rtlRunner.setBeepPort(beepBind && beepBind.bit === null ? beepBind.signal.short : '');
 }
 
+function pickRtlSampleCount(cycles) {
+  if (cycles <= 64) return Math.max(1, cycles);
+  for (const n of [127, 131, 137, 139, 149]) {
+    const step = cycles / n;
+    const mod16 = step % 16;
+    if (Math.abs(mod16 - Math.round(mod16)) > 0.12 || Math.round(step) % 4 !== 0) return n;
+  }
+  return 131;
+}
 function runRtlStepBatch(cycles, wallDt = 0) {
   if (!rtlRunner || !S.sim) return;
   const trueCycleFs = 1e15 / S.clkHz;
@@ -798,7 +807,7 @@ function runRtlStepBatch(cycles, wallDt = 0) {
     const aSamples = Math.max(1, Math.min(4096, Math.round(wallDt * audio.sampleRate())));
     audioOut = new Float32Array(aSamples);
   }
-  const res = rtlRunner.runBatch(cycles, cycles > 64 ? 96 : Math.max(1, cycles), audioOut);
+  const res = rtlRunner.runBatch(cycles, pickRtlSampleCount(cycles), audioOut);
   const template = S.sim.signals.map(s => S.values.get(s.short) ?? S.inputs[s.id] ?? '0'.repeat(s.width));
   for (const [id] of rtlInputMap.entries()) {
     const sig = S.sim.signals.find(s => s.id === id);
@@ -984,28 +993,50 @@ function boardValue(net) {
   const value = S.values.get(bound.signal.short) ?? 'U';
   return value[bound.offset] ?? 'U';
 }
-const muxSlots = [null, null, null, null];
-const muxAge = [0, 0, 0, 0];
-let muxCursor = 0;
-let multiDigitFrame = null;
+const targetSegDuty = new Float32Array(32);
+const targetLedDuty = new Float32Array(4);
+const segEnergyAccum = new Float64Array(32);
+const ledEnergyAccum = new Float64Array(4);
 function clearMuxDisplayState() {
-  muxSlots.fill(null);
-  muxAge.fill(0);
-  multiDigitFrame = null;
+  targetSegDuty.fill(0);
+  targetLedDuty.fill(0);
+  segEnergyAccum.fill(0);
+  ledEnergyAccum.fill(0);
 }
-function captureDisplayFrame() {
-  let segByte = 0; SEG_NETS.forEach((net, b) => { if (/[0L]/.test(boardValue(net))) segByte |= 1 << b; });
-  let digitMask = 0; DIGIT_NETS.forEach((net, i) => { if (/[0L]/.test(boardValue(net))) digitMask |= 1 << i; });
-  let ledMask = 0; LED_NETS.forEach((net, i) => { if (/[0L]/.test(boardValue(net))) ledMask |= 1 << i; });
-  return { segByte, digitMask, ledMask };
-}
-function applyDisplayFrame(f) {
-  const active = S.power;
+function accumulateDisplaySample(weight) {
+  if (!S.power || weight <= 0) return;
+  let segMask = 0;
+  for (let b = 0; b < 8; b++) if (/[0L]/.test(boardValue(SEG_NETS[b]))) segMask |= 1 << b;
+  if (segMask) {
+    for (let d = 0; d < 4; d++) {
+      if (/[0L]/.test(boardValue(DIGIT_NETS[d]))) {
+        const base = d * 8;
+        for (let b = 0; b < 8; b++) {
+          if (segMask & (1 << b)) segEnergyAccum[base + b] += weight;
+        }
+      }
+    }
+  }
   for (let i = 0; i < 4; i++) {
-    board?.setSegDigit(i, f.segByte, active && !!(f.digitMask & (1 << i)));
-    const on = active && !!(f.ledMask & (1 << i));
-    board?.setLed(i, on);
-    $(`[data-led="${i}"]`)?.classList.toggle('on', on);
+    if (/[0L]/.test(boardValue(LED_NETS[i]))) ledEnergyAccum[i] += weight;
+  }
+}
+function commitDisplayIntegration(totalWeight, immediate = false) {
+  const active = S.power && totalWeight > 0;
+  for (let k = 0; k < 32; k++) targetSegDuty[k] = active ? Math.min(1, segEnergyAccum[k] / totalWeight) : 0;
+  for (let i = 0; i < 4; i++) targetLedDuty[i] = active ? Math.min(1, ledEnergyAccum[i] / totalWeight) : 0;
+  board?.setDisplayTargets?.(targetSegDuty, targetLedDuty, immediate);
+  for (let i = 0; i < 4; i++) {
+    const net = LED_NETS[i];
+    const indicator = $(`[data-led="${i}"]`);
+    if (!indicator) continue;
+    const duty = targetLedDuty[i];
+    const on = S.power && duty > 0.02;
+    indicator.classList.toggle('on', on);
+    indicator.classList.toggle('unknown', false);
+    indicator.style.setProperty('--led-lvl', on ? String(Math.min(1, 0.25 + duty * 0.75)) : '0');
+    indicator.title = `${net.toUpperCase()}: ${!S.power ? 'power off' : on ? `${Math.round(duty * 100)}% duty · on` : 'off'}`;
+    indicator.setAttribute('aria-label', indicator.title);
   }
 }
 function sampleDisplayOnly() {
@@ -1110,14 +1141,19 @@ function updateBuzzerFromSamples(samples, burstStartCycles, burstStartTimeFs, st
   if (sounding) audio.startBuzzer(freq);
   else audio.stopBuzzer();
 }
-function sampleNonDisplayOutputs() {
+function sampleNonDisplayOutputs(skipLeds = false) {
   const active = S.power;
-  LED_NETS.forEach((net, i) => {
-    const value = boardValue(net), on = active && /[0L]/.test(value), indicator = $(`[data-led="${i}"]`);
-    board?.setLed(i, on); indicator.classList.toggle('on', on); indicator.classList.toggle('unknown', active && !/^[01LH]$/.test(value));
-    indicator.title = `${net.toUpperCase()}: ${!active ? 'power off' : value + (on ? ' · on' : ' · off/unknown')}`;
-    indicator.setAttribute('aria-label', indicator.title);
-  });
+  if (!skipLeds) {
+    LED_NETS.forEach((net, i) => {
+      const value = boardValue(net), on = active && /[0L]/.test(value), indicator = $(`[data-led="${i}"]`);
+      board?.setLed(i, on);
+      indicator.classList.toggle('on', on);
+      indicator.classList.toggle('unknown', active && !/^[01LH]$/.test(value));
+      indicator.style.setProperty('--led-lvl', on ? '1' : '0');
+      indicator.title = `${net.toUpperCase()}: ${!active ? 'power off' : value + (on ? ' · on' : ' · off/unknown')}`;
+      indicator.setAttribute('aria-label', indicator.title);
+    });
+  }
   const beep = active && (S.running ? buzzerState.sounding : /[1H]/.test(boardValue('beep')) && buzzerState.idleLevel !== '1');
   board?.setBuzzer(beep);
   if (!S.running || !active) audio.stopBuzzer();
@@ -1273,51 +1309,32 @@ function consume(result, stepFs = 0, skipLegacyBuzzer = false) {
   const list = result.samples || [];
   const burstStartTimeFs = S.time;
   const burstStartCycles = S.cycles;
-  const seenInBurst = [null, null, null, null];
-  let sawMultiDigit = null;
-  let lastDisplayFrame = null;
+  const precMult = 10 ** (15 + (S.sim?.precision ?? -15));
+  let prevSampleTimeFs = burstStartTimeFs;
+  let totalDisplayWeight = 0;
+  if (S.running && list.length > 0) {
+    segEnergyAccum.fill(0);
+    ledEnergyAccum.fill(0);
+  }
   for (let idx = 0; idx < list.length; idx++) {
     const sample = list[idx];
-    S.time = Number(sample.time) * 10 ** (15 + (S.sim?.precision ?? -15));
+    const sampleTimeFs = Number(sample.time) * precMult;
+    S.time = sampleTimeFs;
     S.sim.signals.forEach((signal, i) => S.values.set(signal.short, sample.values[i]));
     waves.push(S.time, S.values);
-    if (S.running && list.length > 1) {
-      const df = captureDisplayFrame();
-      lastDisplayFrame = df;
-      if (df.digitMask !== 0) {
-        if ((df.digitMask & (df.digitMask - 1)) === 0) {
-          const d = 31 - Math.clz32(df.digitMask);
-          if (d >= 0 && d < 4) seenInBurst[d] = df;
-        } else {
-          sawMultiDigit = df;
-        }
-      }
+    if (S.running) {
+      const dt = sampleTimeFs - prevSampleTimeFs;
+      prevSampleTimeFs = sampleTimeFs;
+      const w = dt > 0 ? dt : (stepFs > 0 ? stepFs : 1);
+      accumulateDisplaySample(w);
+      totalDisplayWeight += w;
     }
     uartSample();
   }
   if (list.length > 0 && !skipLegacyBuzzer) updateBuzzerFromSamples(list, burstStartCycles, burstStartTimeFs, stepFs);
-  if (S.running && list.length > 1) {
-    sampleNonDisplayOutputs();
-    const anySeen = seenInBurst.some(Boolean);
-    if (!anySeen && !sawMultiDigit && (!lastDisplayFrame || lastDisplayFrame.digitMask === 0)) {
-      clearMuxDisplayState();
-      sampleDisplayOnly();
-    } else if (sawMultiDigit) {
-      multiDigitFrame = sawMultiDigit;
-      muxSlots.fill(null);
-      muxAge.fill(0);
-    } else {
-      multiDigitFrame = null;
-      for (let d = 0; d < 4; d++) {
-        if (seenInBurst[d]) {
-          muxSlots[d] = seenInBurst[d];
-          muxAge[d] = 0;
-        } else if (muxSlots[d]) {
-          muxAge[d]++;
-          if (muxAge[d] > 6) muxSlots[d] = null;
-        }
-      }
-    }
+  if (S.running && list.length > 0 && totalDisplayWeight > 0) {
+    commitDisplayIntegration(totalDisplayWeight, false);
+    sampleNonDisplayOutputs(true);
   } else if (list.length > 0) {
     sampleOutputs();
   }
@@ -1396,8 +1413,8 @@ async function advance(cycles = 1, wallSec = 0) {
     batches.at(-1).push(input); ids.add(input.id);
   }
   // Use non-aliasing odd decimation stride for large bursts (>64 cycles) so GHDL runs at full native speed
-  // while still sampling ~96 evenly-spaced points across every frame for 7-seg multiplexing & waveforms.
-  const stride = cycles > 64 ? Math.max(3, Math.floor((cycles * 2) / 96) | 1) : 1;
+  // while still sampling ~127 evenly-spaced points across every frame for 7-seg multiplexing & waveforms.
+  const stride = cycles > 64 ? Math.max(3, Math.floor((cycles * 2) / 127) | 1) : 1;
   try {
     for (let i = 0; i < batches.length; i++) {
       const isLast = i === batches.length - 1;
@@ -2068,10 +2085,35 @@ async function loadVcd(text, name) {
   buildBindings(); renderPins(); board?.clearOutputs(); stepPlayback(1); setStatus(); log(`Loaded ${vcd.events.length} timestamps from ${name}. Board scope: ${S.vcd.scope || '(root)'}.`);
 }
 function stepPlayback(count) {
+  let prevTimeFs = S.time;
+  let totalDisplayWeight = 0;
+  let stepped = 0;
+  const integrate = S.running && count > 1;
+  if (integrate) {
+    segEnergyAccum.fill(0);
+    ledEnergyAccum.fill(0);
+  }
   for (let i = 0; i < count && S.vcd.index < S.vcd.data.events.length; i++) {
     const event = S.vcd.data.events[S.vcd.index++]; S.time = event.t;
     for (const change of event.changes) for (const variable of S.vcd.data.aliases.get(change.id)) S.values.set(variable.name, typeof change.value === 'object' ? String(change.value.real) : change.value);
-    waves.push(S.time, S.values); sampleOutputs(); uartSample();
+    waves.push(S.time, S.values);
+    if (integrate) {
+      const dt = S.time - prevTimeFs;
+      prevTimeFs = S.time;
+      const w = dt > 0 ? dt : 1;
+      accumulateDisplaySample(w);
+      totalDisplayWeight += w;
+    }
+    uartSample();
+    stepped++;
+  }
+  if (stepped > 0) {
+    if (integrate && totalDisplayWeight > 0) {
+      commitDisplayIntegration(totalDisplayWeight, false);
+      sampleNonDisplayOutputs(true);
+    } else {
+      sampleOutputs();
+    }
   }
   $('#roTime').textContent = fmtTime(S.time); $('#replayPosition').textContent = `${S.vcd.index} / ${S.vcd.data.events.length} timestamps`;
   if (S.running || manualStepping) {
@@ -2277,6 +2319,10 @@ function applyAllSettings({ persist = true } = {}) {
   });
   ide?.setWatchExternalEnabled?.(appSettings.watchExternalFiles !== false);
   audio.setVolume(appSettings.masterVolume);
+  board?.setDisplayOptics?.({
+    persistenceMs: appSettings.displayPersistenceMs ?? 28,
+    tdmPeakBoost: appSettings.tdmPeakBoost !== false,
+  });
   syncSettingsUI();
   if (persist) persistAppState({ settings: appSettings });
 }
@@ -2452,6 +2498,12 @@ function syncSettingsUI() {
     $('#setBoardGlow').value = $('#glow').value;
     if ($('#setGlowVal')) $('#setGlowVal').textContent = `${$('#glow').value}%`;
   }
+  if ($('#setTdmPersistence')) {
+    const tau = Number.isFinite(Number(appSettings.displayPersistenceMs)) ? Number(appSettings.displayPersistenceMs) : 28;
+    $('#setTdmPersistence').value = String(tau);
+    if ($('#setTdmTauVal')) $('#setTdmTauVal').textContent = tau <= 0 ? 'Instant' : `${tau} ms`;
+  }
+  if ($('#setTdmPeakBoost')) $('#setTdmPeakBoost').checked = appSettings.tdmPeakBoost !== false;
 }
 function wireSettingsAndThemes() {
   $$('.set-nav-btn').forEach(btn => btn.addEventListener('click', () => switchSettingsTab(btn.dataset.settab)));
@@ -2613,6 +2665,14 @@ function wireSettingsAndThemes() {
   $('#setBoardGlow')?.addEventListener('input', e => {
     if ($('#glow')) { $('#glow').value = e.target.value; $('#glow').dispatchEvent(new Event('input')); }
     if ($('#setGlowVal')) $('#setGlowVal').textContent = `${e.target.value}%`;
+  });
+  $('#setTdmPersistence')?.addEventListener('input', e => {
+    appSettings.displayPersistenceMs = Number(e.target.value);
+    applyAllSettings();
+  });
+  $('#setTdmPeakBoost')?.addEventListener('change', e => {
+    appSettings.tdmPeakBoost = e.target.checked;
+    applyAllSettings();
   });
   $('#setResetAllBtn')?.addEventListener('click', () => {
     appSettings = { ...DEFAULT_SETTINGS };
@@ -3105,21 +3165,6 @@ function frame(now) {
   requestAnimationFrame(frame); const dt = Math.max(0, Math.min(.1, (now - lastFrame) / 1000)); lastFrame = now;
   if (now - lastDraw > 250) { $('#roFps').textContent = board ? Math.round(board.fps) : '—'; lastDraw = now; }
   if (S.running) {
-    if (multiDigitFrame) {
-      applyDisplayFrame(multiDigitFrame);
-    } else {
-      let nextFrame = null;
-      for (let step = 1; step <= 4; step++) {
-        const idx = (muxCursor + step) % 4;
-        if (muxSlots[idx]) {
-          muxCursor = idx;
-          nextFrame = muxSlots[idx];
-          break;
-        }
-      }
-      if (nextFrame) applyDisplayFrame(nextFrame);
-      else sampleDisplayOnly();
-    }
     const rate = 10 ** ((S.speed - 55) / 25);
     if (rtlRunner && !S.vcd) {
       const frameDt = Math.min(0.04, dt);
@@ -3210,7 +3255,7 @@ async function boot() {
   window.addEventListener('pointerdown', unlockAudio, { passive: true });
   window.addEventListener('keydown', unlockAudio, { passive: true });
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
-  try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { trackUiAction('3D', $('#view3d'), `${pressed ? 'press' : 'release'} ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.65); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
+  try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { trackUiAction('3D', $('#view3d'), `${pressed ? 'press' : 'release'} ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.65); board.setDisplayOptics?.({ persistenceMs: appSettings.displayPersistenceMs ?? 28, tdmPeakBoost: appSettings.tdmPeakBoost !== false }); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames'), $('#waveScrollTrack'), $('#waveScrollThumb'));
   ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, restartSimulation, restoreSavedCompileState, renderSources, openTools, openBottomTab, syncNavigation, projectData, saveProject, persistAppState, prepareExit, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations, reloadQsfText, getHdlRoot: () => currentHdlRoot, openSettings: tab => openSettingsModal(tab), toggleScheme });
   applyTheme(activeThemeId);

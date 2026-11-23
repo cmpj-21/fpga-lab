@@ -1650,9 +1650,18 @@ export function createGfxStudio(ctx) {
   }
 
   const ledCoreCol = new THREE.Color(0xfff4d8);
+  const segCoreCol = new THREE.Color(0xfff4d8);
+  const tmpOptColorA = new THREE.Color();
+  const tmpOptColorB = new THREE.Color();
+  const tdmCurve = (duty, peakBoost) => {
+    const d = Math.max(0, Math.min(1, duty));
+    if (d < 0.002) return 0;
+    return peakBoost ? (3.0 * d) / (1.0 + 2.0 * d) : d;
+  };
   function updateLedsAndSegments(now, state) {
     const pal = getLedPalette();
     const powerOn = stagePose.enabled ? stagePose.pwr : state.power;
+    const peakBoost = state.tdmPeakBoost !== false;
     const ledGlowNorm = (gfx.ledGlow ?? (state.glow * 100)) / 100;
     const segGlowNorm = (gfx.segGlow ?? (state.glow * 100)) / 100;
     const bleed = Math.max(gfx.ledLightBleed / 100, (gfx.bloom / 100) * 0.42);
@@ -1662,21 +1671,29 @@ export function createGfxStudio(ctx) {
     for (let i = 0; i < leds.length; i++) {
       const led = leds[i];
       const isPwr = led.id === 'pwrled';
-      const active = powerOn && (isPwr ? true : (stagePose.enabled ? !!stagePose.leds[i] : led.on));
+      const rawLit = !powerOn
+        ? 0
+        : isPwr
+          ? 1
+          : stagePose.enabled
+            ? (stagePose.leds[i] ? 1 : 0)
+            : tdmCurve(led.duty !== undefined ? led.duty : (led.on ? 1 : 0), peakBoost);
       led.mesh.material.emissive.setHex(isPwr ? pal.pwrEm : pal.em);
-      if (active) {
-        const coreMix = Math.min(0.45, 0.14 + ledOverdrive * 0.22);
+      if (rawLit > 0) {
+        const coreMix = Math.min(0.45, (0.14 + ledOverdrive * 0.22) * rawLit);
         led.mesh.material.emissive.lerp(ledCoreCol, coreMix);
       }
-      led.mesh.material.emissiveIntensity = active ? 1.45 + ledGlowNorm * 3.1 + ledOverdrive * 2.2 : 0;
-      led.mesh.material.color.setHex(isPwr ? (active ? pal.pwrOn : 0x183520) : (active ? pal.on : pal.off));
+      led.mesh.material.emissiveIntensity = rawLit * (1.45 + ledGlowNorm * 3.1 + ledOverdrive * 2.2);
+      tmpOptColorA.setHex(isPwr ? 0x183520 : pal.off);
+      tmpOptColorB.setHex(isPwr ? pal.pwrOn : pal.on);
+      led.mesh.material.color.lerpColors(tmpOptColorA, tmpOptColorB, Math.min(1, rawLit));
       const lb = ledBleeds[i];
       const halo = ledHalos[i];
       if (lb || halo) {
         led.mesh.updateWorldMatrix(true, false);
         tmpWorldPos.copy(ledLocalCenters[i]).applyMatrix4(led.mesh.matrixWorld);
         if (lb) {
-          const bleedOpacity = active && bleed > 0 ? Math.min(0.62, bleed * (0.28 + ledGlowNorm * 0.34)) : 0;
+          const bleedOpacity = rawLit > 0 && bleed > 0 ? Math.min(0.62, bleed * (0.28 + ledGlowNorm * 0.34) * rawLit) : 0;
           lb.mesh.visible = bleedOpacity > 0.005;
           if (lb.mesh.visible) {
             lb.mesh.position.set(tmpWorldPos.x, tmpWorldPos.y - 0.68, tmpWorldPos.z);
@@ -1687,7 +1704,7 @@ export function createGfxStudio(ctx) {
           }
         }
         if (halo) {
-          const haloStrength = active && ledGlowNorm > 0.01 ? Math.min(1, 0.28 + ledGlowNorm * 0.56) : 0;
+          const haloStrength = rawLit > 0 && ledGlowNorm > 0.01 ? Math.min(1, (0.28 + ledGlowNorm * 0.56) * rawLit) : 0;
           halo.visible = haloStrength > 0.005;
           if (halo.visible) {
             halo.position.set(tmpWorldPos.x, tmpWorldPos.y + 1.3, tmpWorldPos.z);
@@ -1701,36 +1718,41 @@ export function createGfxStudio(ctx) {
     }
 
     const stagedDigits = stagePose.enabled ? encode7SegText(stagePose.text) : null;
-    const segCoreCol = new THREE.Color(0xfff4d8);
+    const bgRough = dispFaceMesh?.material ? dispFaceMesh.material.roughness : 0.78;
+    const bgEnv = dispFaceMesh?.material && dispFaceMesh.material.envMapIntensity !== undefined ? dispFaceMesh.material.envMapIntensity : 0.34;
     for (let d = 0; d < segments.length; d++) {
       const digit = segments[d];
       const byte = stagePose.enabled ? stagedDigits[d] : digit.segs;
       const digActive = stagePose.enabled ? true : digit.enabled;
-      let digLitBits = 0;
+      let digLitRadiance = 0;
       for (let bit = 0; bit < 8; bit++) {
-        const on = powerOn && digActive && !!(byte & (1 << bit));
-        if (on) digLitBits++;
+        const rawLit = !powerOn
+          ? 0
+          : stagePose.enabled
+            ? ((digActive && !!(byte & (1 << bit))) ? 1 : 0)
+            : tdmCurve(digit.duty ? digit.duty[bit] : ((digActive && !!(byte & (1 << bit))) ? 1 : 0), peakBoost);
+        if (rawLit > 0) digLitRadiance += rawLit;
         const material = digit.meshes[bit].material;
         material.emissive.setHex(pal.em);
-        if (on) {
-          const coreMix = Math.min(0.45, 0.14 + segOverdrive * 0.22);
+        if (rawLit > 0) {
+          const coreMix = Math.min(0.45, (0.14 + segOverdrive * 0.22) * rawLit);
           material.emissive.lerp(segCoreCol, coreMix);
         }
-        const bgRough = dispFaceMesh?.material ? dispFaceMesh.material.roughness : 0.78;
-        const bgEnv = dispFaceMesh?.material && dispFaceMesh.material.envMapIntensity !== undefined ? dispFaceMesh.material.envMapIntensity : 0.34;
-        material.emissiveIntensity = on ? 1.6 + segGlowNorm * 2.6 + segOverdrive * 2.2 : 0;
-        material.color.setHex(on ? pal.segOn : pal.segOff);
-        material.roughness = on ? 0.35 : bgRough;
-        material.envMapIntensity = on ? 1.0 : bgEnv;
+        material.emissiveIntensity = rawLit * (1.6 + segGlowNorm * 2.6 + segOverdrive * 2.2);
+        tmpOptColorA.setHex(pal.segOff);
+        tmpOptColorB.setHex(pal.segOn);
+        material.color.lerpColors(tmpOptColorA, tmpOptColorB, Math.min(1, rawLit));
+        material.roughness = bgRough + (0.35 - bgRough) * Math.min(1, rawLit);
+        material.envMapIntensity = bgEnv + (1.0 - bgEnv) * Math.min(1, rawLit);
       }
       const dBleed = digitBleeds[d];
       const dHalo = digitHalos[d];
       if (dBleed || dHalo) {
         digit.meshes[6].updateWorldMatrix(true, false);
         tmpWorldPos.copy(digitLocalCenters[d]).applyMatrix4(digit.meshes[6].matrixWorld);
-        const litFrac = digLitBits / 7;
+        const litFrac = Math.min(1.15, digLitRadiance / 7);
         if (dBleed) {
-          const bleedOpacity = powerOn && bleed > 0 && digLitBits > 0 ? Math.min(0.42, bleed * litFrac * (0.24 + segGlowNorm * 0.24)) : 0;
+          const bleedOpacity = powerOn && bleed > 0 && digLitRadiance > 0.005 ? Math.min(0.42, bleed * litFrac * (0.24 + segGlowNorm * 0.24)) : 0;
           dBleed.visible = bleedOpacity > 0.005;
           if (dBleed.visible) {
             dBleed.position.set(tmpWorldPos.x, tmpWorldPos.y + 0.08, tmpWorldPos.z);
@@ -1741,7 +1763,7 @@ export function createGfxStudio(ctx) {
           }
         }
         if (dHalo) {
-          const haloStrength = powerOn && digLitBits > 0 && segGlowNorm > 0.01 ? Math.min(0.75, (0.18 + litFrac * 0.36) * (0.45 + segGlowNorm * 0.7)) : 0;
+          const haloStrength = powerOn && digLitRadiance > 0.005 && segGlowNorm > 0.01 ? Math.min(0.75, Math.min(1, digLitRadiance) * (0.18 + litFrac * 0.36) * (0.45 + segGlowNorm * 0.7)) : 0;
           dHalo.visible = haloStrength > 0.005;
           if (dHalo.visible) {
             dHalo.position.set(tmpWorldPos.x, tmpWorldPos.y + 1.8, tmpWorldPos.z);

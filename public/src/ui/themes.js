@@ -919,6 +919,8 @@ export const DEFAULT_SETTINGS = {
   termCursorBlink: true,
   watchExternalFiles: true,
   masterVolume: 50,
+  displayPersistenceMs: 28,
+  tdmPeakBoost: true,
 };
 
 export function normalizeThemeId(id) {

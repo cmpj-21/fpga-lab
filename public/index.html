@@ -700,6 +700,8 @@
           <label class="set-row"><div><strong>Master Buzzer Volume</strong><span>Output level — set to 0% to silence (<span id="setVolumeVal" class="mono">50%</span>)</span></div><input id="setMasterVolume" type="range" min="0" max="100" step="1" value="50"></label>
           <label class="set-row"><div><strong>3D Render Quality</strong><span>WebGL MSAA &amp; shadow fidelity</span></div><select id="setGfxQuality"><option value="high">High (MSAA)</option><option value="medium">Balanced</option><option value="low">Performance</option></select></label>
           <label class="set-row"><div><strong>LED &amp; 7-Segment Glow</strong><span>Bloom &amp; PCB halo intensity (<span id="setGlowVal" class="mono">65%</span>)</span></div><input id="setBoardGlow" type="range" min="0" max="100" step="1" value="65"></label>
+          <label class="set-row"><div><strong>Eye Persistence (τ)</strong><span>Temporal light integration window for multiplexed 7-seg &amp; PWM LEDs (<span id="setTdmTauVal" class="mono">28 ms</span>)</span></div><input id="setTdmPersistence" type="range" min="0" max="120" step="2" value="28"></label>
+          <label class="set-row"><div><strong>TDM Peak-Current Compensation</strong><span>Scale multiplexed pulse luminance like hardware drivers (off = raw 1/N luminance)</span></div><input id="setTdmPeakBoost" type="checkbox" checked></label>
           <div class="set-row"><div><strong>Reset Preferences</strong><span>Restore all IDE, Editor, and Theme settings to factory defaults</span></div><button id="setResetAllBtn" type="button" class="btn confirm-discard">Reset All Settings</button></div>
         </div>
       </section>

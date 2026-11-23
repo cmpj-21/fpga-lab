@@ -53,7 +53,14 @@ export async function createBoard3D(canvas, opts = {}) {
   scene.add(model);
   model.updateMatrixWorld(true);
   const groups = Object.fromEntries(model.children.map(object => [object.name, object]));
-  const state = { power: true, glow: .65, explode: 0, explodeTarget: 0, tween: null, navMode: 'orbit', toolMode: 'interact', selected: null, hovered: null, hideOutline: false };
+  const state = { power: true, glow: .65, explode: 0, explodeTarget: 0, tween: null, navMode: 'orbit', toolMode: 'interact', selected: null, hovered: null, hideOutline: false, persistenceMs: 28, tdmPeakBoost: true };
+  const tmpColorA = new THREE.Color();
+  const tmpColorB = new THREE.Color();
+  const tdmCurve = (duty) => {
+    const d = Math.max(0, Math.min(1, duty));
+    if (d < 0.002) return 0;
+    return state.tdmPeakBoost !== false ? (3.0 * d) / (1.0 + 2.0 * d) : d;
+  };
   function syncCameraButtons() {
     const mode = state.navMode === 'pan' ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
     controls.mouseButtons.LEFT = mode;
@@ -68,7 +75,7 @@ export async function createBoard3D(canvas, opts = {}) {
   const displayFaceRough = displayFaceMat ? displayFaceMat.roughness : 0.78;
   const displayFaceEnv = displayFaceMat && displayFaceMat.envMapIntensity !== undefined ? displayFaceMat.envMapIntensity : 0.34;
   const segDefaultOffHex = displayFaceHex;
-  const segments = Array.from({ length: 4 }, (_, digit) => ({ segs: 0, latched: 0, enabled: false,
+  const segments = Array.from({ length: 4 }, (_, digit) => ({ segs: 0, latched: 0, enabled: false, duty: new Float32Array(8), target: new Float32Array(8),
     meshes: Array.from({ length: 8 }, (_, bit) => {
       const mesh = model.getObjectByName(`segment_${digit}_${bit}`);
       mesh.castShadow = false;
@@ -86,7 +93,7 @@ export async function createBoard3D(canvas, opts = {}) {
     const mesh = model.getObjectByName(`led_${id}_lens`);
     mesh.material = mesh.material.clone();
     mesh.material.emissive.set(id === 'pwrled' ? 0x39d66b : 0xff2921);
-    return { id, mesh, on: false };
+    return { id, mesh, on: false, duty: 0, target: 0 };
   });
   const keys = ['key1', 'key2', 'key3', 'key4', 'reset'].map(id => {
     const cap = model.getObjectByName(`key_${id}_cap`);
@@ -411,19 +418,32 @@ export async function createBoard3D(canvas, opts = {}) {
       key.cap.position.y = key.baseY - key.press * .0006;
       if (Math.abs(key.press - prevPress) > 1e-4) renderer.shadowMap.needsUpdate = true;
     }
+    const tauMs = Math.max(0, Number(state.persistenceMs) || 0);
+    const decayAlpha = tauMs > 0 ? (1 - Math.exp(-(dt * 1000) / tauMs)) : 1;
     for (const led of leds) {
-      const on = state.power && (led.id === 'pwrled' || led.on);
-      led.mesh.material.emissiveIntensity = on ? .7 + state.glow * 2.4 : 0;
-      led.mesh.material.color.setHex(led.id === 'pwrled' ? (on ? 0x4fd577 : 0x183520) : (on ? 0xf55f48 : 0x491c20));
+      const isPwr = led.id === 'pwrled';
+      const target = state.power ? (isPwr ? 1 : led.target) : 0;
+      led.duty = isPwr ? target : (tauMs > 0 ? led.duty + (target - led.duty) * decayAlpha : target);
+      if (led.duty < 1e-4) led.duty = 0;
+      const lit = state.power ? (isPwr ? 1 : tdmCurve(led.duty)) : 0;
+      led.mesh.material.emissiveIntensity = lit * (.7 + state.glow * 2.4);
+      tmpColorA.setHex(isPwr ? 0x183520 : 0x491c20);
+      tmpColorB.setHex(isPwr ? 0x4fd577 : 0xf55f48);
+      led.mesh.material.color.lerpColors(tmpColorA, tmpColorB, Math.min(1, lit));
     }
     for (const digit of segments) {
       for (let bit = 0; bit < 8; bit++) {
-        const on = state.power && digit.enabled && !!(digit.segs & (1 << bit));
+        const target = state.power ? digit.target[bit] : 0;
+        const duty = tauMs > 0 ? digit.duty[bit] + (target - digit.duty[bit]) * decayAlpha : target;
+        digit.duty[bit] = duty < 1e-4 ? 0 : duty;
+        const lit = state.power ? tdmCurve(digit.duty[bit]) : 0;
         const material = digit.meshes[bit].material;
-        material.emissiveIntensity = on ? 1 + state.glow * 1.7 : 0;
-        material.color.setHex(on ? 0xe84e3c : segDefaultOffHex);
-        material.roughness = on ? 0.35 : displayFaceRough;
-        material.envMapIntensity = on ? 1.0 : displayFaceEnv;
+        material.emissiveIntensity = lit * (1 + state.glow * 1.7);
+        tmpColorA.setHex(segDefaultOffHex);
+        tmpColorB.setHex(0xe84e3c);
+        material.color.lerpColors(tmpColorA, tmpColorB, Math.min(1, lit));
+        material.roughness = displayFaceRough + (0.35 - displayFaceRough) * Math.min(1, lit);
+        material.envMapIntensity = displayFaceEnv + (1.0 - displayFaceEnv) * Math.min(1, lit);
       }
     }
     studio?.updateLedsAndSegments(now, state);
@@ -448,18 +468,80 @@ export async function createBoard3D(canvas, opts = {}) {
   requestAnimationFrame(frame);
   return {
     scene, camera, renderer, controls, model,
-    setLed(i, on) { if (leds[i]) leds[i].on = on; },
-    setLedById(id, on) { const led = leds.find(item => item.id === id); if (led) led.on = on; },
+    setLed(i, on) {
+      const led = leds[i];
+      if (!led) return;
+      led.on = !!on;
+      led.target = on ? 1 : 0;
+      led.duty = led.target;
+    },
+    setLedById(id, on) {
+      const led = leds.find(item => item.id === id);
+      if (!led) return;
+      led.on = !!on;
+      led.target = on ? 1 : 0;
+      led.duty = led.target;
+    },
     setSegDigit(index, segs, enabled) {
-      const digit = segments[index]; digit.segs = segs; digit.enabled = enabled;
+      const digit = segments[index];
+      if (!digit) return;
+      digit.segs = segs;
+      digit.enabled = !!enabled;
       if (enabled) digit.latched = segs;
+      for (let bit = 0; bit < 8; bit++) {
+        const v = (enabled && (segs & (1 << bit))) ? 1 : 0;
+        digit.target[bit] = v;
+        digit.duty[bit] = v;
+      }
+    },
+    setDisplayTargets(segTargets, ledTargets, immediate = false) {
+      if (segTargets && segTargets.length >= 32) {
+        for (let d = 0; d < 4; d++) {
+          const digit = segments[d];
+          let mask = 0;
+          const base = d * 8;
+          for (let bit = 0; bit < 8; bit++) {
+            const t = Math.max(0, Math.min(1, segTargets[base + bit] || 0));
+            digit.target[bit] = t;
+            if (immediate) digit.duty[bit] = t;
+            if (t > 0.01) mask |= 1 << bit;
+          }
+          digit.segs = mask;
+          digit.enabled = mask !== 0;
+          if (digit.enabled) digit.latched = mask;
+        }
+      }
+      if (ledTargets && ledTargets.length >= 4) {
+        for (let i = 0; i < 4; i++) {
+          const led = leds[i];
+          if (!led) continue;
+          const t = Math.max(0, Math.min(1, ledTargets[i] || 0));
+          led.target = t;
+          if (immediate) led.duty = t;
+          led.on = t > 0.01;
+        }
+      }
+    },
+    setDisplayOptics({ persistenceMs, tdmPeakBoost } = {}) {
+      if (Number.isFinite(Number(persistenceMs))) state.persistenceMs = Math.max(0, Math.min(250, Number(persistenceMs)));
+      if (typeof tdmPeakBoost === 'boolean') state.tdmPeakBoost = tdmPeakBoost;
     },
     clearOutputs() {
-      for (const digit of segments) Object.assign(digit, { segs: 0, latched: 0, enabled: false });
-      for (const led of leds) led.on = false;
+      for (const digit of segments) {
+        Object.assign(digit, { segs: 0, latched: 0, enabled: false });
+        digit.duty.fill(0);
+        digit.target.fill(0);
+      }
+      for (const led of leds) { led.on = false; led.duty = 0; led.target = 0; }
     },
     get displayState() {
-      return segments.map(({ segs, latched, enabled }) => ({ segs, latched, enabled }));
+      return segments.map(({ segs, latched, enabled, duty, target }) => ({
+        segs,
+        latched,
+        enabled,
+        duty: Array.from(duty),
+        target: Array.from(target),
+      }));
     },
     setKeyVisual(id, pressed) { const key = keys.find(k => k.id === id); if (key) key.target = pressed ? 1 : 0; },
     setBuzzer(on) { groups.buzzer.userData.active = state.power && on; },
