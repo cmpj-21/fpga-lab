@@ -117,8 +117,15 @@ Write-Host "  VPI include: $vpiInclude"
 Write-Host "  VPI library: $vpiLib"
 $vpiStdout = Join-Path $buildDir 'vpi-build.stdout'
 $vpiStderr = Join-Path $buildDir 'vpi-build.stderr'
-& $gcc -shared -O2 -Wall "-I$vpiInclude" $bridgeSrc "-L$vpiLib" -lghdlvpi -o $vpiOut > $vpiStdout 2> $vpiStderr
-$gccExit = $LASTEXITCODE
+$gccArgs = @(
+  '-shared', '-O2', '-Wall',
+  ('-I"{0}"' -f $vpiInclude),
+  ('"{0}"' -f $bridgeSrc),
+  ('-L"{0}"' -f $vpiLib),
+  '-lghdlvpi', '-o', ('"{0}"' -f $vpiOut)
+) -join ' '
+$gccProc = Start-Process -FilePath $gcc -ArgumentList $gccArgs -NoNewWindow -Wait -PassThru -RedirectStandardOutput $vpiStdout -RedirectStandardError $vpiStderr
+$gccExit = $gccProc.ExitCode
 if (Test-Path $vpiStdout) { Get-Content $vpiStdout | ForEach-Object { Write-Host $_ } }
 if (Test-Path $vpiStderr) { Get-Content $vpiStderr | ForEach-Object { Write-Host $_ } }
 Write-Host "  GCC exit code: $gccExit"
