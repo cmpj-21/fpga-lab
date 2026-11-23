@@ -43,6 +43,8 @@ Any agent touching this repository must adhere to the following rules:
    - Do not upload a duplicate source ZIP. GitHub automatically provides `Source code (zip)` and `Source code (tar.gz)` on tagged releases; release workflows upload only built artifacts.
 7. **Documentation Paths:**
    - Never write machine-specific absolute paths in `README.md`, `TUTORIAL.md`, `AGENTS.md`, or packaging docs. Use paths relative to the repository root.
+8. **AI Disclosure:**
+   - Keep the README AI disclosure specific: name the AI models actually used and the role each played. Update it whenever model usage changes.
 
 ---
 
