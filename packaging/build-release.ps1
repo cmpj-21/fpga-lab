@@ -115,9 +115,14 @@ $vpiOut = Join-Path $buildDir "bridge-$hashHex.vpi"
 
 Write-Host "  VPI include: $vpiInclude"
 Write-Host "  VPI library: $vpiLib"
-$vpiBuildOutput = & $gcc -shared -O2 -Wall "-I$vpiInclude" $bridgeSrc "-L$vpiLib" -lghdlvpi -o $vpiOut 2>&1
-$vpiBuildOutput | ForEach-Object { Write-Host $_ }
-if ($LASTEXITCODE -ne 0) { throw "Failed to compile $vpiOut" }
+$vpiStdout = Join-Path $buildDir 'vpi-build.stdout'
+$vpiStderr = Join-Path $buildDir 'vpi-build.stderr'
+& $gcc -shared -O2 -Wall "-I$vpiInclude" $bridgeSrc "-L$vpiLib" -lghdlvpi -o $vpiOut > $vpiStdout 2> $vpiStderr
+$gccExit = $LASTEXITCODE
+if (Test-Path $vpiStdout) { Get-Content $vpiStdout | ForEach-Object { Write-Host $_ } }
+if (Test-Path $vpiStderr) { Get-Content $vpiStderr | ForEach-Object { Write-Host $_ } }
+Write-Host "  GCC exit code: $gccExit"
+if ($gccExit -ne 0) { throw "Failed to compile $vpiOut" }
 Write-Host "  Built VPI plugin: $(Split-Path -Leaf $vpiOut)" -ForegroundColor Green
 
 # 5. Compile Win32 resources + native Trace.exe + portable_stub.exe
