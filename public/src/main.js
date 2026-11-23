@@ -734,6 +734,7 @@ function clearRtlRunner() {
   rtlSignalMap = [];
   rtlInputMap.clear();
   rtlIdleBeep = null;
+  rtlAdaptiveMaxCycles = 2500000;
 }
 
 async function initRtlRunnerForSim() {
@@ -777,17 +778,22 @@ function syncAllInputsToRtl() {
   rtlRunner.setBeepPort(beepBind && beepBind.bit === null ? beepBind.signal.short : '');
 }
 
+let rtlAdaptiveMaxCycles = 2500000;
+const BIN_CACHE = Array.from({ length: 9 }, (_, w) =>
+  w >= 2 ? Array.from({ length: 1 << w }, (__, v) => v.toString(2).padStart(w, '0')) : null
+);
 function pickRtlSampleCount(cycles) {
   if (cycles <= 64) return Math.max(1, cycles);
-  for (const n of [127, 131, 137, 139, 149]) {
+  for (const n of [43, 47, 53, 59, 61]) {
     const step = cycles / n;
     const mod16 = step % 16;
     if (Math.abs(mod16 - Math.round(mod16)) > 0.12 || Math.round(step) % 4 !== 0) return n;
   }
-  return 131;
+  return 47;
 }
 function runRtlStepBatch(cycles, wallDt = 0) {
   if (!rtlRunner || !S.sim) return;
+  const batchStart = performance.now();
   const trueCycleFs = 1e15 / S.clkHz;
   if (cycles > 0) {
     const maxCycles = trueCycleFs > 0 ? Math.max(0, Math.floor((MAX_SIM_FS - S.time) / trueCycleFs)) : Infinity;
@@ -821,7 +827,8 @@ function runRtlStepBatch(cycles, wallDt = 0) {
     for (let k = 0; k < rtlSignalMap.length; k++) {
       const m = rtlSignalMap[k];
       const v = snap.vals[m.obsIdx] >>> 0;
-      row[m.sigIdx] = m.width === 1 ? (v & 1 ? '1' : '0') : v.toString(2).padStart(m.width, '0');
+      const cache = m.width >= 2 && m.width <= 8 ? BIN_CACHE[m.width] : null;
+      row[m.sigIdx] = m.width === 1 ? (v & 1 ? '1' : '0') : (cache ? cache[v & ((1 << m.width) - 1)] : v.toString(2).padStart(m.width, '0'));
     }
     const ticks = Math.round((startTimeFs + snap.offset * trueCycleFs) / tickFs);
     return { time: String(ticks), values: row };
@@ -847,6 +854,14 @@ function runRtlStepBatch(cycles, wallDt = 0) {
     consume({ samples }, trueCycleFs, true);
   } else {
     consume({ samples }, trueCycleFs, false);
+  }
+  if (cycles >= 10000) {
+    const batchMs = performance.now() - batchStart;
+    if (batchMs > 10.5) {
+      rtlAdaptiveMaxCycles = Math.max(50000, Math.round(rtlAdaptiveMaxCycles * Math.min(0.85, 9.5 / batchMs)));
+    } else if (batchMs < 6.5 && cycles >= rtlAdaptiveMaxCycles * 0.8) {
+      rtlAdaptiveMaxCycles = Math.min(2500000, Math.round(rtlAdaptiveMaxCycles * 1.15));
+    }
   }
 }
 
@@ -3167,14 +3182,16 @@ function frame(now) {
   if (S.running) {
     const rate = 10 ** ((S.speed - 55) / 25);
     if (rtlRunner && !S.vcd) {
-      const frameDt = Math.min(0.04, dt);
+      const frameDt = Math.min(0.025, dt);
       const stepWall = frameDt * rate;
+      const cap = Math.max(50000, rtlAdaptiveMaxCycles);
       accumulator += S.clkHz * stepWall;
-      accumulator = Math.min(accumulator, 5000000);
-      const cycles = Math.min(2500000, Math.floor(accumulator));
+      accumulator = Math.min(accumulator, cap * 2);
+      const cycles = Math.min(cap, Math.floor(accumulator));
       if (Number.isInteger(cycles) && cycles > 0) {
         accumulator = Math.max(0, accumulator - cycles);
-        runRtlStepBatch(cycles, frameDt);
+        const audioDt = S.clkHz > 0 ? Math.min(0.04, (cycles / S.clkHz) / Math.max(0.05, rate)) : frameDt;
+        runRtlStepBatch(cycles, audioDt);
       }
     } else {
       const maxPerFrame = S.clkHz >= 10000 ? adaptiveMaxCycles : 4096;

@@ -518,20 +518,22 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
     lines.push(`  let ${ff.dst} = ${init};`);
   }
   const scalarOutputs = outputPorts.filter(p => p.width === 1);
-  // Compute minimal backward combinational cone required inside the 50 MHz inner loop (FF next-state + scalar outputs for audio)
-  const hotNeeded = new Set();
-  const stack = [];
-  for (const ff of ffNodes) for (const d of ff.deps) stack.push(d);
-  for (const p of scalarOutputs) stack.push(p.name);
-  while (stack.length) {
-    const cur = stack.pop();
-    if (hotNeeded.has(cur)) continue;
-    hotNeeded.add(cur);
-    const node = nodeByDst.get(cur);
-    if (node) for (const d of node.deps) stack.push(d);
-  }
-  const hotCombNodes = sortedComb.filter(n => hotNeeded.has(n.dst));
-  const combEmit = hotCombNodes.map(n => `      ${n.emit().replace(/\n/g, '\n      ')}`).join('\n');
+  const collectCombCone = seedNames => {
+    const needed = new Set();
+    const stack = [...seedNames];
+    while (stack.length) {
+      const cur = stack.pop();
+      if (needed.has(cur)) continue;
+      needed.add(cur);
+      const node = nodeByDst.get(cur);
+      if (node) for (const d of node.deps) stack.push(d);
+    }
+    return sortedComb.filter(n => needed.has(n.dst));
+  };
+  const ffSeedNames = [];
+  for (const ff of ffNodes) for (const d of ff.deps) ffSeedNames.push(d);
+  const ffCombNodes = collectCombCone(ffSeedNames);
+  const combEmitNoAudio = ffCombNodes.map(n => `      ${n.emit().replace(/\n/g, '\n      ')}`).join('\n');
   const nextEmit = ffNodes.map(ff => {
     const wInfo = symWidths.get(ff.dst);
     const expr = ff.rst ? `(${ff.rst} ? (${ff.rstCode}) : (${ff.rhsCode}))` : ff.rhsCode;
@@ -564,30 +566,58 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
 
   lines.push(`  function _rt_stepNoAudio(_rt_n) {`);
   lines.push(`    for (let _rt_k = 0; _rt_k < _rt_n; _rt_k++) {`);
-  lines.push(combEmit);
+  lines.push(combEmitNoAudio);
   lines.push(nextEmit);
   lines.push(commitEmit);
   lines.push(`    }`);
   lines.push(`  }`);
 
-  lines.push(`  function _rt_stepWithAudio(_rt_n, _rt_beepIdx) {`);
-  lines.push(`    let _rt_beepSum = 0;`);
-  lines.push(`    for (let _rt_k = 0; _rt_k < _rt_n; _rt_k++) {`);
-  lines.push(combEmit);
-  if (scalarOutputs.length === 1) {
-    lines.push(`      _rt_beepSum += (_rt_beepIdx === 0 ? ${scalarOutputs[0].name} : 0);`);
-  } else if (scalarOutputs.length > 1) {
-    lines.push(`      let _rt_b = 0;`);
-    lines.push(`      switch (_rt_beepIdx) {`);
-    scalarOutputs.forEach((p, idx) => lines.push(`        case ${idx}: _rt_b = ${p.name}; break;`));
-    lines.push(`      }`);
-    lines.push(`      _rt_beepSum += _rt_b;`);
+  const useSpecializedAudio = scalarOutputs.length > 0 && scalarOutputs.length <= 16;
+  if (useSpecializedAudio) {
+    lines.push(`  const _rt_audioSteppers = [`);
+    for (const p of scalarOutputs) {
+      const coneNodes = collectCombCone([...ffSeedNames, p.name]);
+      const audioCombEmit = coneNodes.map(n => `        ${n.emit().replace(/\n/g, '\n        ')}`).join('\n');
+      const nextEmitIndented = nextEmit.replace(/^/gm, '  ');
+      const commitEmitIndented = commitEmit.replace(/^/gm, '  ');
+      lines.push(`    function(_rt_n) {`);
+      lines.push(`      let _rt_beepSum = 0;`);
+      lines.push(`      for (let _rt_k = 0; _rt_k < _rt_n; _rt_k++) {`);
+      lines.push(audioCombEmit);
+      lines.push(`        _rt_beepSum += ${p.name};`);
+      lines.push(nextEmitIndented);
+      lines.push(commitEmitIndented);
+      lines.push(`      }`);
+      lines.push(`      return _rt_beepSum;`);
+      lines.push(`    },`);
+    }
+    lines.push(`  ];`);
+    lines.push(`  function _rt_stepWithAudio(_rt_n, _rt_beepIdx) {`);
+    lines.push(`    const _rt_fn = _rt_audioSteppers[_rt_beepIdx];`);
+    lines.push(`    if (_rt_fn) return _rt_fn(_rt_n);`);
+    lines.push(`    _rt_stepNoAudio(_rt_n);`);
+    lines.push(`    return 0;`);
+    lines.push(`  }`);
+  } else {
+    const allHotNodes = collectCombCone([...ffSeedNames, ...scalarOutputs.map(p => p.name)]);
+    const combEmitAll = allHotNodes.map(n => `      ${n.emit().replace(/\n/g, '\n      ')}`).join('\n');
+    lines.push(`  function _rt_stepWithAudio(_rt_n, _rt_beepIdx) {`);
+    lines.push(`    let _rt_beepSum = 0;`);
+    lines.push(`    for (let _rt_k = 0; _rt_k < _rt_n; _rt_k++) {`);
+    lines.push(combEmitAll);
+    if (scalarOutputs.length > 1) {
+      lines.push(`      let _rt_b = 0;`);
+      lines.push(`      switch (_rt_beepIdx) {`);
+      scalarOutputs.forEach((p, idx) => lines.push(`        case ${idx}: _rt_b = ${p.name}; break;`));
+      lines.push(`      }`);
+      lines.push(`      _rt_beepSum += _rt_b;`);
+    }
+    lines.push(nextEmit);
+    lines.push(commitEmit);
+    lines.push(`    }`);
+    lines.push(`    return _rt_beepSum;`);
+    lines.push(`  }`);
   }
-  lines.push(nextEmit);
-  lines.push(commitEmit);
-  lines.push(`    }`);
-  lines.push(`    return _rt_beepSum;`);
-  lines.push(`  }`);
 
   lines.push(`  function _rt_runLoop(_rt_total, _rt_sTarget, _rt_audioOut, _rt_beepIdx) {`);
   lines.push(`    const _rt_samples = [];`);
