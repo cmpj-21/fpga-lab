@@ -98,13 +98,12 @@ jobs:
           $env:PATH = "$msysBin;$env:PATH"
           powershell -ExecutionPolicy Bypass -File "packaging\build-release.ps1" -Version $env:RELEASE_VERSION -MsysBin $msysBin
 
-      - name: Create source archive and versioned asset names
+      - name: Create versioned asset names
         shell: powershell
         run: |
           $v = $env:RELEASE_VERSION
           $setup = 'dist\Trace-FPGA-Workbench-Setup-x64.exe'
           if (!(Test-Path -LiteralPath $setup)) { throw "Installer was not produced: $setup" }
-          git archive --format=zip --output="dist\Trace-FPGA-Workbench-$v-Source.zip" HEAD
           Copy-Item "dist\Trace-FPGA-Workbench-Portable-x64.exe" "dist\Trace-FPGA-Workbench-$v-Portable-x64.exe" -Force
           Copy-Item "dist\Trace-FPGA-Workbench-Portable-x64.zip" "dist\Trace-FPGA-Workbench-$v-Portable-x64.zip" -Force
           Copy-Item $setup "dist\Trace-FPGA-Workbench-$v-Setup-x64.exe" -Force
@@ -119,5 +118,4 @@ jobs:
             --generate-notes `
             "dist\Trace-FPGA-Workbench-$v-Portable-x64.exe" `
             "dist\Trace-FPGA-Workbench-$v-Portable-x64.zip" `
-            "dist\Trace-FPGA-Workbench-$v-Setup-x64.exe" `
-            "dist\Trace-FPGA-Workbench-$v-Source.zip"
+            "dist\Trace-FPGA-Workbench-$v-Setup-x64.exe"

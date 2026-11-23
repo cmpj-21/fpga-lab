@@ -34,7 +34,7 @@ powershell -ExecutionPolicy Bypass -File "C:\Users\cmpj\dev\fpga-lab\packaging\b
 
 ## GitHub-hosted release build
 
-The `Release Windows builds` workflow (`.github/workflows/release.yml`) builds on a GitHub-hosted Windows runner, so no local toolchain or download is needed. Push a `v*` tag, or run the workflow manually with a version such as `1.0.0`. It publishes a GitHub release containing the versioned portable EXE, portable ZIP, setup EXE, and source ZIP.
+The `Release Windows builds` workflow (`.github/workflows/release.yml`) builds on a GitHub-hosted Windows runner, so no local toolchain or download is needed. Push a `v*` tag, or run the workflow manually with a version such as `1.0.0`. It publishes a GitHub release containing the versioned portable EXE, portable ZIP, and setup EXE. GitHub adds its own `Source code (zip)` and `Source code (tar.gz)` archives automatically, so no duplicate source ZIP is uploaded.
 
 ## Debugging a Packaged Build
 

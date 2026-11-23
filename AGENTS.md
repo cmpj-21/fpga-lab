@@ -39,6 +39,8 @@ Any agent touching this repository must adhere to the following rules:
    - Always use precise, targeted edits on existing configuration and source files.
 5. **Git Discipline:**
    - Always execute `git add -A` and `git commit` for every significant change or fix. Ensure commit messages are concise and descriptive.
+6. **Release Asset Discipline:**
+   - Do not upload a duplicate source ZIP. GitHub automatically provides `Source code (zip)` and `Source code (tar.gz)` on tagged releases; release workflows upload only built artifacts.
 
 ---
 
