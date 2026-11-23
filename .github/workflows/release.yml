@@ -64,6 +64,20 @@ jobs:
         shell: powershell
         run: powershell -ExecutionPolicy Bypass -File "packaging\fetch-webview2.ps1"
 
+      - name: Diagnose compiler
+        shell: powershell
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          $gcc = Join-Path $env:MSYS2_LOCATION 'ucrt64\bin\gcc.exe'
+          & $gcc --version
+          "GCC_VERSION_EXIT=$LASTEXITCODE"
+          $hello = Join-Path $env:RUNNER_TEMP 'trace-gcc-check.c'
+          $helloExe = Join-Path $env:RUNNER_TEMP 'trace-gcc-check.exe'
+          Set-Content -LiteralPath $hello -Value 'int main(void) { return 0; }'
+          & $gcc $hello -o $helloExe
+          "GCC_HELLO_EXIT=$LASTEXITCODE"
+
       - name: Build portable and installer artifacts
         shell: powershell
         env:
