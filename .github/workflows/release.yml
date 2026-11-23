@@ -53,7 +53,7 @@ jobs:
           MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
         run: |
           $pacman = Join-Path $env:MSYS2_LOCATION 'usr\bin\pacman.exe'
-          & $pacman -U --noconfirm --nodeps 'https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-gcc-15.2.0-11-any.pkg.tar.zst'
+          & $pacman -U --noconfirm --nodeps --overwrite '*' 'https://mirror.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-gcc-15.2.0-11-any.pkg.tar.zst'
           if ($LASTEXITCODE -ne 0) { throw 'Failed to pin GCC 15.2.0.' }
 
       - name: Ensure Inno Setup 6
