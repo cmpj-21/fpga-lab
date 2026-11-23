@@ -31,8 +31,9 @@ entity bench_demo is
 end entity bench_demo;
 
 architecture rtl of bench_demo is
-  signal count : unsigned(23 downto 0) := (others => '0');
-  signal scan  : unsigned(1 downto 0) := (others => '0');
+  signal prescale : unsigned(21 downto 0) := (others => '0');
+  signal count    : unsigned(15 downto 0) := (others => '0');
+  signal scan     : unsigned(1 downto 0)  := (others => '0');
 
   function hex_seg(n : unsigned(3 downto 0)) return std_logic_vector is
     variable s : std_logic_vector(7 downto 0);
@@ -67,26 +68,29 @@ begin
   begin
     if rising_edge(clk) then
       if reset_btn = '0' then
+        prescale <= (others => '0');
         count <= (others => '0');
         scan <= (others => '0');
       else
         scan <= scan + 1;
-        if s3 = '0' then
-          count <= count - 1;
-        elsif s1 = '0' then
-          count <= count + 1;
-        end if;
+        prescale <= prescale + 1;
         if s2 = '0' then
           count(7 downto 0) <= (others => '0');
+        elsif prescale = 0 then
+          if s3 = '0' then
+            count <= count - 1;
+          elsif s1 = '0' then
+            count <= count + 1;
+          end if;
         end if;
       end if;
     end if;
   end process;
 
-  led1 <= '0' when s4 = '0' else not count(4);
-  led2 <= '0' when s4 = '0' else not count(5);
-  led3 <= '0' when s4 = '0' else not count(6);
-  led4 <= '0' when s4 = '0' else not count(7);
+  led1 <= '0' when s4 = '0' else not count(0);
+  led2 <= '0' when s4 = '0' else not count(1);
+  led3 <= '0' when s4 = '0' else not count(2);
+  led4 <= '0' when s4 = '0' else not count(3);
 
   -- overflow buzzer
   beep <= '1' when count(7 downto 0) = "11111111" else '0';

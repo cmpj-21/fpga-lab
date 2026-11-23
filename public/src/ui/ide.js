@@ -56,27 +56,32 @@ entity ${entity} is
 end entity ${entity};
 
 architecture rtl of ${entity} is
-  signal count  : unsigned(15 downto 0) := (others => '0');
-  signal scan   : unsigned(1 downto 0)  := "00";
-  signal nibble : unsigned(3 downto 0);
-  signal segs   : std_logic_vector(6 downto 0);
+  signal prescale : unsigned(21 downto 0) := (others => '0');
+  signal count    : unsigned(15 downto 0) := (others => '0');
+  signal scan     : unsigned(1 downto 0)  := "00";
+  signal nibble   : unsigned(3 downto 0);
+  signal segs     : std_logic_vector(6 downto 0);
 begin
   process (clk)
   begin
     if rising_edge(clk) then
       if reset_btn = '0' then
-        count <= (others => '0');
-        scan  <= "00";
+        prescale <= (others => '0');
+        count    <= (others => '0');
+        scan     <= "00";
       else
-        scan <= scan + 1;
+        scan     <= scan + 1;
+        prescale <= prescale + 1;
         if s2 = '0' then
           count <= (others => '0');
-        elsif s3 = '0' then
-          count <= count - 1;
-        elsif s1 = '0' then
-          count <= count + 16;
-        else
-          count <= count + 1;
+        elsif prescale = 0 then
+          if s3 = '0' then
+            count <= count - 1;
+          elsif s1 = '0' then
+            count <= count + 16;
+          else
+            count <= count + 1;
+          end if;
         end if;
       end if;
     end if;

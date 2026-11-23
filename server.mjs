@@ -921,6 +921,9 @@ function resolveConptyHelper() {
     path.join(ROOT, 'backend', 'conpty_host.exe'),
     path.join(ROOT, '..', 'packaging', 'build', 'conpty_host.exe'),
     path.join(ROOT, 'packaging', 'build', 'conpty_host.exe'),
+    path.join(ROOT, 'dist', 'Trace', 'conpty_host.exe'),
+    path.join(ROOT, '..', 'fpga-lab', 'packaging', 'build', 'conpty_host.exe'),
+    path.join(ROOT, '..', 'fpga-lab', 'dist', 'Trace', 'conpty_host.exe'),
   ];
   for (const c of candidates) {
     try { if (statSync(c).isFile()) return c; } catch {}
@@ -969,6 +972,7 @@ async function createTerminalSession({ shell = '', cwd = '', cols = 120, rows = 
     banner: chosen.banner,
     exe: chosen.exe,
     cwd: workDir,
+    pty: !!conptyExe,
     proc,
     replayBuf: '',
     clients: new Set(),
@@ -1011,7 +1015,8 @@ function writeTerminalInput({ id = '', data = '' } = {}) {
   const session = id ? termSessions.get(id) : null;
   if (!session || !session.proc || session.proc.killed) return { ok: false, error: 'Terminal session ended.' };
   if (typeof data === 'string' && data.length > 0) {
-    try { session.proc.stdin.write(data, 'utf8'); } catch {}
+    const out = session.pty ? data : data.replace(/\r(?!\n)/g, '\n');
+    try { session.proc.stdin.write(out, 'utf8'); } catch {}
   }
   return { ok: true };
 }
