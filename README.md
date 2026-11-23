@@ -46,4 +46,12 @@ The browser integration test launches headless Chrome from `C:\Program Files\Goo
 - [AGENTS.md](AGENTS.md) - architecture, hardware pin truth table, contributor rules, and documentation-maintenance checklist.
 - [packaging/RELEASE.md](packaging/RELEASE.md) - native Win32/WebView2 packaging notes.
 
+## License and AI-generated disclosure
+
+This project is released under the MIT License. See [LICENSE](LICENSE) for the full text.
+
+Substantial portions of this codebase were generated with AI assistance and then reviewed, selected, integrated, and modified by Carlsam M. Puliran Jr. The copyright status of purely AI-generated material varies by jurisdiction; the MIT License is offered for the human-authored, curated, and modified parts of the project and for any rights the copyright holder has in the whole work. This disclosure is provided for transparency and is not legal advice.
+
+Third-party libraries and assets retain their own licenses. Vendored Three.js and xterm.js files include their MIT/copyright notices in `public/vendor/`, and external tools such as GHDL are governed by their own terms.
+
 Trace is a digital simulator and visualization tool, not a circuit solver. It does not model analog behavior, place-and-route timing, or program physical hardware. Always verify pin assignments and I/O standards against the board schematic before using real hardware.
