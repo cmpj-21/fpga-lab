@@ -1711,6 +1711,91 @@ export function createIde(api) {
     showHome(false);
   }
   let pendingSwitch = null;
+  let homeConfirmMode = 'save-or-discard';
+  let exitWbMode = 'save-or-discard';
+  let exitingApp = false;
+
+  function getOpenTerminalSummary() {
+    const active = termSessionsList.filter(t => !t.exited);
+    const counts = new Map();
+    for (const t of active) {
+      const lbl = t.label || t.shell || 'shell';
+      counts.set(lbl, (counts.get(lbl) || 0) + 1);
+    }
+    const parts = [];
+    for (const [lbl, n] of counts.entries()) parts.push(n > 1 ? `${lbl} (×${n})` : lbl);
+    return {
+      count: active.length,
+      totalTabs: termSessionsList.length,
+      shells: parts.join(', '),
+    };
+  }
+
+  function closeAllTerminalTabs() {
+    if (!termSessionsList.length) return;
+    const all = termSessionsList.splice(0, termSessionsList.length);
+    activeTermId = null;
+    for (const t of all) {
+      try { t.es?.close(); } catch {}
+      try { t.xterm?.dispose(); } catch {}
+      try { t.hostDiv?.remove(); } catch {}
+      fetch('/api/terminal/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: t.id }),
+        keepalive: true,
+      }).catch(() => {});
+    }
+    renderTerminalTabs();
+    if (!$('#right')?.classList.contains('hidden') && $('#rtab-terminal')?.classList.contains('active')) {
+      $('#closeRight')?.click();
+    }
+  }
+
+  function renderConfirmImpact(hostEl, { changes = [], termInfo = null, tip = '' } = {}) {
+    if (!hostEl) return;
+    hostEl.replaceChildren();
+    const makeCard = (cls, badgeText, titleText, metaText) => {
+      const card = document.createElement('div');
+      card.className = `confirm-impact-card ${cls}`;
+      const ico = document.createElement('span');
+      ico.className = 'confirm-impact-ico';
+      ico.textContent = badgeText;
+      const copy = document.createElement('div');
+      copy.className = 'confirm-impact-copy';
+      if (titleText) {
+        const title = document.createElement('div');
+        title.className = 'confirm-impact-title';
+        title.textContent = titleText;
+        copy.append(title);
+      }
+      if (metaText) {
+        const meta = document.createElement('div');
+        meta.className = 'confirm-impact-meta';
+        meta.textContent = metaText;
+        copy.append(meta);
+      }
+      card.append(ico, copy);
+      return card;
+    };
+    if (changes.length > 0) {
+      hostEl.append(makeCard('changes', 'EDIT', 'Unsaved project changes', changes.join(' · ')));
+    }
+    if (termInfo && termInfo.count > 0) {
+      const noun = termInfo.count === 1 ? 'session' : 'sessions';
+      hostEl.append(makeCard(
+        'term',
+        '>_',
+        `${termInfo.count} active terminal ${noun}`,
+        `${termInfo.shells} — all running shells and CLI/TUI apps will be closed.`
+      ));
+    }
+    if (tip) {
+      hostEl.append(makeCard('tip', 'TIP', '', tip));
+    }
+    hostEl.classList.toggle('hidden', hostEl.children.length === 0);
+  }
+
   function requestProjectSwitch({ label = 'this project', newWindowUrl = '/?newProject=1', onSwitchHere } = {}) {
     const view = $('#homeView');
     if (view && !view.classList.contains('hidden')) {
@@ -1724,19 +1809,80 @@ export function createIde(api) {
     }
     const changes = detectProjectChanges();
     const hasChanges = changes.length > 0;
-    pendingSwitch = { label, newWindowUrl, onSwitchHere, hasChanges };
-    if ($('#psTitle')) $('#psTitle').textContent = `Open ${label}?`;
-    if ($('#psCurrentProject')) $('#psCurrentProject').textContent = currentProjectTitle();
-    if ($('#psDetail')) {
-      $('#psDetail').textContent = changes.length
-        ? `Detected ${changes.join(', ')}. Open in a new Trace window to keep both running independently, or save/discard changes and switch here.`
-        : 'Open in a new Trace window to keep both projects running independently, or replace the project in this window.';
-    }
-    if ($('#psDiscard')) $('#psDiscard').classList.toggle('hidden', !hasChanges);
-    if ($('#psSave')) {
-      $('#psSave').textContent = !hasChanges ? 'Open in This Window' : (S.projectDir ? 'Save & Open Here' : 'Save As… & Open Here');
+    const termInfo = getOpenTerminalSummary();
+    const hasTerms = termInfo.count > 0;
+    const curProj = currentProjectTitle();
+    pendingSwitch = { label, newWindowUrl, onSwitchHere, hasChanges, hasTerms };
+
+    const titleEl = $('#psTitle');
+    const textEl = $('#psText');
+    const detailEl = $('#psDetail');
+    const discardBtn = $('#psDiscard');
+    const saveBtn = $('#psSave');
+    const newWinBtn = $('#psNewWindow');
+    if (newWinBtn) newWinBtn.textContent = 'New Trace Window ↗';
+
+    if (!hasChanges && !hasTerms) {
+      // Case 0 0 (B): clean workspace, no active terminals -> normal lightweight confirmation
+      if (titleEl) titleEl.textContent = `Open ${label}?`;
+      if (textEl) textEl.innerHTML = `You currently have <strong id="psCurrentProject"></strong> open with no unsaved changes.`;
+      if ($('#psCurrentProject')) $('#psCurrentProject').textContent = curProj;
+      renderConfirmImpact($('#psImpact'), {});
+      if (detailEl) {
+        detailEl.textContent = 'Replace the current window with the new project, or open a new Trace window to keep both running side-by-side.';
+        detailEl.classList.remove('hidden');
+      }
+      if (discardBtn) discardBtn.classList.add('hidden');
+      if (saveBtn) saveBtn.textContent = 'Replace Current Window';
+    } else if (!hasChanges && hasTerms) {
+      // Case 0 1 (A): clean workspace, active terminals open -> warn terminal closure
+      if (titleEl) titleEl.textContent = `Replace current window with ${label}?`;
+      if (textEl) textEl.innerHTML = `You have no unsaved edits in <strong id="psCurrentProject"></strong>, but replacing this window will close all active terminal sessions.`;
+      if ($('#psCurrentProject')) $('#psCurrentProject').textContent = curProj;
+      renderConfirmImpact($('#psImpact'), {
+        termInfo,
+        tip: 'Choose New Trace Window ↗ to keep your current project and running terminals untouched.',
+      });
+      if (detailEl) detailEl.classList.add('hidden');
+      if (discardBtn) discardBtn.classList.add('hidden');
+      if (saveBtn) saveBtn.textContent = 'Close Terminals & Replace Here';
+    } else if (hasChanges && !hasTerms) {
+      // Case 1 0 (C): unsaved changes, no active terminals
+      if (titleEl) titleEl.textContent = `Unsaved changes in ${curProj}`;
+      if (textEl) textEl.innerHTML = `Choose how to handle unsaved changes in <strong id="psCurrentProject"></strong> before opening ${escapeHtmlInline(label)}.`;
+      if ($('#psCurrentProject')) $('#psCurrentProject').textContent = curProj;
+      renderConfirmImpact($('#psImpact'), { changes });
+      if (detailEl) {
+        detailEl.textContent = 'Save all changes or discard them to replace this window, or create a new Trace window to keep both workspaces open.';
+        detailEl.classList.remove('hidden');
+      }
+      if (discardBtn) {
+        discardBtn.textContent = 'Discard & Replace Here';
+        discardBtn.classList.remove('hidden');
+      }
+      if (saveBtn) saveBtn.textContent = S.projectDir ? 'Save All & Replace Here' : 'Save As… & Replace Here';
+    } else {
+      // Case 1 1 (D): unsaved changes AND active terminals open -> dual-impact combo + safe escape hatch
+      if (titleEl) titleEl.textContent = 'Unsaved changes & active terminals';
+      if (textEl) textEl.innerHTML = `Replacing <strong id="psCurrentProject"></strong> with ${escapeHtmlInline(label)} will handle your unsaved edits and close all open terminal sessions.`;
+      if ($('#psCurrentProject')) $('#psCurrentProject').textContent = curProj;
+      renderConfirmImpact($('#psImpact'), {
+        changes,
+        termInfo,
+        tip: 'Use New Trace Window ↗ to keep both your unsaved edits and live terminals running independently.',
+      });
+      if (detailEl) detailEl.classList.add('hidden');
+      if (discardBtn) {
+        discardBtn.textContent = 'Discard & Replace';
+        discardBtn.classList.remove('hidden');
+      }
+      if (saveBtn) saveBtn.textContent = S.projectDir ? 'Save All & Replace' : 'Save As… & Replace';
     }
     if (!dlg.open) dlg.showModal();
+  }
+
+  function escapeHtmlInline(str) {
+    return String(str ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
   let entityTouched = false;
   function syncWizardPreview() {
@@ -1762,19 +1908,81 @@ export function createIde(api) {
     pendingFocusWizard = focusWizard;
     const changes = detectProjectChanges();
     const hasUnsaved = changes.length > 0;
+    const termInfo = getOpenTerminalSummary();
+    const hasTerms = termInfo.count > 0;
     const dlg = $('#homeConfirmDialog');
-    if (!dlg || !hasUnsaved) {
+
+    // Case 0 0: no unsaved changes and no active terminal sessions -> instant return
+    if (!dlg || (!hasUnsaved && !hasTerms)) {
+      closeAllTerminalTabs();
       api.stopAllSimulations?.();
       showHome(true, { clearSession: true });
       if (focusWizard) { pendingFocusWizard = false; openNewProjectWizard(); }
       return;
     }
-    if ($('#homeConfirmProject')) $('#homeConfirmProject').textContent = currentProjectTitle();
-    if ($('#homeConfirmDetail')) $('#homeConfirmDetail').textContent = describeRecentChanges();
-    if ($('#homeConfirmSave')) $('#homeConfirmSave').textContent = S.projectDir ? 'Save & Return Home' : 'Save Project As… & Return';
+
+    const curProj = currentProjectTitle();
+    const titleEl = $('#homeConfirmTitle');
+    const textEl = $('#homeConfirmText');
+    const detailEl = $('#homeConfirmDetail');
+    const discardBtn = $('#homeConfirmDiscard');
+    const saveBtn = $('#homeConfirmSave');
+
+    if (!hasUnsaved && hasTerms) {
+      // Case 0 1: clean files + active terminal sessions open
+      homeConfirmMode = 'close-terminals';
+      if (titleEl) titleEl.textContent = 'Close active terminal sessions & return Home?';
+      if (textEl) textEl.innerHTML = `You have no unsaved edits in <strong id="homeConfirmProject"></strong>, but returning to the Home menu will close all open terminal tabs and stop active simulations.`;
+      if ($('#homeConfirmProject')) $('#homeConfirmProject').textContent = curProj;
+      renderConfirmImpact($('#homeConfirmImpact'), { termInfo });
+      if (detailEl) detailEl.classList.add('hidden');
+      if (discardBtn) discardBtn.classList.add('hidden');
+      if (saveBtn) saveBtn.textContent = 'Close Terminals & Return Home';
+    } else if (hasUnsaved && !hasTerms) {
+      // Case 1 0: unsaved changes + no active terminals
+      homeConfirmMode = 'save-or-discard';
+      if (titleEl) titleEl.textContent = `Save changes to ${curProj}?`;
+      if (textEl) textEl.innerHTML = `Save recent changes to <strong id="homeConfirmProject"></strong> before stopping all active simulations and returning to the Home menu?`;
+      if ($('#homeConfirmProject')) $('#homeConfirmProject').textContent = curProj;
+      renderConfirmImpact($('#homeConfirmImpact'), { changes });
+      if (detailEl) {
+        detailEl.textContent = 'Saving updates your workspace and Recent Projects list. Discarding reverts unsaved project edits.';
+        detailEl.classList.remove('hidden');
+      }
+      if (discardBtn) {
+        discardBtn.textContent = 'Discard Changes';
+        discardBtn.classList.remove('hidden');
+      }
+      if (saveBtn) saveBtn.textContent = S.projectDir ? 'Save & Return Home' : 'Save Project As… & Return';
+    } else {
+      // Case 1 1: unsaved changes AND active terminals open
+      homeConfirmMode = 'save-or-discard';
+      if (titleEl) titleEl.textContent = 'Unsaved changes & active terminals';
+      if (textEl) textEl.innerHTML = `Choose how to handle <strong id="homeConfirmProject"></strong> before returning to the Home menu. Returning Home will also close all active terminal sessions.`;
+      if ($('#homeConfirmProject')) $('#homeConfirmProject').textContent = curProj;
+      renderConfirmImpact($('#homeConfirmImpact'), { changes, termInfo });
+      if (detailEl) detailEl.classList.add('hidden');
+      if (discardBtn) {
+        discardBtn.textContent = 'Discard & Return Home';
+        discardBtn.classList.remove('hidden');
+      }
+      if (saveBtn) saveBtn.textContent = S.projectDir ? 'Save & Return Home' : 'Save As… & Return';
+    }
     if (!dlg.open) dlg.showModal();
   }
   async function confirmSaveAndReturnHome() {
+    if (homeConfirmMode === 'close-terminals') {
+      $('#homeConfirmDialog')?.close();
+      closeAllTerminalTabs();
+      await api.stopAllSimulations?.();
+      showHome(true, { clearSession: true });
+      if (pendingFocusWizard) {
+        pendingFocusWizard = false;
+        openNewProjectWizard();
+      }
+      api.logEvent?.('info', `Returned to Home from ${currentProjectTitle()}: closed active terminal sessions and stopped simulations`);
+      return;
+    }
     if (!validateLibraries()) return;
     commitAll();
     api.renderSources();
@@ -1787,6 +1995,7 @@ export function createIde(api) {
       captureBaseline(projectTitle);
     }
     $('#homeConfirmDialog')?.close();
+    closeAllTerminalTabs();
     await api.stopAllSimulations?.();
     showHome(true, { clearSession: true });
     if (pendingFocusWizard) {
@@ -1810,6 +2019,7 @@ export function createIde(api) {
     saveRecents(baselineRecents);
     setProblems([]);
     $('#homeConfirmDialog')?.close();
+    closeAllTerminalTabs();
     await api.stopAllSimulations?.();
     showHome(true, { clearSession: true });
     if (pendingFocusWizard) {
@@ -1839,9 +2049,11 @@ export function createIde(api) {
     }
   }
   async function executeNativeExit() {
+    exitingApp = true;
     try {
       await Promise.race([
         (async () => {
+          closeAllTerminalTabs();
           await api.stopAllSimulations?.();
           await api.prepareExit?.();
         })(),
@@ -1865,7 +2077,12 @@ export function createIde(api) {
     const view = $('#homeView');
     const inHome = !!(view && !view.classList.contains('hidden'));
     const changes = inHome ? [] : detectProjectChanges();
-    if (inHome || changes.length === 0) {
+    const hasChanges = changes.length > 0;
+    const termInfo = inHome ? { count: 0, totalTabs: 0, shells: '' } : getOpenTerminalSummary();
+    const hasTerms = termInfo.count > 0;
+
+    // Home screen OR Workbench Case 0 0 (no unsaved changes, no active terminals)
+    if (inHome || (!hasChanges && !hasTerms)) {
       if (isSkipHomeExitConfirm()) {
         executeNativeExit();
         return;
@@ -1880,18 +2097,70 @@ export function createIde(api) {
       if (!dlg.open) dlg.showModal();
       return;
     }
+
     const dlg = $('#exitWorkbenchDialog');
     if (!dlg) {
       executeNativeExit();
       return;
     }
     closeOtherModals('exitWorkbenchDialog');
-    if ($('#exitWbProject')) $('#exitWbProject').textContent = currentProjectTitle();
-    if ($('#exitWbDetail')) $('#exitWbDetail').textContent = describeRecentChanges();
-    if ($('#exitWbSave')) $('#exitWbSave').textContent = S.projectDir ? 'Save & Exit' : 'Save Project As… & Exit';
+
+    const curProj = currentProjectTitle();
+    const titleEl = $('#exitWbTitle');
+    const textEl = $('#exitWbText');
+    const detailEl = $('#exitWbDetail');
+    const discardBtn = $('#exitWbDiscard');
+    const saveBtn = $('#exitWbSave');
+
+    if (!hasChanges && hasTerms) {
+      // Workbench Case 0 1: clean code + active terminals open (never bypassed by Do not ask again!)
+      exitWbMode = 'close-terminals';
+      if (titleEl) titleEl.textContent = 'Close active terminal sessions & exit?';
+      if (textEl) textEl.innerHTML = `You have no unsaved edits in <strong id="exitWbProject"></strong>, but exiting Trace FPGA Workbench will terminate all active terminal sessions.`;
+      if ($('#exitWbProject')) $('#exitWbProject').textContent = curProj;
+      renderConfirmImpact($('#exitWbImpact'), { termInfo });
+      if (detailEl) detailEl.classList.add('hidden');
+      if (discardBtn) discardBtn.classList.add('hidden');
+      if (saveBtn) saveBtn.textContent = 'Close Terminals & Exit';
+    } else if (hasChanges && !hasTerms) {
+      // Workbench Case 1 0: unsaved changes + no active terminals
+      exitWbMode = 'save-or-discard';
+      if (titleEl) titleEl.textContent = `Save changes to ${curProj} before exiting?`;
+      if (textEl) textEl.innerHTML = `Choose how to handle <strong id="exitWbProject"></strong> before closing Trace FPGA Workbench.`;
+      if ($('#exitWbProject')) $('#exitWbProject').textContent = curProj;
+      renderConfirmImpact($('#exitWbImpact'), { changes });
+      if (detailEl) {
+        detailEl.textContent = 'Saving writes your project files to disk before closing. Discarding reverts unsaved project changes and closes immediately.';
+        detailEl.classList.remove('hidden');
+      }
+      if (discardBtn) {
+        discardBtn.textContent = 'Discard & Exit';
+        discardBtn.classList.remove('hidden');
+      }
+      if (saveBtn) saveBtn.textContent = S.projectDir ? 'Save All & Exit' : 'Save Project As… & Exit';
+    } else {
+      // Workbench Case 1 1: unsaved changes AND active terminals open
+      exitWbMode = 'save-or-discard';
+      if (titleEl) titleEl.textContent = 'Unsaved changes & active terminals';
+      if (textEl) textEl.innerHTML = `Choose how to handle <strong id="exitWbProject"></strong> before closing Trace FPGA Workbench. Exiting will also terminate all active terminal sessions.`;
+      if ($('#exitWbProject')) $('#exitWbProject').textContent = curProj;
+      renderConfirmImpact($('#exitWbImpact'), { changes, termInfo });
+      if (detailEl) detailEl.classList.add('hidden');
+      if (discardBtn) {
+        discardBtn.textContent = 'Discard & Exit';
+        discardBtn.classList.remove('hidden');
+      }
+      if (saveBtn) saveBtn.textContent = S.projectDir ? 'Save All & Exit' : 'Save As… & Exit';
+    }
     if (!dlg.open) dlg.showModal();
   }
   async function confirmSaveAndExit() {
+    if (exitWbMode === 'close-terminals') {
+      $('#exitWorkbenchDialog')?.close();
+      api.logEvent?.('info', `Exited workbench (${currentProjectTitle()}): closed active terminal sessions`);
+      await executeNativeExit();
+      return;
+    }
     if (!validateLibraries()) return;
     commitAll();
     api.renderSources();
@@ -2876,6 +3145,19 @@ export function createIde(api) {
     }
   }
 
+  window.addEventListener('beforeunload', e => {
+    if (window.chrome?.webview || exitingApp) return;
+    const view = $('#homeView');
+    const inHome = !!(view && !view.classList.contains('hidden'));
+    if (inHome) return;
+    const hasChanges = detectProjectChanges().length > 0;
+    const hasTerms = getOpenTerminalSummary().count > 0;
+    if (hasChanges || hasTerms) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+
   window.addEventListener('pagehide', () => {
     for (const t of termSessionsList) {
       try { t.es?.close(); } catch {}
@@ -3288,6 +3570,7 @@ export function createIde(api) {
       }
       pendingSwitch = null;
       $('#projectSwitchDialog')?.close();
+      closeAllTerminalTabs();
       await api.stopAllSimulations?.();
       await sw.onSwitchHere?.();
     });
@@ -3295,6 +3578,7 @@ export function createIde(api) {
       const sw = pendingSwitch;
       pendingSwitch = null;
       $('#projectSwitchDialog')?.close();
+      closeAllTerminalTabs();
       await api.stopAllSimulations?.();
       await sw?.onSwitchHere?.();
     });
