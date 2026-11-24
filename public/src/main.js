@@ -2929,6 +2929,7 @@ function wire() {
     }
   });
   window.addEventListener('keyup', e => {
+    if (!e.key) return;
     const net = keys[e.key.toLowerCase()];
     if (net && S.keys[net]) keyInput(net, false);
   });

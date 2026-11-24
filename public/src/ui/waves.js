@@ -213,8 +213,11 @@ export class WaveViewer {
     return rows;
   }
   resize() {
-    const width = this.canvas.parentElement.clientWidth; if (!width) return;
-    const rawHeight = Math.max(HEADER + this.displayRows().length * ROW, this.canvas.parentElement.parentElement.clientHeight - 2);
+    const parent = this.canvas.parentElement;
+    if (!parent) return;
+    const width = parent.clientWidth; if (!width) return;
+    const outerH = parent.parentElement ? parent.parentElement.clientHeight : parent.clientHeight;
+    const rawHeight = Math.max(HEADER + this.displayRows().length * ROW, outerH - 2);
     const maxCssH = Math.floor(16384 / Math.max(1, this.dpr));
     const maxCssW = Math.floor(16384 / Math.max(1, this.dpr));
     const clampedW = Math.min(width, maxCssW);
