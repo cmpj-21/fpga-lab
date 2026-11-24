@@ -363,9 +363,11 @@ export function createIde(api) {
     window.addEventListener('resize', () => applyLayout());
     if (typeof ResizeObserver !== 'undefined') {
       const ro = new ResizeObserver(() => {
-        const prev = layout.panelH;
-        clampLayoutBounds();
-        if (layout.panelH !== prev) document.documentElement.style.setProperty('--panel-h', `${layout.panelH}px`);
+        const eff = computeClampedLayout();
+        const next = `${eff.panelH}px`;
+        if (document.documentElement.style.getPropertyValue('--panel-h') !== next) {
+          document.documentElement.style.setProperty('--panel-h', next);
+        }
       });
       const tb = $('#boardPane > .view-toolbar');
       const io = $('#inputBar');
