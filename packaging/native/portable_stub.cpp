@@ -76,6 +76,9 @@ static std::wstring GetCacheRoot() {
 }
 
 static LRESULT CALLBACK SplashProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_CLOSE) {
+        return 0;
+    }
     if (msg == WM_PAINT) {
         PAINTSTRUCT ps{};
         HDC hdc = BeginPaint(hwnd, &ps);
@@ -189,11 +192,17 @@ static void PruneOldCacheDirs(const std::wstring& cacheRoot, const std::wstring&
     WIN32_FIND_DATAW fd{};
     HANDLE hFind = FindFirstFileW((cacheRoot + L"\\*").c_str(), &fd);
     if (hFind == INVALID_HANDLE_VALUE) return;
+    FILETIME nowFt{};
+    GetSystemTimeAsFileTime(&nowFt);
+    ULARGE_INTEGER nowUli{};
+    nowUli.LowPart = nowFt.dwLowDateTime;
+    nowUli.HighPart = nowFt.dwHighDateTime;
+    constexpr ULONGLONG kFiveMinutes100ns = 300ULL * 10000000ULL;
     do {
         if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
         std::wstring name = fd.cFileName;
         if (name == L"." || name == L".." || name == keepTag) continue;
-        // Remove previous 8-hex-char version folders or leftover .tmp-* staging folders
+        // Remove previous 8-hex-char version folders or stale (>5 min old) .tmp-* staging folders
         bool isHexTag = (name.size() == 8);
         if (isHexTag) {
             for (wchar_t c : name) {
@@ -201,6 +210,14 @@ static void PruneOldCacheDirs(const std::wstring& cacheRoot, const std::wstring&
             }
         }
         bool isTempStage = (name.find(L".tmp-") != std::wstring::npos);
+        if (isTempStage) {
+            ULARGE_INTEGER modUli{};
+            modUli.LowPart = fd.ftLastWriteTime.dwLowDateTime;
+            modUli.HighPart = fd.ftLastWriteTime.dwHighDateTime;
+            if (nowUli.QuadPart > modUli.QuadPart && (nowUli.QuadPart - modUli.QuadPart) < kFiveMinutes100ns) {
+                continue;
+            }
+        }
         if (isHexTag || isTempStage) {
             DeleteDirRecursive(cacheRoot + L"\\" + name);
         }
@@ -269,24 +286,55 @@ static bool ExtractEmbeddedZip(const std::wstring& selfPath, const PortableTrail
     std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
     cmdBuf.push_back(L'\0');
 
+    SECURITY_ATTRIBUTES nulSa{};
+    nulSa.nLength = sizeof(nulSa);
+    nulSa.bInheritHandle = TRUE;
+    HANDLE hNulIn = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &nulSa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE hNulOut = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &nulSa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
+    BOOL inherit = FALSE;
+    if (hNulIn != INVALID_HANDLE_VALUE && hNulOut != INVALID_HANDLE_VALUE) {
+        si.dwFlags |= STARTF_USESTDHANDLES;
+        si.hStdInput = hNulIn;
+        si.hStdOutput = hNulOut;
+        si.hStdError = hNulOut;
+        inherit = TRUE;
+    }
     PROCESS_INFORMATION pi{};
-    BOOL started = CreateProcessW(tarExe.c_str(), cmdBuf.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, destDir.c_str(), &si, &pi);
+    BOOL started = CreateProcessW(tarExe.c_str(), cmdBuf.data(), nullptr, nullptr, inherit, CREATE_NO_WINDOW, nullptr, destDir.c_str(), &si, &pi);
+    if (hNulIn != INVALID_HANDLE_VALUE) CloseHandle(hNulIn);
+    if (hNulOut != INVALID_HANDLE_VALUE) CloseHandle(hNulOut);
+
     DWORD exitCode = 1;
     if (started) {
+        ULONGLONG startTick = GetTickCount64();
+        constexpr ULONGLONG kMaxExtractMs = 180000ULL;
+        bool finished = false;
         for (;;) {
-            DWORD waitRes = MsgWaitForMultipleObjects(1, &pi.hProcess, FALSE, INFINITE, QS_ALLINPUT);
-            if (waitRes == WAIT_OBJECT_0) break;
+            DWORD waitRes = MsgWaitForMultipleObjects(1, &pi.hProcess, FALSE, 500, QS_ALLINPUT);
+            if (waitRes == WAIT_OBJECT_0) {
+                finished = true;
+                break;
+            }
             if (waitRes == WAIT_OBJECT_0 + 1) {
                 PumpSplashMessages(splash);
-            } else {
+            } else if (waitRes == WAIT_FAILED) {
+                break;
+            }
+            if (GetTickCount64() - startTick > kMaxExtractMs) {
                 break;
             }
         }
-        GetExitCodeProcess(pi.hProcess, &exitCode);
+        if (!finished) {
+            TerminateProcess(pi.hProcess, 1);
+            WaitForSingleObject(pi.hProcess, 2000);
+        } else {
+            GetExitCodeProcess(pi.hProcess, &exitCode);
+        }
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
     }
@@ -382,12 +430,17 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR lpCmdLine, int nCmdSho
     }
 
     SetEnvironmentVariableW(L"TRACE_PORTABLE", L"1");
-    // True portable user data: store config, logs & WebView2 profile in TraceData\ beside this .exe
-    size_t selfSlash = selfPath.find_last_of(L"\\/");
-    std::wstring selfDir = (selfSlash != std::wstring::npos) ? selfPath.substr(0, selfSlash) : L".";
-    std::wstring portableDataDir = selfDir + L"\\TraceData";
-    if (IsDirWritable(portableDataDir)) {
-        SetEnvironmentVariableW(L"TRACE_DATA_DIR", portableDataDir.c_str());
+    // True portable user data: store config, logs & WebView2 profile in TraceData\ beside this .exe,
+    // unless the user already configured an explicit TRACE_DATA_DIR override.
+    wchar_t existingDataDir[MAX_PATH * 4] = {};
+    DWORD existingLen = GetEnvironmentVariableW(L"TRACE_DATA_DIR", existingDataDir, MAX_PATH * 4);
+    if (existingLen == 0 || existingLen >= MAX_PATH * 4) {
+        size_t selfSlash = selfPath.find_last_of(L"\\/");
+        std::wstring selfDir = (selfSlash != std::wstring::npos) ? selfPath.substr(0, selfSlash) : L".";
+        std::wstring portableDataDir = selfDir + L"\\TraceData";
+        if (IsDirWritable(portableDataDir)) {
+            SetEnvironmentVariableW(L"TRACE_DATA_DIR", portableDataDir.c_str());
+        }
     }
 
     std::wstring cmd = L"\"" + targetExe + L"\"";

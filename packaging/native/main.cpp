@@ -33,6 +33,7 @@
 
 static constexpr UINT WM_APP_BACKEND_READY = WM_APP + 1;
 static constexpr UINT WM_APP_BACKEND_FAIL  = WM_APP + 2;
+static constexpr UINT_PTR IDT_CLOSE_WATCHDOG = 1;
 static constexpr int  IDI_APP_ICON         = 101;
 
 using CreateWebView2EnvFn = HRESULT(STDAPICALLTYPE*)(
@@ -52,6 +53,7 @@ struct AppState {
     ICoreWebView2Controller* controller = nullptr;
     ICoreWebView2* webview = nullptr;
     CreateWebView2EnvFn createEnvFn = nullptr;
+    UINT32 browserPid = 0;
     std::wstring exeDir;
     std::wstring exePath;
     std::wstring dataDir;
@@ -62,6 +64,7 @@ struct AppState {
     bool ready = false;
     bool navigated = false;
     bool allowClose = false;
+    bool closePending = false;
     bool isFullscreen = false;
     bool wv2FallbackAttempted = false;
     WINDOWPLACEMENT savedPlacement{ sizeof(WINDOWPLACEMENT) };
@@ -137,6 +140,55 @@ static std::wstring FormatHRESULT(HRESULT hr) {
     wchar_t buf[32] = {};
     std::swprintf(buf, 32, L"0x%08lX", static_cast<unsigned long>(hr));
     return buf;
+}
+
+static void AppendNativeLog(const std::wstring& msg) {
+    std::wstring base = g_app.dataDir;
+    if (base.empty()) {
+        wchar_t envBuf[MAX_PATH * 4] = {};
+        DWORD n = GetEnvironmentVariableW(L"TRACE_DATA_DIR", envBuf, MAX_PATH * 4);
+        if (n > 0 && n < MAX_PATH * 4) {
+            base.assign(envBuf, n);
+        } else {
+            wchar_t tmp[MAX_PATH] = {};
+            DWORD tn = GetTempPathW(MAX_PATH, tmp);
+            if (tn > 0 && tn < MAX_PATH) {
+                base.assign(tmp, tn);
+                if (!base.empty() && base.back() == L'\\') base.pop_back();
+                base += L"\\TraceFPGA";
+            }
+        }
+    }
+    if (base.empty()) return;
+    std::wstring logDir = base + L"\\logs";
+    CreateDirsRecursive(logDir);
+    std::wstring logPath = logDir + L"\\native-crash.log";
+    HANDLE h = CreateFileW(logPath.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    SYSTEMTIME st{};
+    GetLocalTime(&st);
+    wchar_t prefix[96] = {};
+    std::swprintf(prefix, 96, L"[%04u-%02u-%02u %02u:%02u:%02u.%03u][pid:%lu] ",
+                  st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+                  static_cast<unsigned long>(GetCurrentProcessId()));
+    std::string line = WideToUtf8(std::wstring(prefix) + msg + L"\r\n");
+    DWORD written = 0;
+    WriteFile(h, line.data(), static_cast<DWORD>(line.size()), &written, nullptr);
+    CloseHandle(h);
+}
+
+static LONG WINAPI TraceUnhandledExceptionFilter(EXCEPTION_POINTERS* ep) {
+    DWORD code = (ep && ep->ExceptionRecord) ? ep->ExceptionRecord->ExceptionCode : 0;
+    void* addr = (ep && ep->ExceptionRecord) ? ep->ExceptionRecord->ExceptionAddress : nullptr;
+    wchar_t buf[160] = {};
+    std::swprintf(buf, 160, L"Unhandled native exception code=0x%08lX addr=%p",
+                  static_cast<unsigned long>(code), addr);
+    AppendNativeLog(buf);
+    if (g_app.job) {
+        TerminateJobObject(g_app.job, 1);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
 }
 
 static void DeleteDirBestEffort(const std::wstring& dir) {
@@ -363,9 +415,78 @@ public:
         return r;
     }
     HRESULT STDMETHODCALLTYPE Invoke(HRESULT errorCode, LPCWSTR resultObjectAsJson) override {
+        g_app.closePending = false;
+        if (g_app.hwnd && IsWindow(g_app.hwnd)) {
+            KillTimer(g_app.hwnd, IDT_CLOSE_WATCHDOG);
+        }
         if (FAILED(errorCode) || !resultObjectAsJson || std::wcscmp(resultObjectAsJson, L"1") != 0) {
             g_app.allowClose = true;
-            if (g_app.hwnd) DestroyWindow(g_app.hwnd);
+            if (g_app.hwnd && IsWindow(g_app.hwnd)) DestroyWindow(g_app.hwnd);
+        }
+        return S_OK;
+    }
+};
+
+class ProcessFailedHandler final : public ICoreWebView2ProcessFailedEventHandler {
+    std::atomic<ULONG> ref_{1};
+    static const wchar_t* KindName(COREWEBVIEW2_PROCESS_FAILED_KIND kind) {
+        switch (kind) {
+            case COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED: return L"BROWSER_PROCESS_EXITED";
+            case COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED: return L"RENDER_PROCESS_EXITED";
+            case COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE: return L"RENDER_PROCESS_UNRESPONSIVE";
+            case COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED: return L"FRAME_RENDER_PROCESS_EXITED";
+            case COREWEBVIEW2_PROCESS_FAILED_KIND_UTILITY_PROCESS_EXITED: return L"UTILITY_PROCESS_EXITED";
+            case COREWEBVIEW2_PROCESS_FAILED_KIND_SANDBOX_HELPER_PROCESS_EXITED: return L"SANDBOX_HELPER_PROCESS_EXITED";
+            case COREWEBVIEW2_PROCESS_FAILED_KIND_GPU_PROCESS_EXITED: return L"GPU_PROCESS_EXITED";
+            default: return L"OTHER_PROCESS_FAILED";
+        }
+    }
+public:
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_ICoreWebView2ProcessFailedEventHandler) {
+            *ppv = static_cast<ICoreWebView2ProcessFailedEventHandler*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++ref_; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        ULONG r = --ref_;
+        if (r == 0) delete this;
+        return r;
+    }
+    HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2* sender, ICoreWebView2ProcessFailedEventArgs* args) override {
+        COREWEBVIEW2_PROCESS_FAILED_KIND kind = COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED;
+        if (args) {
+            args->get_ProcessFailedKind(&kind);
+        }
+        std::wstring kindStr = KindName(kind);
+        AppendNativeLog(L"WebView2 ProcessFailed: " + kindStr + L" (" + std::to_wstring(static_cast<int>(kind)) + L")");
+
+        if (kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED) {
+            if (g_app.hwnd && IsWindow(g_app.hwnd)) {
+                int choice = MessageBoxW(
+                    g_app.hwnd,
+                    L"The Trace UI renderer stopped unexpectedly.\n\nDetails were saved to logs\\native-crash.log.\nReload the workbench now?",
+                    L"Trace FPGA Workbench",
+                    MB_YESNO | MB_ICONWARNING);
+                if (choice == IDYES && sender) {
+                    sender->Reload();
+                }
+            }
+        } else if (kind == COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED) {
+            if (g_app.hwnd && IsWindow(g_app.hwnd)) {
+                MessageBoxW(
+                    g_app.hwnd,
+                    L"The Microsoft Edge WebView2 browser process exited unexpectedly.\n\nDetails were saved to logs\\native-crash.log. Trace will now close.",
+                    L"Trace FPGA Workbench",
+                    MB_OK | MB_ICONERROR);
+                g_app.allowClose = true;
+                DestroyWindow(g_app.hwnd);
+            }
         }
         return S_OK;
     }
@@ -396,8 +517,12 @@ public:
             std::wstring msg(msgRaw);
             CoTaskMemFree(msgRaw);
             if (msg == L"app:close-now") {
+                g_app.closePending = false;
                 g_app.allowClose = true;
-                if (g_app.hwnd) PostMessageW(g_app.hwnd, WM_CLOSE, 0, 0);
+                if (g_app.hwnd && IsWindow(g_app.hwnd)) {
+                    KillTimer(g_app.hwnd, IDT_CLOSE_WATCHDOG);
+                    PostMessageW(g_app.hwnd, WM_CLOSE, 0, 0);
+                }
             } else if (msg == L"app:toggle-fullscreen") {
                 ToggleFullscreen(g_app.hwnd);
             } else if (msg == L"app:exit-fullscreen") {
@@ -480,10 +605,12 @@ public:
             }
             if (g_app.hwnd && IsWindow(g_app.hwnd)) {
                 std::wstring msg = L"Failed to initialize Microsoft Edge WebView2 controller (" + FormatHRESULT(result) + L").";
+                AppendNativeLog(msg);
                 MessageBoxW(g_app.hwnd, msg.c_str(), L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
                 DestroyWindow(g_app.hwnd);
+            } else {
+                PostQuitMessage(1);
             }
-            PostQuitMessage(1);
             return result;
         }
         g_app.controller = controller;
@@ -498,6 +625,7 @@ public:
         }
 
         if (SUCCEEDED(controller->get_CoreWebView2(&g_app.webview)) && g_app.webview) {
+            g_app.webview->get_BrowserProcessId(&g_app.browserPid);
             ICoreWebView2Settings* settings = nullptr;
             if (SUCCEEDED(g_app.webview->get_Settings(&settings)) && settings) {
                 settings->put_IsStatusBarEnabled(FALSE);
@@ -515,6 +643,11 @@ public:
             auto* msgHandler = new WebMessageReceivedHandler();
             g_app.webview->add_WebMessageReceived(msgHandler, &msgTok);
             msgHandler->Release();
+
+            EventRegistrationToken pfTok{};
+            auto* pfHandler = new ProcessFailedHandler();
+            g_app.webview->add_ProcessFailed(pfHandler, &pfTok);
+            pfHandler->Release();
         }
 
         ResizeWebView();
@@ -560,15 +693,28 @@ public:
                 std::wstring msg =
                     L"Microsoft Edge WebView2 Runtime is required to run Trace FPGA Workbench (" + FormatHRESULT(result) + L").\n\n"
                     L"Install the Evergreen WebView2 Runtime from:\nhttps://developer.microsoft.com/microsoft-edge/webview2/";
+                AppendNativeLog(L"WebView2 Environment creation failed (" + FormatHRESULT(result) + L")");
                 MessageBoxW(g_app.hwnd, msg.c_str(), L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
                 DestroyWindow(g_app.hwnd);
+            } else {
+                PostQuitMessage(1);
             }
-            PostQuitMessage(1);
             return result;
         }
         auto* handler = new ControllerCompletedHandler();
-        env->CreateCoreWebView2Controller(g_app.hwnd, handler);
+        HRESULT ctrlHr = env->CreateCoreWebView2Controller(g_app.hwnd, handler);
         handler->Release();
+        if (FAILED(ctrlHr)) {
+            std::wstring msg = L"Failed to request Microsoft Edge WebView2 controller (" + FormatHRESULT(ctrlHr) + L").";
+            AppendNativeLog(msg);
+            if (g_app.hwnd && IsWindow(g_app.hwnd)) {
+                MessageBoxW(g_app.hwnd, msg.c_str(), L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
+                DestroyWindow(g_app.hwnd);
+            } else {
+                PostQuitMessage(1);
+            }
+            return ctrlHr;
+        }
         return S_OK;
     }
 };
@@ -596,6 +742,9 @@ static DWORD WINAPI BackendWatcherThread(LPVOID lpParam) {
     while (stdoutRead && ReadFile(stdoutRead, chunk, sizeof(chunk) - 1, &bytesRead, nullptr) && bytesRead > 0) {
         chunk[bytesRead] = '\0';
         buffer.append(chunk, bytesRead);
+        if (buffer.size() > 65536) {
+            buffer.erase(0, buffer.size() - 4096);
+        }
         size_t pos = 0;
         while ((pos = buffer.find('\n')) != std::string::npos) {
             std::string line = buffer.substr(0, pos);
@@ -612,6 +761,7 @@ static DWORD WINAPI BackendWatcherThread(LPVOID lpParam) {
         }
     }
     if (!signaled && hwnd) {
+        AppendNativeLog(L"Backend node.exe stdout closed before TRACE_READY.");
         std::wstring logPath = dataDir.empty() ? L"%LOCALAPPDATA%\\TraceFPGA\\logs\\latest.log" : (dataDir + L"\\logs\\latest.log");
         auto* errPtr = new std::wstring(L"Trace backend server exited before becoming ready.\n\nCheck " + logPath + L" for details.");
         if (!PostMessageW(hwnd, WM_APP_BACKEND_FAIL, 0, reinterpret_cast<LPARAM>(errPtr))) {
@@ -641,7 +791,11 @@ static bool StartBackendServer() {
     if (g_app.job) {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
         info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        SetInformationJobObject(g_app.job, JobObjectExtendedLimitInformation, &info, sizeof(info));
+        if (!SetInformationJobObject(g_app.job, JobObjectExtendedLimitInformation, &info, sizeof(info))) {
+            AppendNativeLog(L"Warning: SetInformationJobObject failed.");
+        }
+    } else {
+        AppendNativeLog(L"Warning: CreateJobObjectW failed; child processes may not auto-terminate.");
     }
 
     SECURITY_ATTRIBUTES sa{};
@@ -727,6 +881,16 @@ static bool StartBackendServer() {
     g_app.watcherThread = CreateThread(nullptr, 0, BackendWatcherThread, wparams, 0, nullptr);
     if (!g_app.watcherThread) {
         delete wparams;
+        AppendNativeLog(L"Failed to create BackendWatcherThread.");
+        if (g_app.stdinWrite) { CloseHandle(g_app.stdinWrite); g_app.stdinWrite = nullptr; }
+        if (g_app.stdoutRead) { CloseHandle(g_app.stdoutRead); g_app.stdoutRead = nullptr; }
+        if (g_app.nodeProcess) {
+            TerminateProcess(g_app.nodeProcess, 1);
+            CloseHandle(g_app.nodeProcess);
+            g_app.nodeProcess = nullptr;
+        }
+        MessageBoxW(g_app.hwnd, L"Failed to initialize Trace backend monitor thread.", L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
+        return false;
     }
     return true;
 }
@@ -746,17 +910,19 @@ static void InitWebView2() {
         ? LoadLibraryExW(loaderPath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)
         : nullptr;
     if (!mod) {
+        AppendNativeLog(L"Missing WebView2Loader.dll beside Trace.exe.");
         MessageBoxW(g_app.hwnd, L"Missing WebView2Loader.dll beside Trace.exe.", L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
-        if (g_app.hwnd) DestroyWindow(g_app.hwnd);
-        PostQuitMessage(1);
+        if (g_app.hwnd && IsWindow(g_app.hwnd)) DestroyWindow(g_app.hwnd);
+        else PostQuitMessage(1);
         return;
     }
     g_app.createEnvFn = reinterpret_cast<CreateWebView2EnvFn>(
         GetProcAddress(mod, "CreateCoreWebView2EnvironmentWithOptions"));
     if (!g_app.createEnvFn) {
+        AppendNativeLog(L"Invalid WebView2Loader.dll (missing CreateCoreWebView2EnvironmentWithOptions).");
         MessageBoxW(g_app.hwnd, L"Invalid WebView2Loader.dll.", L"Trace FPGA Workbench", MB_OK | MB_ICONERROR);
-        if (g_app.hwnd) DestroyWindow(g_app.hwnd);
-        PostQuitMessage(1);
+        if (g_app.hwnd && IsWindow(g_app.hwnd)) DestroyWindow(g_app.hwnd);
+        else PostQuitMessage(1);
         return;
     }
 
@@ -774,13 +940,14 @@ static void InitWebView2() {
         std::wstring fallbackDir = baseData + L"\\webview2-session-" + std::to_wstring(GetCurrentProcessId());
         g_app.tempWebViewDir = fallbackDir;
         if (!StartWebView2WithDir(fallbackDir)) {
+            AppendNativeLog(L"Could not start Microsoft Edge WebView2 (primary and fallback failed).");
             MessageBoxW(
                 g_app.hwnd,
                 L"Could not start Microsoft Edge WebView2.\n\nPlease install the Microsoft Edge WebView2 Runtime.",
                 L"Trace FPGA Workbench",
                 MB_OK | MB_ICONERROR);
-            if (g_app.hwnd) DestroyWindow(g_app.hwnd);
-            PostQuitMessage(1);
+            if (g_app.hwnd && IsWindow(g_app.hwnd)) DestroyWindow(g_app.hwnd);
+            else PostQuitMessage(1);
         }
     }
 }
@@ -817,22 +984,41 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
         case WM_CLOSE: {
-            if (g_app.allowClose || !g_app.ready || !g_app.navigated || !g_app.webview) {
+            if (g_app.allowClose || g_app.closePending || !g_app.ready || !g_app.navigated || !g_app.webview) {
+                KillTimer(hwnd, IDT_CLOSE_WATCHDOG);
+                g_app.allowClose = true;
                 DestroyWindow(hwnd);
                 return 0;
             }
+            g_app.closePending = true;
+            SetTimer(hwnd, IDT_CLOSE_WATCHDOG, 2500, nullptr);
             auto* handler = new CloseScriptCompletedHandler();
             HRESULT hr = g_app.webview->ExecuteScript(
                 L"window.__traceRequestClose ? (window.__traceRequestClose(), 1) : 0",
                 handler);
             handler->Release();
             if (FAILED(hr)) {
+                KillTimer(hwnd, IDT_CLOSE_WATCHDOG);
+                g_app.closePending = false;
                 g_app.allowClose = true;
                 DestroyWindow(hwnd);
             }
             return 0;
         }
+        case WM_TIMER: {
+            if (wParam == IDT_CLOSE_WATCHDOG) {
+                KillTimer(hwnd, IDT_CLOSE_WATCHDOG);
+                g_app.closePending = false;
+                g_app.allowClose = true;
+                AppendNativeLog(L"WM_CLOSE ExecuteScript watchdog expired after 2500ms; forcing close.");
+                DestroyWindow(hwnd);
+                return 0;
+            }
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
+        }
         case WM_DESTROY:
+            KillTimer(hwnd, IDT_CLOSE_WATCHDOG);
+            g_app.hwnd = nullptr;
             if (g_app.controller) {
                 g_app.controller->Close();
                 g_app.controller->Release();
@@ -873,6 +1059,7 @@ static void ParseCommandLineArgs() {
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
+    SetUnhandledExceptionFilter(TraceUnhandledExceptionFilter);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
@@ -958,7 +1145,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
         g_app.stdinWrite = nullptr;
     }
     if (g_app.nodeProcess) {
-        WaitForSingleObject(g_app.nodeProcess, 1200);
+        // Give server.mjs:shutdown() enough headroom (2000ms GHDL close + log archive) before Job termination
+        WaitForSingleObject(g_app.nodeProcess, 2800);
         CloseHandle(g_app.nodeProcess);
         g_app.nodeProcess = nullptr;
     }
@@ -989,6 +1177,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     DeleteObject(bgBrush);
     CoUninitialize();
     if (!g_app.tempWebViewDir.empty()) {
+        // Wait briefly for WebView2 browser process to release file locks on the fallback session profile
+        if (g_app.browserPid != 0) {
+            HANDLE hBrowser = OpenProcess(SYNCHRONIZE, FALSE, g_app.browserPid);
+            if (hBrowser) {
+                WaitForSingleObject(hBrowser, 1500);
+                CloseHandle(hBrowser);
+            }
+        }
         DeleteDirBestEffort(g_app.tempWebViewDir);
     }
     ExitProcess(static_cast<UINT>(msg.wParam));
