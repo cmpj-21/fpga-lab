@@ -2365,9 +2365,9 @@ export function createIde(api) {
             else if (fbState.mode === 'folder') $('#fbFileNameInput').value = resolveAutoFolderPath(item.path);
             else if (fbState.mode === 'open-project') $('#fbFileNameInput').value = item.path;
           }
-          renderFileBrowser();
-          const selRow = listHost.querySelector(`tr[data-fb-path="${CSS.escape(item.path)}"]`);
-          selRow?.focus({ preventScroll: true });
+          // Update selection in-place (never replaceChildren on click!) so native browser dblclick fires cleanly
+          syncFbSelectionVisuals();
+          tr.focus({ preventScroll: true });
         };
         tr.ondblclick = () => {
           if (item.type === 'dir') {
@@ -2381,6 +2381,19 @@ export function createIde(api) {
         };
       }
       listHost.append(tr);
+    }
+    syncFbSelectionVisuals();
+  }
+
+  function syncFbSelectionVisuals() {
+    const listHost = $('#fbList');
+    if (listHost) {
+      const selLow = (fbState.selectedPath || '').toLowerCase();
+      for (const row of listHost.querySelectorAll('tr.fb-row:not(.ctx-file)')) {
+        const isSel = !!selLow && (row.dataset.fbPath || '').toLowerCase() === selLow;
+        row.classList.toggle('selected', isSel);
+        row.setAttribute('aria-selected', isSel ? 'true' : 'false');
+      }
     }
     const effectiveFolder = fbState.mode === 'folder' ? resolveAutoFolderPath(fbState.selectedPath || fbState.curDir) : '';
     if (fbState.mode === 'folder' && !fbState.userEditedName && $('#fbFileNameInput')) {
