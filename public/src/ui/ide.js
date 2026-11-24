@@ -2626,7 +2626,7 @@ export function createIde(api) {
     const h = Math.max(80, (rect?.height || 220) - padY);
     const cell = xtermInstance?._core?._renderService?.dimensions?.css?.cell;
     const cellW = (cell?.width && cell.width > 3) ? cell.width : 7.22;
-    const cellH = (cell?.height && cell.height > 6) ? cell.height : 16.8;
+    const cellH = (cell?.height && cell.height > 6) ? cell.height : 14.5;
     const cols = Math.max(40, Math.min(400, Math.floor(w / cellW)));
     const rows = Math.max(5, Math.min(160, Math.floor(h / cellH)));
     return { cols, rows };
@@ -2669,8 +2669,9 @@ export function createIde(api) {
       const closeBtn = document.createElement('button');
       closeBtn.type = 'button';
       closeBtn.className = 'term-tab-x';
-      closeBtn.textContent = '×';
+      closeBtn.innerHTML = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6"/></svg>';
       closeBtn.title = `Close ${t.label}`;
+      closeBtn.setAttribute('aria-label', `Close ${t.label}`);
       closeBtn.onclick = e => {
         e.stopPropagation();
         closeTerminalTab(t.id);
@@ -2749,7 +2750,7 @@ export function createIde(api) {
         cursorStyle: termOpts.cursorStyle,
         fontFamily: '"Cascadia Mono", Consolas, "Segoe UI Emoji", monospace',
         fontSize: termOpts.fontSize,
-        lineHeight: 1.2,
+        lineHeight: 1,
         scrollback: 5000,
         convertEol: false,
         allowProposedApi: true,
