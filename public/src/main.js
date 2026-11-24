@@ -666,7 +666,8 @@ async function build(top = $('#topSelect').value, { quiet = false } = {}) {
   S.pending = []; await closeSession(S.sim); S.sim = null; S.vcd = null;
   board?.clearOutputs(); sampleOutputs();
   try {
-    const result = await api('/api/sim/compile', { sources: S.sources, top: top || undefined, standard: S.standard, topLibrary: S.topLibrary, generics: S.generics, sdf: S.sdf });
+    const compileSources = S.sources.filter(s => !/\.md$/i.test(s.name));
+    const result = await api('/api/sim/compile', { sources: compileSources, top: top || undefined, standard: S.standard, topLibrary: S.topLibrary, generics: S.generics, sdf: S.sdf });
     if (generation !== S.generation) { await closeSession(result); return; }
     S.sim = result; S.dirty = false; S.flashed = false; S.time = 0; S.cycles = 0; S.inputs = {}; S.values.clear();
     S.compiledAssignments = new Map(S.assignments);
@@ -1935,7 +1936,8 @@ async function runTruth() {
   S.truthBusy = true; setStatus(); let isolated; const generation = S.generation;
   const baseInputs = new Map(S.sim.signals.map(s => [s.name, S.inputs[s.id]]));
   try {
-    isolated = await api('/api/sim/compile', { sources: S.sources, top: S.sim.top, standard: S.standard, topLibrary: S.topLibrary, generics: S.generics, sdf: S.sdf });
+    const compileSources = S.sources.filter(s => !/\.md$/i.test(s.name));
+    isolated = await api('/api/sim/compile', { sources: compileSources, top: S.sim.top, standard: S.standard, topLibrary: S.topLibrary, generics: S.generics, sdf: S.sdf });
     if (generation !== S.generation || S.dirty) return;
     const ins = names.map(n => isolated.signals.find(s => s.name === isolated.top + '.' + n));
     const outs = isolated.signals.filter(s => s.direction === 2 && s.name.startsWith(isolated.top + '.') && !s.name.slice(isolated.top.length + 1).includes('.'));

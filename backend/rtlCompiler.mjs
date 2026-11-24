@@ -170,7 +170,7 @@ function compileExpression(rawExpr, symWidths, memNames) {
       const op = eat().v;
       const right = parseAdd();
       const jsOp = op === '>>' && !left.signed ? '>>>' : op;
-      left = { code: maskExpr(`(${left.code}) ${jsOp} (${right.code})`, left.width), width: left.width };
+      left = { code: maskExpr(`(((${right.code}) >>> 0) >= 32 ? 0 : ((${left.code}) ${jsOp} (${right.code})))`, left.width), width: left.width };
     }
     return left;
   }
@@ -280,7 +280,7 @@ function compileExpression(rawExpr, symWidths, memNames) {
         }
         eat(']');
         if (memNames.has(tok.v)) {
-          return { code: `${tok.v}[${first.code}]`, width: info.width };
+          return { code: `(${tok.v}[${first.code}] || 0)`, width: info.width };
         }
         const offset = Number(first.code) - (info.lo || 0);
         if (!Number.isInteger(offset) || offset < 0 || offset >= info.width) throw new Error(`Unsupported index on ${tok.v}`);
@@ -370,6 +370,7 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
     return '';
   });
 
+  let unsupportedBlock = false;
   // Parse `always @* case (...) ... endcase`
   rest = rest.replace(/always\s*@\s*\*\s*case\s*\(\s*([a-zA-Z_]\w*)\s*\)([\s\S]*?)endcase/g, (_, selName, blk) => {
     const branches = [];
@@ -380,25 +381,28 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
       const s = stmt.trim();
       if (!s) continue;
       const m = s.match(/^(default|\d+'[bdh][0-9a-fA-F_]+)\s*:\s*([a-zA-Z_]\w*)\s*=\s*(.+)$/);
-      if (!m) return '; /*unsupported case*/';
+      if (!m) { unsupportedBlock = true; return ''; }
+      if (targetDst && targetDst !== m[2]) { unsupportedBlock = true; return ''; }
       targetDst = m[2];
       const expr = compileExpression(m[3], symWidths, memNames);
       for (const d of expr.deps) deps.add(d);
       if (m[1] === 'default') defaultBranch = expr.code;
       else {
         const lit = parseBinaryLiteral(m[1]);
-        if (!lit) return '; /*unsupported case lit*/';
+        if (!lit) { unsupportedBlock = true; return ''; }
         branches.push({ val: lit.val, code: expr.code });
       }
     }
     if (!targetDst) return '';
+    const wInfo = symWidths.get(targetDst);
+    if (!wInfo) { unsupportedBlock = true; return ''; }
     combNodes.push({
       dst: targetDst,
       deps,
       emit: () => {
-        const lines = [`let ${targetDst};`, `switch (${selName}) {`];
-        for (const b of branches) lines.push(`  case ${b.val}: ${targetDst} = ${b.code}; break;`);
-        if (defaultBranch !== null) lines.push(`  default: ${targetDst} = ${defaultBranch}; break;`);
+        const lines = [`let ${targetDst} = 0;`, `switch (${selName}) {`];
+        for (const b of branches) lines.push(`  case ${b.val}: ${targetDst} = ${maskExpr(b.code, wInfo.width)}; break;`);
+        if (defaultBranch !== null) lines.push(`  default: ${targetDst} = ${maskExpr(defaultBranch, wInfo.width)}; break;`);
         lines.push(`}`);
         return lines.join('\n');
       },
@@ -406,19 +410,19 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
     return '';
   });
 
-  // Bail if any unhandled `case` or `initial` remains
-  if (/\bcase\b/.test(rest)) return null;
+  // Bail if any unsupported or unhandled `case` remains
+  if (unsupportedBlock || /\bcase\b/.test(rest)) return null;
 
   // Parse `always @(posedge clk ...)` flip-flops
   rest = rest.replace(/always\s*@\s*\(\s*posedge\s+([a-zA-Z_]\w*)(?:\s+or\s+posedge\s+([a-zA-Z_]\w*))?\s*\)\s*(?:if\s*\(\s*([a-zA-Z_]\w*)\s*\)\s*([a-zA-Z_]\w*)\s*<=\s*([^;]+);\s*else\s*)?([a-zA-Z_]\w*)\s*<=\s*([^;]+);/g,
     (_, clk, asyncRst, ifRst, dst1, val1, dst2, val2) => {
-      if (asyncRst && asyncRst !== ifRst) return '; /*bad async*/';
+      if (asyncRst && asyncRst !== ifRst) { unsupportedBlock = true; return ''; }
       const dst = dst2;
       const rhs = compileExpression(val2, symWidths, memNames);
       const deps = new Set(rhs.deps);
       let rstCode = null;
       if (asyncRst) {
-        if (dst1 !== dst2) return '; /*mismatch async*/';
+        if (dst1 !== dst2) { unsupportedBlock = true; return ''; }
         const rExpr = compileExpression(val1, symWidths, memNames);
         rstCode = rExpr.code;
         for (const d of rExpr.deps) deps.add(d);
@@ -429,7 +433,13 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
     });
 
   // Check for unhandled `always @(` blocks (like negedge or RAM writes)
-  if (/always\s*@\s*\(/.test(rest)) return null;
+  if (unsupportedBlock || /always\s*@\s*\(/.test(rest)) return null;
+
+  // Reject JS reserved keywords or internal runner names as hardware identifiers
+  const JS_RESERVED = new Set(['break','case','catch','class','const','continue','debugger','default','delete','do','else','enum','export','extends','false','finally','for','function','if','import','in','instanceof','let','new','null','return','super','switch','this','throw','true','try','typeof','var','void','while','with','yield','await','arguments','eval','Math','Number','Uint32Array','meta','reset','setInput','setBeepPort','runBatch']);
+  for (const name of symWidths.keys()) {
+    if (JS_RESERVED.has(name) || name.startsWith('_rt_') || name.startsWith('_next_')) return null;
+  }
 
   // Parse remaining `assign dst = rhs;` and `always @* dst = rhs;`
   const assignRe = /(?:assign|always\s*@\s*\*)\s+([a-zA-Z_]\w*)\s*=\s*([^;]+);/g;

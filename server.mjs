@@ -713,45 +713,72 @@ async function hdlTree() {
   return groups.sort((a, b) => a.dir.localeCompare(b.dir));
 }
 
+const WIN_RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
 async function listSystemPlaces(projectDir = '') {
   const places = [];
-  const addPlace = (label, dirPath, kind = 'folder') => {
+  const addPlace = async (label, dirPath, kind = 'folder') => {
     if (!dirPath) return;
     try {
       const resolved = path.resolve(dirPath);
-      if (statSync(resolved).isDirectory() && !places.some(p => p.path.toLowerCase() === resolved.toLowerCase())) {
+      const st = await fs.stat(resolved).catch(() => null);
+      if (st?.isDirectory() && !places.some(p => p.path.toLowerCase() === resolved.toLowerCase())) {
         places.push({ label, path: resolved, kind });
       }
     } catch {}
   };
-  addPlace('HDL Workspace', hdlRoot, 'workspace');
-  if (projectDir && path.isAbsolute(projectDir)) addPlace('Active Project', projectDir, 'project');
+  await addPlace('HDL Workspace', hdlRoot, 'workspace');
+  if (projectDir && path.isAbsolute(projectDir)) await addPlace('Active Project', projectDir, 'project');
   const home = os.homedir();
-  addPlace('Documents', path.join(home, 'Documents'), 'docs');
-  addPlace('Desktop', path.join(home, 'Desktop'), 'desktop');
-  addPlace('Downloads', path.join(home, 'Downloads'), 'downloads');
-  addPlace('Home', home, 'home');
+  await addPlace('Documents', path.join(home, 'Documents'), 'docs');
+  await addPlace('Desktop', path.join(home, 'Desktop'), 'desktop');
+  await addPlace('Downloads', path.join(home, 'Downloads'), 'downloads');
+  await addPlace('Home', home, 'home');
   if (process.platform === 'win32') {
-    for (let code = 67; code <= 90; code++) {
-      const letter = String.fromCharCode(code);
+    const letters = [];
+    for (let code = 67; code <= 90; code++) letters.push(String.fromCharCode(code));
+    const driveChecks = await Promise.all(letters.map(async letter => {
       const driveRoot = `${letter}:\\`;
-      try {
-        if (statSync(driveRoot).isDirectory()) {
-          places.push({ label: `Local Disk (${letter}:)`, path: driveRoot, kind: 'drive' });
-        }
-      } catch {}
+      const st = await Promise.race([
+        fs.stat(driveRoot).catch(() => null),
+        new Promise(r => setTimeout(() => r(null), 250)),
+      ]);
+      return st?.isDirectory() ? { letter, driveRoot } : null;
+    }));
+    for (const d of driveChecks) {
+      if (!d) continue;
+      if (!places.some(p => p.path.toLowerCase() === d.driveRoot.toLowerCase())) {
+        places.push({ label: `Local Disk (${d.letter}:)`, path: d.driveRoot, kind: 'drive' });
+      }
     }
   }
   return places;
 }
 
+async function inspectDirForProject(dirPath) {
+  try {
+    const children = await fs.readdir(dirPath, { withFileTypes: true });
+    let projectFile = '';
+    for (const c of children) {
+      if (!c.isFile()) continue;
+      const lower = c.name.toLowerCase();
+      if (lower.endsWith('.qpf')) return { hasProject: true, projectFile: c.name };
+      if (lower.endsWith('.qsf') && !projectFile) projectFile = c.name;
+    }
+    return projectFile ? { hasProject: true, projectFile } : { hasProject: false, projectFile: '' };
+  } catch {
+    return { hasProject: false, projectFile: '' };
+  }
+}
+
 async function browseFileSystem({ dir = '', projectDir = '' } = {}) {
   let target = '';
+  let warning = '';
   if (typeof dir === 'string' && dir.trim()) {
     const cand = path.resolve(dir.trim());
     const st = await fs.stat(cand).catch(() => null);
     if (st?.isDirectory()) target = cand;
     else if (st?.isFile()) target = path.dirname(cand);
+    else warning = `Folder not found: ${cand}`;
   }
   if (!target && projectDir && path.isAbsolute(projectDir)) {
     const st = await fs.stat(projectDir).catch(() => null);
@@ -762,20 +789,34 @@ async function browseFileSystem({ dir = '', projectDir = '' } = {}) {
     target = st?.isDirectory() ? path.resolve(hdlRoot) : os.homedir();
   }
   const parentDir = path.dirname(target) !== target ? path.dirname(target) : null;
-  const rawEntries = await fs.readdir(target, { withFileTypes: true }).catch(() => []);
+  let rawEntries = [];
+  try {
+    rawEntries = await fs.readdir(target, { withFileTypes: true });
+  } catch (err) {
+    warning = err?.code === 'EACCES' || err?.code === 'EPERM' ? `Access denied: ${target}` : (err?.message || `Could not read ${target}`);
+  }
   const dirs = [], files = [];
-  for (const e of rawEntries) {
-    if (e.name.startsWith('$') || e.name === 'System Volume Information') continue;
+  const filteredRaw = rawEntries.filter(e => !e.name.startsWith('$') && e.name !== 'System Volume Information');
+  const stats = await Promise.all(filteredRaw.map(async e => {
     const full = path.join(target, e.name);
     const info = await fs.stat(full).catch(() => null);
-    if (!info) continue;
+    return info ? { e, full, info } : null;
+  }));
+  const dirCandidates = [];
+  for (const row of stats) {
+    if (!row) continue;
+    const { e, full, info } = row;
     if (info.isDirectory()) {
-      dirs.push({
+      const entry = {
         type: 'dir',
         name: e.name,
         path: full,
         mtime: info.mtimeMs || 0,
-      });
+        hasProject: false,
+        projectFile: '',
+      };
+      dirs.push(entry);
+      if (dirCandidates.length < 48) dirCandidates.push(entry);
     } else if (info.isFile()) {
       files.push({
         type: 'file',
@@ -787,12 +828,20 @@ async function browseFileSystem({ dir = '', projectDir = '' } = {}) {
       });
     }
   }
+  if (dirCandidates.length) {
+    await Promise.all(dirCandidates.map(async d => {
+      const meta = await inspectDirForProject(d.path);
+      d.hasProject = meta.hasProject;
+      d.projectFile = meta.projectFile;
+    }));
+  }
   dirs.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   files.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   return {
     ok: true,
     dir: target,
     parent: parentDir,
+    warning,
     places: await listSystemPlaces(projectDir),
     entries: [...dirs, ...files],
   };
@@ -801,8 +850,8 @@ async function browseFileSystem({ dir = '', projectDir = '' } = {}) {
 async function createBrowserFolder({ dir, name } = {}) {
   if (typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error('Select a valid parent folder first.');
   const cleanName = String(name || '').trim();
-  if (!cleanName || cleanName === '.' || cleanName === '..' || /[<>:"/\\|?*\x00-\x1f]/.test(cleanName)) {
-    throw new Error('Enter a valid folder name without special characters.');
+  if (!cleanName || cleanName === '.' || cleanName === '..' || /[<>:"/\\|?*\x00-\x1f]/.test(cleanName) || /[. ]$/.test(cleanName) || WIN_RESERVED_NAME.test(cleanName)) {
+    throw new Error('Enter a valid folder name without special or reserved Windows characters.');
   }
   const target = path.join(path.resolve(dir), cleanName);
   const exists = await fs.stat(target).then(() => true, () => false);
@@ -1040,7 +1089,9 @@ function closeTerminalSession({ id = '' } = {}) {
     }
     session.clients.clear();
     try { session.proc.stdin.end(); } catch {}
-    try { session.proc.kill(); } catch {}
+    const proc = session.proc;
+    const killTimer = setTimeout(() => { try { if (proc.exitCode === null && !proc.killed) proc.kill(); } catch {} }, 180);
+    killTimer.unref?.();
     termSessions.delete(id);
   }
   return { ok: true };
@@ -1172,7 +1223,11 @@ const server = http.createServer(async (req, res) => {
         'Connection': 'keep-alive',
         'X-Accel-Buffering': 'no',
       });
-      res.write(`data: ${JSON.stringify({ type: 'ready', dir: root })}\n\n`);
+      const safeWrite = text => {
+        if (res.writableEnded || res.destroyed) return;
+        try { res.write(text); } catch {}
+      };
+      safeWrite(`data: ${JSON.stringify({ type: 'ready', dir: root })}\n\n`);
       const SKIP = new Set(['.git', '.trace-build', 'node_modules', 'work', 'greybox_tmp', 'db', 'incremental_db', 'output_files']);
       const pendingFiles = new Set();
       let flushTimer = null;
@@ -1182,7 +1237,7 @@ const server = http.createServer(async (req, res) => {
         if (res.writableEnded || res.destroyed) return;
         const files = [...pendingFiles];
         pendingFiles.clear();
-        if (files.length) res.write(`data: ${JSON.stringify({ type: 'change', files })}\n\n`);
+        if (files.length) safeWrite(`data: ${JSON.stringify({ type: 'change', files })}\n\n`);
       };
       try {
         watcher = watch(root, { recursive: true }, (_eventType, filename) => {
@@ -1191,11 +1246,15 @@ const server = http.createServer(async (req, res) => {
           pendingFiles.add(rel);
           if (!flushTimer) flushTimer = setTimeout(flush, 150);
         });
+        watcher.on('error', err => {
+          safeWrite(`data: ${JSON.stringify({ type: 'error', message: err?.message || 'Project watcher error' })}\n\n`);
+          try { watcher?.close(); } catch {}
+        });
       } catch {
-        res.write(`data: ${JSON.stringify({ type: 'error' })}\n\n`);
+        safeWrite(`data: ${JSON.stringify({ type: 'error' })}\n\n`);
       }
       const keepAlive = setInterval(() => {
-        if (!res.writableEnded && !res.destroyed) res.write(':\n\n');
+        safeWrite(':\n\n');
       }, 25000);
       req.on('close', () => {
         clearInterval(keepAlive);
@@ -1328,7 +1387,7 @@ async function shutdown() {
   if (IS_PACKAGED) await new Promise(r => setTimeout(r, 180));
   if (ownsLog) appendLogLine('info', 'app', 'Trace workbench shutting down');
   for (const s of termSessions.values()) {
-    clearTimeout(s.activeTimer);
+    try { s.proc.stdin.end(); } catch {}
     try { s.proc.kill(); } catch {}
   }
   termSessions.clear();

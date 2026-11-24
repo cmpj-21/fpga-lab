@@ -11,13 +11,14 @@ const DEFAULT_LAYOUT = { leftW: 256, editorFrac: 42, panelH: 245 };
 const NAME_PATTERN = /^(?:[a-z0-9_][a-z0-9_. -]*\/)*[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat|md)$/i;
 const STANDARDS = { '93': 'VHDL-1993', '02': 'VHDL-2002', '08': 'VHDL-2008' };
 const FORBIDDEN_SEG = /[<>:"\\|?*\x00-\x1f]/;
+const WIN_RESERVED_SEG = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
 function cleanRelPath(raw) {
   return String(raw || '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
 }
 function isValidRelPath(rel) {
   if (!rel || rel.length > 200) return false;
   const parts = rel.split('/');
-  return parts.every(seg => seg && seg !== '.' && seg !== '..' && !FORBIDDEN_SEG.test(seg) && !/[. ]$/.test(seg));
+  return parts.every(seg => seg && seg !== '.' && seg !== '..' && !FORBIDDEN_SEG.test(seg) && !/[. ]$/.test(seg) && !WIN_RESERVED_SEG.test(seg));
 }
 function fileKindLabel(name) {
   const base = String(name || '').split('/').pop() || '';

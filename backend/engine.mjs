@@ -205,6 +205,7 @@ export async function restartSession(id) {
   return spawnFromSpec(spec);
 }
 
+const inFlightCacheBuilds = new Map();
 export async function compileDesign({ sources, top, topLibrary = 'work', standard = '08', generics = {}, sdf = null }) {
   if (!Array.isArray(sources) || !sources.length || sources.length > 100) throw new Error('Provide 1–100 VHDL source or compiled library files.');
   if (!['93', '02', '08'].includes(standard)) throw new Error('Supported language standards: 93, 02, 08.');
@@ -266,13 +267,11 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
       genericArgs.push(`-g${key}=${value}`);
     }
 
-    // Deterministic build hash over GHDL version + language/top settings + all VHDL sources
+    // Deterministic build hash over GHDL version + language/top settings + all VHDL & data files
     const hashObj = createHash('sha256')
       .update(cfg.version + '\0' + standard + '\0' + topLibrary + '\0' + (top || '').toLowerCase() + '\0');
     for (const s of [...normalizedSources].sort((a, b) => a.rel.localeCompare(b.rel))) {
-      if (/\.(vhd|vhdl|vho)$/i.test(s.rel)) {
-        hashObj.update(s.rel + '\0' + s.library + '\0' + s.text + '\0');
-      }
+      hashObj.update(s.rel + '\0' + s.library + '\0' + s.text + '\0');
     }
     const buildHash = hashObj.digest('hex').slice(0, 20);
     const cacheDir = path.join(BUILD_CACHE_ROOT, buildHash);
@@ -281,6 +280,9 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
     let resolvedTop = top;
     let cachedDiagnostics = [...diagnostics];
 
+    if (inFlightCacheBuilds.has(buildHash)) {
+      await inFlightCacheBuilds.get(buildHash).catch(() => {});
+    }
     const cachedMeta = await fs.readFile(cacheMetaPath, 'utf8').then(t => JSON.parse(t)).catch(() => null);
     if (cachedMeta && typeof cachedMeta.top === 'string') {
       cached = true;
@@ -290,6 +292,9 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
       fs.utimes(cacheDir, now, now).catch(() => {});
       engineLog('info', `Build cache hit (${buildHash.slice(0, 8)}) for ${resolvedTop}`);
     } else {
+      let resolveBuildLock;
+      const buildLock = new Promise(r => { resolveBuildLock = r; });
+      inFlightCacheBuilds.set(buildHash, buildLock);
       await fs.mkdir(BUILD_CACHE_ROOT, { recursive: true });
       const stagingDir = `${cacheDir}.${process.pid}.${Date.now()}.tmp`;
       await fs.mkdir(stagingDir, { recursive: true });
@@ -326,6 +331,9 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
       } catch (err) {
         await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
         throw err;
+      } finally {
+        inFlightCacheBuilds.delete(buildHash);
+        resolveBuildLock?.();
       }
     }
 
@@ -343,7 +351,7 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
     const runFlags = [`--std=${standard}`, '-fsynopsys', '-fexplicit', `--work=${topLibrary}`, `--workdir=${cacheDir}`, `-P${cacheDir}`];
     let rtlCode = null;
     if (!sdf) {
-      const cachedRtlPath = path.join(cacheDir, 'rtl-v2.mjs');
+      const cachedRtlPath = path.join(cacheDir, 'rtl-v3.mjs');
       if (!genericArgs.length) {
         rtlCode = await fs.readFile(cachedRtlPath, 'utf8').catch(() => null);
       }
