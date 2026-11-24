@@ -7,7 +7,7 @@ const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const LAYOUT_KEY = 'trace.layout.v1';
 const RECENTS_KEY = 'trace.recents.v1';
-const DEFAULT_LAYOUT = { leftW: 256, editorFrac: 42, panelH: 245 };
+const DEFAULT_LAYOUT = { leftW: 256, editorFrac: 48, panelH: 245 };
 const NAME_PATTERN = /^(?:[a-z0-9_][a-z0-9_. -]*\/)*[a-z0-9_][a-z0-9_. -]*\.(vhd|vhdl|vho|cf|hex|mif|mem|txt|dat|md)$/i;
 const STANDARDS = { '93': 'VHDL-1993', '02': 'VHDL-2002', '08': 'VHDL-2008' };
 const FORBIDDEN_SEG = /[<>:"\\|?*\x00-\x1f]/;
@@ -305,29 +305,32 @@ export function createIde(api) {
     const vInH = (vIn && !vIn.classList.contains('hidden')) ? vIn.offsetHeight : 0;
     return headH + tbH + ioH + vInH + 110;
   }
-  function clampLayoutBounds() {
+  function computeClampedLayout() {
     const ideMain = $('#ideMain');
     const bothClosed = ideMain?.classList.contains('editor-closed') && ideMain?.classList.contains('board-closed');
     const mainRect = ideMain?.getBoundingClientRect();
-    if (mainRect && mainRect.width > 560 && !ideMain?.classList.contains('editor-closed') && !ideMain?.classList.contains('board-closed')) {
-      const minBoardPx = 320;
-      const minEditorPx = 240;
-      const maxEditorPct = Math.max(20, Math.min(75, Math.floor(((mainRect.width - minBoardPx) / mainRect.width) * 1000) / 10));
-      const minEditorPct = Math.min(maxEditorPct, Math.max(20, Math.ceil((minEditorPx / mainRect.width) * 1000) / 10));
-      layout.editorFrac = clamp(layout.editorFrac, minEditorPct, maxEditorPct);
+    let editorFrac = layout.editorFrac;
+    let panelH = layout.panelH;
+    if (mainRect && mainRect.width > 420 && !ideMain?.classList.contains('editor-closed') && !ideMain?.classList.contains('board-closed')) {
+      const minBoardPx = Math.min(320, Math.floor(mainRect.width * 0.45));
+      const minEditorPx = Math.min(240, Math.floor(mainRect.width * 0.4));
+      const maxEditorPct = Math.max(25, Math.min(75, Math.floor(((mainRect.width - minBoardPx) / mainRect.width) * 1000) / 10));
+      const minEditorPct = Math.min(maxEditorPct, Math.max(25, Math.ceil((minEditorPx / mainRect.width) * 1000) / 10));
+      editorFrac = clamp(editorFrac, minEditorPct, maxEditorPct);
     }
     const wbRect = $('#workbench')?.getBoundingClientRect();
     if (!bothClosed && wbRect && wbRect.height > 260) {
       const maxPanelH = Math.max(130, Math.floor(wbRect.height - computeMinTopHeight()));
-      layout.panelH = clamp(layout.panelH, 130, maxPanelH);
+      panelH = clamp(panelH, 130, maxPanelH);
     }
+    return { leftW: layout.leftW, editorFrac, panelH };
   }
   function applyLayout() {
-    clampLayoutBounds();
+    const eff = computeClampedLayout();
     const root = document.documentElement.style;
-    root.setProperty('--left-w', `${layout.leftW}px`);
-    root.setProperty('--editor-frac', `${layout.editorFrac}%`);
-    root.setProperty('--panel-h', `${layout.panelH}px`);
+    root.setProperty('--left-w', `${eff.leftW}px`);
+    root.setProperty('--editor-frac', `${eff.editorFrac}%`);
+    root.setProperty('--panel-h', `${eff.panelH}px`);
   }
   function drag(handle, onMove, cls = 'resizing') {
     if (!handle) return;
@@ -1834,8 +1837,15 @@ export function createIde(api) {
     }
   }
   async function executeNativeExit() {
-    await api.stopAllSimulations?.();
-    await api.prepareExit?.();
+    try {
+      await Promise.race([
+        (async () => {
+          await api.stopAllSimulations?.();
+          await api.prepareExit?.();
+        })(),
+        new Promise(r => setTimeout(r, 1500)),
+      ]);
+    } catch {}
     if (window.chrome?.webview?.postMessage) {
       window.chrome.webview.postMessage('app:close-now');
     } else {
@@ -2091,7 +2101,24 @@ export function createIde(api) {
     extensions: null,
     autoSubfolder: '',
     createdDir: '',
+    history: [],
+    histIdx: -1,
+    sortBy: 'name',
+    sortDir: 1,
+    showFilesInFolder: true,
+    userEditedName: false,
+    navSeq: 0,
   };
+
+  function isAbsPath(p) {
+    return /^(?:[a-z]:[\\/]|\\\\|\/)/i.test(String(p || '').trim());
+  }
+
+  function joinWinPath(base, seg) {
+    const cleanBase = String(base || '').replace(/[\\/]+$/, '');
+    if (!cleanBase) return seg;
+    return `${cleanBase}\\${seg}`;
+  }
 
   function resolveAutoFolderPath(baseDir) {
     const raw = String(baseDir || '').trim().replace(/[\\/]+$/, '');
@@ -2109,7 +2136,31 @@ export function createIde(api) {
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   }
 
-  async function fbNavigate(dir = '') {
+  function fmtMtime(ms) {
+    if (!Number.isFinite(ms) || ms <= 0) return '—';
+    const d = new Date(ms);
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  const FB_PLACE_SVGS = {
+    workspace: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.4 1.6h4.6A1.5 1.5 0 0 1 14 6.1v5.9a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12V4.5Z"/><path d="M5.5 9.2h5"/></svg>',
+    project: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="3" width="10" height="10" rx="1.6"/><path d="M6 1.5v1.5M10 1.5v1.5M6 13v1.5M10 13v1.5M1.5 6H3M1.5 10H3M13 6h1.5M13 10h1.5"/></svg>',
+    docs: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 2h5.5L13 5.5V14H4V2Z"/><path d="M9.5 2v3.5H13M6 8.5h5M6 11h3.5"/></svg>',
+    desktop: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2.5" width="12" height="8.5" rx="1.2"/><path d="M6 13.5h4M8 11v2.5"/></svg>',
+    downloads: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2.5v7.5m0 0-3-3m3 3 3-3M2.5 12.5h11"/></svg>',
+    home: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.5 7.5 8 2.5l5.5 5M4 6.5v6.5h8V6.5"/></svg>',
+    drive: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="4.5" width="12" height="7" rx="1.5"/><circle cx="11.5" cy="8" r=".8" fill="currentColor"/><path d="M4.5 8h4"/></svg>',
+  };
+
+  function syncFbHistoryButtons() {
+    if ($('#fbBackBtn')) $('#fbBackBtn').disabled = fbState.histIdx <= 0;
+    if ($('#fbFwdBtn')) $('#fbFwdBtn').disabled = fbState.histIdx < 0 || fbState.histIdx >= fbState.history.length - 1;
+    if ($('#fbUpBtn')) $('#fbUpBtn').disabled = !fbState.parentDir;
+  }
+
+  async function fbNavigate(dir = '', { fromHistory = false } = {}) {
+    const seq = ++fbState.navSeq;
     try {
       const res = await fetch('/api/fs/browse', {
         method: 'POST',
@@ -2117,11 +2168,23 @@ export function createIde(api) {
         body: JSON.stringify({ dir, projectDir: S.projectDir || '' }),
       });
       const data = await res.json();
+      if (seq !== fbState.navSeq) return;
       if (!res.ok || !data.ok) throw new Error(data.error || 'Could not browse folder.');
+      if (data.warning) api.toast(data.warning, 'err');
       fbState.curDir = data.dir;
       fbState.parentDir = data.parent;
       fbState.entries = data.entries || [];
       fbState.places = data.places || [];
+      fbState.userEditedName = false;
+      if (!fromHistory) {
+        const curAtIdx = fbState.history[fbState.histIdx];
+        if (!curAtIdx || curAtIdx.toLowerCase() !== data.dir.toLowerCase()) {
+          fbState.history = fbState.history.slice(0, fbState.histIdx + 1);
+          fbState.history.push(data.dir);
+          if (fbState.history.length > 40) fbState.history.shift();
+          fbState.histIdx = fbState.history.length - 1;
+        }
+      }
       if (fbState.mode === 'folder') {
         fbState.selectedPath = data.dir;
         fbState.selectedType = 'dir';
@@ -2131,17 +2194,50 @@ export function createIde(api) {
       }
       renderFileBrowser();
     } catch (e) {
-      api.toast(e.message, 'err');
+      if (seq === fbState.navSeq) api.toast(e.message, 'err');
     }
+  }
+
+  function getFilteredSortedFbEntries() {
+    const q = ($('#fbFilterInput')?.value || '').trim().toLowerCase();
+    const filtered = fbState.entries.filter(item => {
+      if (q && !item.name.toLowerCase().includes(q)) return false;
+      if (fbState.mode === 'folder') {
+        if (item.type === 'dir') return true;
+        return fbState.showFilesInFolder;
+      }
+      if (item.type === 'file' && Array.isArray(fbState.extensions) && fbState.extensions.length) {
+        return fbState.extensions.includes(item.ext);
+      }
+      return true;
+    });
+    const dir = fbState.sortDir || 1;
+    const by = fbState.sortBy || 'name';
+    filtered.sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+      let cmp = 0;
+      if (by === 'mtime') cmp = (a.mtime || 0) - (b.mtime || 0);
+      else if (by === 'size') cmp = (a.size || 0) - (b.size || 0);
+      else if (by === 'type') cmp = (a.ext || (a.hasProject ? '0proj' : '1dir')).localeCompare(b.ext || (b.hasProject ? '0proj' : '1dir'));
+      if (cmp === 0) cmp = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+      return cmp * dir;
+    });
+    return filtered;
   }
 
   function renderFileBrowser() {
     if ($('#fbPathInput')) $('#fbPathInput').value = fbState.curDir;
-    if ($('#fbUpBtn')) $('#fbUpBtn').disabled = !fbState.parentDir;
+    syncFbHistoryButtons();
+    if ($('#fbShowFilesWrap')) $('#fbShowFilesWrap').classList.toggle('hidden', fbState.mode !== 'folder');
+    if ($('#fbShowFiles')) $('#fbShowFiles').checked = fbState.showFilesInFolder;
+    $$('.fb-sort-th').forEach(th => {
+      const active = th.dataset.fbsort === fbState.sortBy;
+      th.classList.toggle('sort-active', active);
+      th.dataset.sortDir = active ? (fbState.sortDir > 0 ? 'asc' : 'desc') : '';
+    });
     const placesHost = $('#fbPlaces');
     if (placesHost) {
       placesHost.replaceChildren();
-      const iconFor = kind => ({ workspace: '◈', project: '★', docs: '▤', desktop: '▣', downloads: '↓', home: '⌂', drive: '⛁' }[kind] || '▸');
       for (const p of fbState.places) {
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -2149,7 +2245,7 @@ export function createIde(api) {
         btn.title = p.path;
         const ico = document.createElement('span');
         ico.className = 'fb-place-ico';
-        ico.textContent = iconFor(p.kind);
+        ico.innerHTML = FB_PLACE_SVGS[p.kind] || FB_PLACE_SVGS.workspace;
         const lbl = document.createElement('span');
         lbl.textContent = p.label;
         btn.append(ico, lbl);
@@ -2160,96 +2256,142 @@ export function createIde(api) {
     const crumbsHost = $('#fbCrumbs');
     if (crumbsHost) {
       crumbsHost.replaceChildren();
-      const parts = fbState.curDir.split(/[\\/]/).filter(Boolean);
+      const rawDir = String(fbState.curDir || '');
+      const isUnc = rawDir.startsWith('\\\\');
+      const parts = rawDir.split(/[\\/]/).filter(Boolean);
       let accum = '';
-      parts.forEach((seg, i) => {
-        accum = i === 0 && seg.endsWith(':') ? `${seg}\\` : `${accum.replace(/\\$/, '')}\\${seg}`;
-        const target = accum;
-        if (i > 0) {
+      if (isUnc && parts.length >= 2) {
+        const shareRoot = `\\\\${parts[0]}\\${parts[1]}`;
+        accum = shareRoot;
+        const rootBtn = document.createElement('button');
+        rootBtn.type = 'button';
+        rootBtn.className = 'fb-crumb';
+        rootBtn.textContent = shareRoot;
+        rootBtn.onclick = () => fbNavigate(shareRoot);
+        crumbsHost.append(rootBtn);
+        for (let i = 2; i < parts.length; i++) {
+          accum = `${accum}\\${parts[i]}`;
+          const target = accum;
           const sep = document.createElement('span');
           sep.textContent = '›';
           crumbsHost.append(sep);
+          const cBtn = document.createElement('button');
+          cBtn.type = 'button';
+          cBtn.className = 'fb-crumb';
+          cBtn.textContent = parts[i];
+          cBtn.onclick = () => fbNavigate(target);
+          crumbsHost.append(cBtn);
         }
-        const cBtn = document.createElement('button');
-        cBtn.type = 'button';
-        cBtn.className = 'fb-crumb';
-        cBtn.textContent = seg;
-        cBtn.onclick = () => fbNavigate(target);
-        crumbsHost.append(cBtn);
-      });
+      } else {
+        parts.forEach((seg, i) => {
+          accum = i === 0 && seg.endsWith(':') ? `${seg}\\` : (i === 0 && rawDir.startsWith('/') ? `/${seg}` : `${accum.replace(/[\\/]$/, '')}\\${seg}`);
+          const target = accum;
+          if (i > 0) {
+            const sep = document.createElement('span');
+            sep.textContent = '›';
+            crumbsHost.append(sep);
+          }
+          const cBtn = document.createElement('button');
+          cBtn.type = 'button';
+          cBtn.className = 'fb-crumb';
+          cBtn.textContent = seg;
+          cBtn.onclick = () => fbNavigate(target);
+          crumbsHost.append(cBtn);
+        });
+      }
     }
     const listHost = $('#fbList');
     if (!listHost) return;
     listHost.replaceChildren();
-    const q = ($('#fbFilterInput')?.value || '').trim().toLowerCase();
-    const filtered = fbState.entries.filter(item => {
-      if (q && !item.name.toLowerCase().includes(q)) return false;
-      if (fbState.mode === 'folder') return item.type === 'dir';
-      if (item.type === 'file' && Array.isArray(fbState.extensions) && fbState.extensions.length) {
-        return fbState.extensions.includes(item.ext);
-      }
-      return true;
-    });
+    const filtered = getFilteredSortedFbEntries();
     if (!filtered.length) {
       const tr = document.createElement('tr');
       const td = document.createElement('td');
-      td.colSpan = 3;
+      td.colSpan = 4;
       td.className = 'empty';
-      td.textContent = fbState.mode === 'folder' ? 'No subfolders in this directory (click Select Folder below to choose this directory).' : 'No matching files or folders in this directory.';
+      td.textContent = fbState.mode === 'folder' ? 'No subfolders in this directory — click confirm below to use this location.' : 'No matching files or folders in this directory.';
       tr.append(td);
       listHost.append(tr);
     }
     for (const item of filtered) {
+      const isCtxFile = fbState.mode === 'folder' && item.type === 'file';
       const tr = document.createElement('tr');
-      const isSel = fbState.selectedPath && fbState.selectedPath.toLowerCase() === item.path.toLowerCase();
-      tr.className = `fb-row${isSel ? ' selected' : ''}`;
+      const isSel = !isCtxFile && fbState.selectedPath && fbState.selectedPath.toLowerCase() === item.path.toLowerCase();
+      tr.className = `fb-row${isSel ? ' selected' : ''}${isCtxFile ? ' ctx-file' : ''}`;
+      tr.dataset.fbPath = item.path;
+      tr.dataset.fbType = item.type;
+      tr.dataset.fbName = item.name;
+      if (!isCtxFile) {
+        tr.tabIndex = 0;
+        tr.setAttribute('role', 'option');
+        tr.setAttribute('aria-selected', isSel ? 'true' : 'false');
+      }
       const nameTd = document.createElement('td');
       const nameWrap = document.createElement('div');
       nameWrap.className = 'fb-name-cell';
       const badge = document.createElement('span');
-      badge.className = `fb-badge ${item.type === 'dir' ? 'dir' : item.ext}`;
-      badge.textContent = item.type === 'dir' ? 'DIR' : (item.ext || 'FILE').slice(0, 5).toUpperCase();
+      badge.className = `fb-badge ${item.type === 'dir' ? (item.hasProject ? 'proj' : 'dir') : item.ext}`;
+      badge.textContent = item.type === 'dir' ? (item.hasProject ? 'PROJ' : 'DIR') : (item.ext || 'FILE').slice(0, 5).toUpperCase();
       const nameSpan = document.createElement('span');
-      nameSpan.className = 'mono';
+      nameSpan.className = 'mono fb-item-name';
       nameSpan.textContent = item.name;
       nameWrap.append(badge, nameSpan);
+      if (item.type === 'dir' && item.hasProject && item.projectFile) {
+        const projChip = document.createElement('span');
+        projChip.className = 'fb-proj-chip mono';
+        projChip.textContent = item.projectFile;
+        projChip.title = `FPGA Project (${item.projectFile})`;
+        nameWrap.append(projChip);
+      }
       nameTd.append(nameWrap);
       const typeTd = document.createElement('td');
-      typeTd.textContent = item.type === 'dir' ? 'Folder' : `${(item.ext || 'File').toUpperCase()} File`;
+      typeTd.textContent = item.type === 'dir' ? (item.hasProject ? 'FPGA Project' : 'Folder') : `${(item.ext || 'File').toUpperCase()} File`;
+      const mtimeTd = document.createElement('td');
+      mtimeTd.className = 'mono fb-mtime-cell';
+      mtimeTd.textContent = fmtMtime(item.mtime);
       const sizeTd = document.createElement('td');
       sizeTd.className = 'mono';
       sizeTd.textContent = item.type === 'dir' ? '—' : fmtBytes(item.size);
-      tr.append(nameTd, typeTd, sizeTd);
-      tr.onclick = () => {
-        fbState.selectedPath = item.path;
-        fbState.selectedType = item.type;
-        if (item.type === 'file' && $('#fbFileNameInput')) {
-          $('#fbFileNameInput').value = item.name;
-        } else if (item.type === 'dir' && fbState.mode === 'folder' && $('#fbFileNameInput')) {
-          $('#fbFileNameInput').value = item.path;
-        }
-        renderFileBrowser();
-      };
-      tr.ondblclick = () => {
-        if (item.type === 'dir') {
-          fbNavigate(item.path);
-        } else {
+      tr.append(nameTd, typeTd, mtimeTd, sizeTd);
+      if (!isCtxFile) {
+        tr.onclick = () => {
           fbState.selectedPath = item.path;
-          fbState.selectedType = 'file';
-          if ($('#fbFileNameInput')) $('#fbFileNameInput').value = item.name;
-          confirmFileBrowserSelection();
-        }
-      };
+          fbState.selectedType = item.type;
+          fbState.userEditedName = false;
+          if ($('#fbFileNameInput')) {
+            if (item.type === 'file') $('#fbFileNameInput').value = item.name;
+            else if (fbState.mode === 'folder') $('#fbFileNameInput').value = resolveAutoFolderPath(item.path);
+            else if (fbState.mode === 'open-project') $('#fbFileNameInput').value = item.path;
+          }
+          renderFileBrowser();
+          const selRow = listHost.querySelector(`tr[data-fb-path="${CSS.escape(item.path)}"]`);
+          selRow?.focus({ preventScroll: true });
+        };
+        tr.ondblclick = () => {
+          if (item.type === 'dir') {
+            fbNavigate(item.path);
+          } else {
+            fbState.selectedPath = item.path;
+            fbState.selectedType = 'file';
+            if ($('#fbFileNameInput')) $('#fbFileNameInput').value = item.name;
+            confirmFileBrowserSelection();
+          }
+        };
+      }
       listHost.append(tr);
     }
     const effectiveFolder = fbState.mode === 'folder' ? resolveAutoFolderPath(fbState.selectedPath || fbState.curDir) : '';
-    if (fbState.mode === 'folder' && $('#fbFileNameInput')) {
+    if (fbState.mode === 'folder' && !fbState.userEditedName && $('#fbFileNameInput')) {
       $('#fbFileNameInput').value = effectiveFolder;
     }
     if ($('#fbSelectionHint')) {
-      $('#fbSelectionHint').textContent = fbState.mode === 'folder'
-        ? `Target: ${effectiveFolder}`
-        : fbState.selectedPath ? baseNameOf(fbState.selectedPath.replace(/\\/g, '/')) : '';
+      const typedVal = ($('#fbFileNameInput')?.value || '').trim();
+      if (fbState.mode === 'folder') {
+        const previewPath = typedVal ? (isAbsPath(typedVal) ? typedVal : joinWinPath(fbState.curDir, typedVal)) : effectiveFolder;
+        $('#fbSelectionHint').textContent = `Target: ${previewPath}`;
+      } else {
+        $('#fbSelectionHint').textContent = fbState.selectedPath ? `Selected: ${baseNameOf(fbState.selectedPath.replace(/\\/g, '/'))}` : `Current: ${fbState.curDir}`;
+      }
     }
   }
 
@@ -2257,18 +2399,21 @@ export function createIde(api) {
     try {
       let targetPath = '';
       if (fbState.mode === 'folder') {
-        targetPath = ($('#fbFileNameInput')?.value || '').trim() || resolveAutoFolderPath(fbState.selectedPath || fbState.curDir);
+        const typed = ($('#fbFileNameInput')?.value || '').trim();
+        targetPath = typed
+          ? (isAbsPath(typed) ? typed : joinWinPath(fbState.curDir, typed))
+          : resolveAutoFolderPath(fbState.selectedPath || fbState.curDir);
       } else if (fbState.mode === 'save-file') {
         const fname = ($('#fbFileNameInput')?.value || '').trim();
         if (!fname) { api.toast('Enter a file name first.', 'err'); return; }
-        targetPath = /^[a-z]:[\\/]/i.test(fname) ? fname : `${fbState.curDir.replace(/\\$/, '')}\\${fname}`;
+        targetPath = isAbsPath(fname) ? fname : joinWinPath(fbState.curDir, fname);
       } else {
         if (fbState.selectedType === 'dir' && fbState.selectedPath && fbState.mode !== 'open-project') {
           await fbNavigate(fbState.selectedPath);
           return;
         }
         const typed = ($('#fbFileNameInput')?.value || '').trim();
-        targetPath = fbState.selectedPath || (typed ? (/^[a-z]:[\\/]/i.test(typed) ? typed : `${fbState.curDir.replace(/\\$/, '')}\\${typed}`) : '');
+        targetPath = fbState.selectedPath || (typed ? (isAbsPath(typed) ? typed : joinWinPath(fbState.curDir, typed)) : '');
         if (!targetPath) { api.toast('Select a file or project folder first.', 'err'); return; }
       }
       const res = await fetch('/api/fs/authorize', {
@@ -2310,11 +2455,14 @@ export function createIde(api) {
     fbState.createdDir = '';
     fbState.selectedPath = '';
     fbState.selectedType = '';
+    fbState.history = [];
+    fbState.histIdx = -1;
+    fbState.userEditedName = false;
     if ($('#fbEyebrow')) $('#fbEyebrow').textContent = eyebrow;
     if ($('#fbTitle')) $('#fbTitle').textContent = title;
     if ($('#fbConfirmBtn')) $('#fbConfirmBtn').textContent = confirmText;
     if ($('#fbFileNameLabel')) {
-      $('#fbFileNameLabel').textContent = mode === 'folder' ? 'Folder:' : mode === 'open-project' ? 'Project (.qpf/.qsf):' : 'File name:';
+      $('#fbFileNameLabel').textContent = mode === 'folder' ? 'Destination:' : mode === 'open-project' ? 'Project (.qpf/.qsf):' : 'File name:';
     }
     if ($('#fbFileNameInput')) $('#fbFileNameInput').value = defaultName || '';
     if ($('#fbFilterInput')) $('#fbFilterInput').value = '';
@@ -2878,8 +3026,33 @@ export function createIde(api) {
       btn.addEventListener('click', () => setMarkdownMode(btn.dataset.mdMode));
     });
     // Native GUI File Explorer Modal wiring
+    $('#fbBackBtn')?.addEventListener('click', () => {
+      if (fbState.histIdx > 0) {
+        fbState.histIdx--;
+        fbNavigate(fbState.history[fbState.histIdx], { fromHistory: true });
+      }
+    });
+    $('#fbFwdBtn')?.addEventListener('click', () => {
+      if (fbState.histIdx >= 0 && fbState.histIdx < fbState.history.length - 1) {
+        fbState.histIdx++;
+        fbNavigate(fbState.history[fbState.histIdx], { fromHistory: true });
+      }
+    });
     $('#fbUpBtn')?.addEventListener('click', () => { if (fbState.parentDir) fbNavigate(fbState.parentDir); });
-    $('#fbRefreshBtn')?.addEventListener('click', () => fbNavigate(fbState.curDir));
+    $('#fbRefreshBtn')?.addEventListener('click', () => fbNavigate(fbState.curDir, { fromHistory: true }));
+    $('#fbShowFiles')?.addEventListener('change', e => {
+      fbState.showFilesInFolder = !!e.target.checked;
+      renderFileBrowser();
+    });
+    $$('.fb-sort-th').forEach(th => {
+      th.addEventListener('click', () => {
+        const key = th.dataset.fbsort;
+        if (!key) return;
+        if (fbState.sortBy === key) fbState.sortDir = -fbState.sortDir;
+        else { fbState.sortBy = key; fbState.sortDir = 1; }
+        renderFileBrowser();
+      });
+    });
     $('#fbPathForm')?.addEventListener('submit', e => {
       e.preventDefault();
       const val = ($('#fbPathInput')?.value || '').trim();
@@ -2915,8 +3088,62 @@ export function createIde(api) {
       }
     });
     $('#fbConfirmBtn')?.addEventListener('click', () => confirmFileBrowserSelection());
+    $('#fbFileNameInput')?.addEventListener('input', () => {
+      fbState.userEditedName = true;
+      if ($('#fbSelectionHint') && fbState.mode === 'folder') {
+        const typed = ($('#fbFileNameInput')?.value || '').trim();
+        const preview = typed ? (isAbsPath(typed) ? typed : joinWinPath(fbState.curDir, typed)) : resolveAutoFolderPath(fbState.selectedPath || fbState.curDir);
+        $('#fbSelectionHint').textContent = `Target: ${preview}`;
+      }
+    });
     $('#fbFileNameInput')?.addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); confirmFileBrowserSelection(); }
+    });
+    $('#fileBrowserDialog')?.addEventListener('keydown', e => {
+      const inInput = !!e.target?.closest?.('input, textarea, select');
+      if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); $('#fbBackBtn')?.click(); return; }
+      if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); $('#fbFwdBtn')?.click(); return; }
+      if (e.key === 'F5') { e.preventDefault(); $('#fbRefreshBtn')?.click(); return; }
+      if (inInput) return;
+      if (e.key === 'Backspace') {
+        e.preventDefault();
+        if (fbState.parentDir) fbNavigate(fbState.parentDir);
+        return;
+      }
+      const rows = $$('#fbList tr.fb-row:not(.ctx-file)');
+      if (!rows.length) return;
+      if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
+        e.preventDefault();
+        let curIdx = rows.findIndex(r => r.classList.contains('selected'));
+        if (e.key === 'Home') curIdx = 0;
+        else if (e.key === 'End') curIdx = rows.length - 1;
+        else if (e.key === 'ArrowDown') curIdx = curIdx < rows.length - 1 ? curIdx + 1 : 0;
+        else if (e.key === 'ArrowUp') curIdx = curIdx > 0 ? curIdx - 1 : rows.length - 1;
+        rows[curIdx]?.click();
+        rows[curIdx]?.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      if (e.key === 'Enter') {
+        const selRow = rows.find(r => r.classList.contains('selected'));
+        if (selRow) {
+          e.preventDefault();
+          if (selRow.dataset.fbType === 'dir') fbNavigate(selRow.dataset.fbPath);
+          else confirmFileBrowserSelection();
+        }
+        return;
+      }
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const ch = e.key.toLowerCase();
+        const startIdx = rows.findIndex(r => r.classList.contains('selected')) + 1;
+        for (let step = 0; step < rows.length; step++) {
+          const cand = rows[(startIdx + step) % rows.length];
+          if ((cand.dataset.fbName || '').toLowerCase().startsWith(ch)) {
+            cand.click();
+            cand.scrollIntoView({ block: 'nearest' });
+            break;
+          }
+        }
+      }
     });
     $('#fileBrowserDialog')?.addEventListener('close', () => {
       if (fbState.resolve) {

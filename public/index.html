@@ -499,7 +499,7 @@
         <div class="home-card home-starters-card">
           <div class="home-card-head">
             <div><span class="eyebrow">STARTER TEMPLATES</span><h2>Quick-start hardware labs</h2></div>
-            <span class="hint">1-click template launch</span>
+            <span class="hint">Pre-mapped RZ-EasyFPGA starters</span>
           </div>
           <div id="homeStarterGrid" class="home-starter-grid">
             <button type="button" class="home-starter-item" data-starter="counter"><div class="hsi-top"><strong>Counter &amp; 4-Digit 7-Seg</strong><span class="hsi-tag mono">7-SEG · LEDS</span></div><span>24-bit synchronous counter with multiplexed hex display &amp; lamp test</span></button>
@@ -549,14 +549,17 @@
     <button class="icon-btn" type="button" data-close="fileBrowserDialog" aria-label="Close file explorer">×</button>
   </div>
   <div class="fb-toolbar">
+    <button id="fbBackBtn" type="button" class="icon-btn small" title="Back (Alt+←)" aria-label="Back" disabled>←</button>
+    <button id="fbFwdBtn" type="button" class="icon-btn small" title="Forward (Alt+→)" aria-label="Forward" disabled>→</button>
     <button id="fbUpBtn" type="button" class="icon-btn small" title="Up one folder (Backspace)" aria-label="Parent folder">↑</button>
-    <button id="fbRefreshBtn" type="button" class="icon-btn small" title="Refresh folder" aria-label="Refresh">↻</button>
+    <button id="fbRefreshBtn" type="button" class="icon-btn small" title="Refresh folder (F5)" aria-label="Refresh">↻</button>
     <form id="fbPathForm" class="fb-path-form">
-      <input id="fbPathInput" class="search mono fb-path-input" type="text" placeholder="C:\…" aria-label="Current folder path" spellcheck="false" autocomplete="off">
+      <input id="fbPathInput" class="search mono fb-path-input" type="text" placeholder="Enter folder path…" aria-label="Current folder path" spellcheck="false" autocomplete="off">
       <button type="submit" class="btn">Go</button>
     </form>
     <button id="fbNewFolderBtn" type="button" class="btn" title="Create new folder in current directory">+ New Folder</button>
-    <input id="fbFilterInput" class="search fb-filter-input" type="search" placeholder="Filter current folder…" aria-label="Filter items in current folder">
+    <label id="fbShowFilesWrap" class="fb-toggle-wrap hidden" title="Show existing files in folder view for context"><input id="fbShowFiles" type="checkbox" checked><span>Files</span></label>
+    <input id="fbFilterInput" class="search fb-filter-input" type="search" placeholder="Filter items…" aria-label="Filter items in current folder">
   </div>
   <form id="fbMkdirForm" class="fb-mkdir-bar hidden">
     <span class="mono">New folder name:</span>
@@ -570,18 +573,20 @@
       <div id="fbCrumbs" class="fb-crumbs mono"></div>
       <div class="fb-table-wrap">
         <table class="fb-table">
-          <thead><tr><th>Name</th><th>Type</th><th>Size</th></tr></thead>
-          <tbody id="fbList"></tbody>
+          <thead><tr><th class="fb-sort-th" data-fbsort="name">Name</th><th class="fb-sort-th" data-fbsort="type">Type</th><th class="fb-sort-th" data-fbsort="mtime">Modified</th><th class="fb-sort-th" data-fbsort="size">Size</th></tr></thead>
+          <tbody id="fbList" role="listbox" aria-label="Directory contents"></tbody>
         </table>
       </div>
     </div>
   </div>
   <div class="dialog-foot confirm-foot fb-foot">
-    <label id="fbFileNameWrap" class="fb-filename-wrap">
-      <span id="fbFileNameLabel">File name:</span>
-      <input id="fbFileNameInput" class="search mono" type="text" spellcheck="false" autocomplete="off">
-    </label>
-    <span id="fbSelectionHint" class="hint mono"></span>
+    <div class="fb-foot-left">
+      <label id="fbFileNameWrap" class="fb-filename-wrap">
+        <span id="fbFileNameLabel">File name:</span>
+        <input id="fbFileNameInput" class="search mono" type="text" spellcheck="false" autocomplete="off">
+      </label>
+      <span id="fbSelectionHint" class="hint mono fb-selection-hint"></span>
+    </div>
     <div class="confirm-actions">
       <button id="fbCancelBtn" type="button" class="btn" data-close="fileBrowserDialog">Cancel</button>
       <button id="fbConfirmBtn" type="button" class="btn dark">Select</button>
@@ -698,7 +703,7 @@
         <h3>Audio &amp; 3D Devboard</h3>
         <div class="set-grid">
           <label class="set-row"><div><strong>Master Buzzer Volume</strong><span>Output level — set to 0% to silence (<span id="setVolumeVal" class="mono">50%</span>)</span></div><input id="setMasterVolume" type="range" min="0" max="100" step="1" value="50"></label>
-          <label class="set-row"><div><strong>3D Render Quality</strong><span>WebGL MSAA &amp; shadow fidelity</span></div><select id="setGfxQuality"><option value="high">High (MSAA)</option><option value="medium">Balanced</option><option value="low">Performance</option></select></label>
+          <label class="set-row"><div><strong>3D Render Quality</strong><span>WebGL MSAA &amp; shadow fidelity</span></div><select id="setGfxQuality"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High (MSAA)</option><option value="ultra">Ultra</option><option value="extreme">Extreme</option></select></label>
           <label class="set-row"><div><strong>LED &amp; 7-Segment Glow</strong><span>Bloom &amp; PCB halo intensity (<span id="setGlowVal" class="mono">65%</span>)</span></div><input id="setBoardGlow" type="range" min="0" max="100" step="1" value="65"></label>
           <label class="set-row"><div><strong>Eye Persistence (τ)</strong><span>Temporal light integration window for multiplexed 7-seg &amp; PWM LEDs (<span id="setTdmTauVal" class="mono">28 ms</span>)</span></div><input id="setTdmPersistence" type="range" min="0" max="120" step="2" value="28"></label>
           <label class="set-row"><div><strong>TDM Peak-Current Compensation</strong><span>Scale multiplexed pulse luminance like hardware drivers (off = raw 1/N luminance)</span></div><input id="setTdmPeakBoost" type="checkbox" checked></label>

@@ -721,7 +721,7 @@ export const THEME_PRESETS = [
       '--accent': '#cbdfcf',
       '--accent-fg': '#073642',
       '--accent-border': '#8fbca0',
-      '--green': '#2aa198',
+      '--green': '#1d7a73',
       '--red': '#dc322f',
       '--warning': '#b58900',
       '--brand-bg': '#073642',
