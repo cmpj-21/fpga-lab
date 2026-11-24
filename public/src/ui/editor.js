@@ -202,7 +202,7 @@ export class CodeEditor {
     this.root.className = `ce${this.wordWrap ? ' wrap-on' : ''}`;
     this.root.innerHTML = '<div class="ce-gutter" aria-hidden="true"><div class="ce-gutter-in"><pre class="ce-nums"></pre></div></div>' +
       `<div class="ce-view"><textarea class="ce-input ce-text" spellcheck="false" wrap="${this.wordWrap ? 'soft' : 'off'}" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="Source code editor"></textarea>` +
-      '<div class="ce-layer" aria-hidden="true"><div class="ce-lines"></div><pre class="ce-hl ce-text"></pre></div></div>';
+      '<div class="ce-layer" aria-hidden="true"><div class="ce-lines"></div><pre class="ce-hl ce-text"></pre></div><pre class="ce-probe" aria-hidden="true"></pre></div>';
     host.append(this.root);
     this.gutter = this.root.querySelector('.ce-gutter');
     this.gutterIn = this.root.querySelector('.ce-gutter-in');
@@ -210,28 +210,79 @@ export class CodeEditor {
     this.layer = this.root.querySelector('.ce-layer');
     this.lines = this.root.querySelector('.ce-lines');
     this.pre = this.root.querySelector('.ce-hl');
+    this.probe = this.root.querySelector('.ce-probe');
     this.input = this.root.querySelector('.ce-input');
     this.curLine = document.createElement('div');
     this.curLine.className = 'ce-curline';
     this.lineCount = 0;
+    this.lineTopPx = [PAD_TOP];
+    this.lineHeightPx = [this.lineHeight];
+    this._wrapCache = new Map();
+    this._wrapCacheKey = '';
+    this._lastGutterSig = '';
+    this._savedScrollTop = 0;
+    this._savedScrollLeft = 0;
+    this.root.style.setProperty('--ce-line-height', `${this.lineHeight}px`);
+    this.root.style.setProperty('--ce-tab-size', String(this.tabSize));
     this.input.addEventListener('input', () => { this.schedule(); this.callbacks.onChange?.(this.input.value); });
-    this.input.addEventListener('scroll', () => this.syncScroll());
+    this.input.addEventListener('scroll', () => {
+      this._savedScrollTop = this.input.scrollTop;
+      this._savedScrollLeft = this.input.scrollLeft;
+      this.syncScroll();
+    });
+    this.gutter.addEventListener('wheel', event => {
+      if (!event.deltaY) return;
+      this.input.scrollTop += event.deltaY;
+      this.syncScroll();
+      event.preventDefault();
+    }, { passive: false });
     this.input.addEventListener('keydown', event => this.onKeyDown(event));
     for (const type of ['keyup', 'click', 'focus', 'select']) this.input.addEventListener(type, () => this.reportCursor());
     this.input.addEventListener('blur', () => this.curLine.classList.add('off'));
     this.input.addEventListener('focus', () => this.curLine.classList.remove('off'));
+    this._resizeObs = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => {
+      if (!this.root.classList.contains('active')) return;
+      this.syncLayerWidth();
+      if (this.wordWrap) this.syncLineLayout(this.input.value);
+      this.syncScroll();
+      this.reportCursor();
+    }) : null;
+    this._resizeObs?.observe(this.input);
   }
   setOptions(opts = {}) {
-    if (opts.lineHeight) this.lineHeight = Math.max(14, Number(opts.lineHeight) || DEFAULT_LINE_HEIGHT);
-    if (opts.tabSize) this.tabSize = Math.max(1, Math.min(8, Number(opts.tabSize) || 2));
+    if (opts.lineHeight) {
+      this.lineHeight = Math.max(14, Number(opts.lineHeight) || DEFAULT_LINE_HEIGHT);
+      this.root.style.setProperty('--ce-line-height', `${this.lineHeight}px`);
+    }
+    if (opts.tabSize) {
+      this.tabSize = Math.max(1, Math.min(8, Number(opts.tabSize) || 2));
+      this.root.style.setProperty('--ce-tab-size', String(this.tabSize));
+    }
     if (typeof opts.autoIndent === 'boolean') this.autoIndent = opts.autoIndent;
     if (typeof opts.highlightLine === 'boolean') this.highlightLine = opts.highlightLine;
+    this._wrapCache.clear();
+    this._lastGutterSig = '';
+    this.syncLineLayout(this.input.value);
     this.renderMarkers();
     this.reportCursor();
   }
   get value() { return this.input.value; }
   setValue(text) { this.input.value = text; this.renderNow(); this.reportCursor(); }
-  show(visible) { this.root.classList.toggle('active', visible); if (visible) { this.syncScroll(); this.reportCursor(); } }
+  show(visible) {
+    if (!visible && this.root.classList.contains('active')) {
+      this._savedScrollTop = this.input.scrollTop;
+      this._savedScrollLeft = this.input.scrollLeft;
+    }
+    this.root.classList.toggle('active', visible);
+    if (visible) {
+      this.syncLayerWidth();
+      if (this.wordWrap) this.syncLineLayout(this.input.value);
+      this.input.scrollTop = this._savedScrollTop;
+      this.input.scrollLeft = this.wordWrap ? 0 : this._savedScrollLeft;
+      this.syncScroll();
+      this.reportCursor();
+    }
+  }
   focus() { this.input.focus({ preventScroll: true }); }
   schedule() { if (this.frame) return; this.frame = requestAnimationFrame(() => { this.frame = 0; this.renderNow(); this.reportCursor(); }); }
   setLanguage(lang = 'vhdl') { this.language = lang; this.renderNow(); }
@@ -240,8 +291,96 @@ export class CodeEditor {
     this.root.classList.toggle('wrap-on', this.wordWrap);
     this.input.setAttribute('wrap', this.wordWrap ? 'soft' : 'off');
     if (this.wordWrap) this.input.scrollLeft = 0;
+    this._wrapCache.clear();
+    this._lastGutterSig = '';
+    this.syncLayerWidth();
+    this.syncLineLayout(this.input.value);
+    this.renderMarkers();
     this.syncScroll();
     this.reportCursor();
+  }
+  syncLayerWidth() {
+    if (!this.layer) return;
+    if (this.wordWrap) {
+      const cw = this.input.clientWidth;
+      this.layer.style.width = cw > 0 ? `${cw}px` : '100%';
+    } else {
+      this.layer.style.width = '';
+    }
+  }
+  effectiveLineHeight() {
+    const cs = getComputedStyle(this.input);
+    const parsed = parseFloat(cs.lineHeight);
+    return Number.isFinite(parsed) && parsed >= 10 ? parsed : this.lineHeight;
+  }
+  syncLineLayout(text) {
+    const rows = text.split('\n');
+    const count = rows.length;
+    this.lineCount = count;
+    const lh = this.effectiveLineHeight();
+    const wrapW = this.wordWrap ? this.input.clientWidth : 0;
+    const fontKey = this.wordWrap ? `${wrapW}|${lh}|${this.tabSize}|${getComputedStyle(this.input).fontSize}|${getComputedStyle(this.input).fontFamily}` : `off|${lh}`;
+    if (fontKey !== this._wrapCacheKey) {
+      this._wrapCache.clear();
+      this._wrapCacheKey = fontKey;
+    }
+    this.syncLayerWidth();
+    const tops = new Array(count + 1);
+    const heights = new Array(count + 1);
+    let y = PAD_TOP;
+    let numbers = '';
+
+    if (this.wordWrap && wrapW > 40 && this.probe) {
+      this.probe.style.width = `${wrapW}px`;
+      const probeCs = getComputedStyle(this.probe);
+      const innerW = Math.max(20, wrapW - (parseFloat(probeCs.paddingLeft) || 14) - (parseFloat(probeCs.paddingRight) || 16));
+      const fontSize = parseFloat(probeCs.fontSize) || 12;
+      const safeChars = Math.max(8, Math.floor(innerW / (fontSize * 0.68)) - 2);
+      const tabW = this.tabSize || 2;
+      for (let i = 0; i < count; i++) {
+        const lineText = rows[i];
+        let vRows = 1;
+        if (lineText.length > 0) {
+          let estLen = lineText.length;
+          if (lineText.includes('\t')) {
+            estLen = 0;
+            for (let k = 0; k < lineText.length; k++) estLen += lineText.charCodeAt(k) === 9 ? tabW : 1;
+          }
+          if (estLen >= safeChars) {
+            const cached = this._wrapCache.get(lineText);
+            if (cached !== undefined) {
+              vRows = cached;
+            } else {
+              this.probe.textContent = lineText;
+              const h = this.probe.getBoundingClientRect().height;
+              vRows = Math.max(1, Math.round(h / lh));
+              if (this._wrapCache.size > 4000) this._wrapCache.clear();
+              this._wrapCache.set(lineText, vRows);
+            }
+          }
+        }
+        tops[i + 1] = y;
+        heights[i + 1] = vRows * lh;
+        y += vRows * lh;
+        numbers += (i + 1) + '\n'.repeat(vRows);
+      }
+      this.probe.textContent = '';
+    } else {
+      for (let i = 0; i < count; i++) {
+        tops[i + 1] = y;
+        heights[i + 1] = lh;
+        y += lh;
+        numbers += (i + 1) + '\n';
+      }
+    }
+    this.lineTopPx = tops;
+    this.lineHeightPx = heights;
+    const sig = `${count}|${numbers.length}|${fontKey}`;
+    if (sig !== this._lastGutterSig || this.nums.textContent !== numbers) {
+      this._lastGutterSig = sig;
+      this.nums.textContent = numbers;
+      this.gutter.style.width = `${Math.max(3, String(count).length) + 3.2}ch`;
+    }
   }
   toggleWordWrap() {
     this.setWordWrap(!this.wordWrap);
@@ -256,14 +395,7 @@ export class CodeEditor {
   renderNow() {
     const text = this.input.value;
     this.pre.innerHTML = this.highlightText(text) + '\n';
-    const count = text.split('\n').length;
-    if (count !== this.lineCount) {
-      this.lineCount = count;
-      let numbers = '';
-      for (let i = 1; i <= count; i++) numbers += i + '\n';
-      this.nums.textContent = numbers;
-      this.gutter.style.width = `${Math.max(3, String(count).length) + 2.2}ch`;
-    }
+    this.syncLineLayout(text);
     this.renderMarkers();
   }
   syncScroll() {
@@ -273,42 +405,84 @@ export class CodeEditor {
   }
   cursor() {
     const value = this.input.value, pos = this.input.selectionStart;
-    const before = value.slice(0, pos), line = before.split('\n').length;
-    return { line, col: pos - before.lastIndexOf('\n'), lines: this.lineCount || value.split('\n').length, selected: this.input.selectionEnd - pos };
+    let line = 1, lastNl = -1;
+    for (let i = 0; i < pos; i++) {
+      if (value.charCodeAt(i) === 10) { line++; lastNl = i; }
+    }
+    return { line, col: pos - lastNl, lines: this.lineCount || 1, selected: this.input.selectionEnd - pos };
   }
   reportCursor() {
     if (!this.root.classList.contains('active')) return;
     const info = this.cursor();
     if (info.selected || !this.highlightLine) this.curLine.remove();
-    else { this.curLine.style.top = `${PAD_TOP + (info.line - 1) * this.lineHeight}px`; if (!this.curLine.isConnected) this.lines.prepend(this.curLine); }
+    else {
+      const top = this.lineTopPx[info.line] ?? (PAD_TOP + (info.line - 1) * this.lineHeight);
+      const h = this.lineHeightPx[info.line] ?? this.lineHeight;
+      this.curLine.style.top = `${top}px`;
+      this.curLine.style.height = `${h}px`;
+      if (!this.curLine.isConnected) this.lines.prepend(this.curLine);
+    }
     this.callbacks.onCursor?.(info);
   }
   setMarkers(markers) { this.markers = markers || []; this.renderMarkers(); }
   renderMarkers() {
     this.lines.replaceChildren(...(this.curLine.isConnected ? [this.curLine] : []));
     this.gutterIn.querySelectorAll('.gm').forEach(node => node.remove());
+    const maxLine = Math.max(1, this.lineCount || 1);
     const seen = new Map();
     for (const marker of this.markers) {
+      const ln = Math.floor(Number(marker?.line));
+      if (!Number.isFinite(ln) || ln < 1 || ln > maxLine) continue;
       const rank = marker.severity === 'error' ? 2 : 1;
-      if ((seen.get(marker.line)?.rank ?? 0) >= rank) continue;
-      seen.set(marker.line, { rank, marker });
+      const prev = seen.get(ln);
+      if (!prev) {
+        seen.set(ln, { rank, severity: marker.severity, messages: marker.message ? [marker.message] : [] });
+      } else {
+        if (rank > prev.rank) { prev.rank = rank; prev.severity = marker.severity; }
+        if (marker.message && !prev.messages.includes(marker.message)) prev.messages.push(marker.message);
+      }
     }
-    for (const [line, { marker }] of seen) {
-      const top = PAD_TOP + (line - 1) * this.lineHeight;
-      const bar = document.createElement('div'); bar.className = `ce-linehl ${marker.severity}`; bar.style.top = `${top}px`; this.lines.append(bar);
-      const dot = document.createElement('div'); dot.className = `gm ${marker.severity}`; dot.style.top = `${top}px`; dot.title = marker.message || ''; dot.textContent = marker.severity === 'error' ? '●' : '▲'; this.gutterIn.append(dot);
+    for (const [line, info] of seen) {
+      const top = this.lineTopPx[line] ?? (PAD_TOP + (line - 1) * this.lineHeight);
+      const h = this.lineHeightPx[line] ?? this.lineHeight;
+      const bar = document.createElement('div');
+      bar.className = `ce-linehl ${info.severity}`;
+      bar.style.top = `${top}px`;
+      bar.style.height = `${h}px`;
+      this.lines.append(bar);
+      const dot = document.createElement('div');
+      dot.className = `gm ${info.severity}`;
+      dot.style.top = `${top}px`;
+      dot.title = info.messages.join('\n');
+      dot.textContent = info.severity === 'error' ? '●' : '▲';
+      this.gutterIn.append(dot);
     }
   }
   goto(line, col = 1) {
     const rows = this.input.value.split('\n');
-    line = Math.min(Math.max(1, line), rows.length);
+    const parsedLine = Number(line);
+    const safeLine = Number.isFinite(parsedLine) ? Math.min(Math.max(1, Math.floor(parsedLine)), rows.length) : 1;
+    const parsedCol = Number(col);
+    const safeCol = Number.isFinite(parsedCol) ? Math.max(1, Math.floor(parsedCol)) : 1;
     let offset = 0;
-    for (let i = 0; i < line - 1; i++) offset += rows[i].length + 1;
-    offset += Math.min(Math.max(0, col - 1), rows[line - 1].length);
+    for (let i = 0; i < safeLine - 1; i++) offset += rows[i].length + 1;
+    offset += Math.min(safeCol - 1, rows[safeLine - 1].length);
     this.focus();
     this.input.setSelectionRange(offset, offset);
-    const top = PAD_TOP + (line - 1) * this.lineHeight;
-    if (top < this.input.scrollTop + 20 || top > this.input.scrollTop + this.input.clientHeight - 60) this.input.scrollTop = Math.max(0, top - this.input.clientHeight / 2);
+    if (this.wordWrap) this.syncLineLayout(this.input.value);
+    const top = this.lineTopPx[safeLine] ?? (PAD_TOP + (safeLine - 1) * this.lineHeight);
+    if (top < this.input.scrollTop + 20 || top > this.input.scrollTop + this.input.clientHeight - 60) {
+      this.input.scrollTop = Math.max(0, top - this.input.clientHeight / 2);
+    }
+    if (!this.wordWrap && safeCol > 1) {
+      const charW = (parseFloat(getComputedStyle(this.input).fontSize) || 12) * 0.62;
+      const xPx = (safeCol - 1) * charW;
+      if (xPx < this.input.scrollLeft + 24 || xPx > this.input.scrollLeft + this.input.clientWidth - 48) {
+        this.input.scrollLeft = Math.max(0, xPx - this.input.clientWidth / 3);
+      }
+    }
+    this._savedScrollTop = this.input.scrollTop;
+    this._savedScrollLeft = this.input.scrollLeft;
     this.syncScroll(); this.reportCursor();
   }
   insert(text, start = this.input.selectionStart, end = this.input.selectionEnd) {
@@ -412,9 +586,13 @@ export class CodeEditor {
   indent() {
     const { selectionStart: start, selectionEnd: end, value } = this.input;
     const step = this.tabSize || 2;
-    if (start === end || !value.slice(start, end).includes('\n')) {
-      const col = start - (value.lastIndexOf('\n', start - 1) + 1);
-      this.insert(' '.repeat(step - (col % step)));
+    if (start === end) {
+      const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+      let visualCol = 0;
+      for (let i = lineStart; i < start; i++) {
+        visualCol += value.charCodeAt(i) === 9 ? (step - (visualCol % step)) : 1;
+      }
+      this.insert(' '.repeat(step - (visualCol % step)));
       return;
     }
     const block = this.blockRange();
@@ -424,14 +602,37 @@ export class CodeEditor {
   outdent() {
     const step = this.tabSize || 2;
     const re = new RegExp(`^( {1,${step}}|\\t)`);
+    const wasCollapsed = this.input.selectionStart === this.input.selectionEnd;
+    const origPos = this.input.selectionStart;
     const block = this.blockRange();
     const text = block.text.split('\n').map(line => line.replace(re, '')).join('\n');
-    if (text !== block.text) this.replaceBlock(block.from, block.to, text);
+    if (text !== block.text) {
+      if (wasCollapsed && !block.text.includes('\n')) {
+        const delta = block.text.length - text.length;
+        this.insert(text, block.from, block.to);
+        const nextPos = Math.max(block.from, origPos - delta);
+        this.input.setSelectionRange(nextPos, nextPos);
+        this.reportCursor();
+      } else {
+        this.replaceBlock(block.from, block.to, text);
+      }
+    }
   }
   toggleComment() {
+    if (this.language === 'markdown') {
+      const block = this.blockRange();
+      const trimmed = block.text.trim();
+      const unwrapped = trimmed.startsWith('<!--') && trimmed.endsWith('-->')
+        ? block.text.replace(/^(\s*)<!--\s?/, '$1').replace(/\s?-->(\s*)$/, '$1')
+        : block.text.replace(/^(\s*)/, '$1<!-- ') + ' -->';
+      this.replaceBlock(block.from, block.to, unwrapped);
+      return;
+    }
     const prefix = this.language === 'vhdl' ? '--' : '#';
     const reTest = this.language === 'vhdl' ? /^\s*--/ : /^\s*#/;
     const reStrip = this.language === 'vhdl' ? /^(\s*)-- ?/ : /^(\s*)# ?/;
+    const wasCollapsed = this.input.selectionStart === this.input.selectionEnd;
+    const origPos = this.input.selectionStart;
     const block = this.blockRange(), rows = block.text.split('\n');
     const code = rows.filter(row => row.trim());
     const allCommented = code.length > 0 && code.every(row => reTest.test(row));
@@ -441,7 +642,16 @@ export class CodeEditor {
       if (allCommented) return row.replace(reStrip, '$1');
       return row.slice(0, indent) + prefix + ' ' + row.slice(indent);
     });
-    this.replaceBlock(block.from, block.to, next.join('\n'));
+    const joined = next.join('\n');
+    if (wasCollapsed && rows.length === 1) {
+      const delta = joined.length - block.text.length;
+      this.insert(joined, block.from, block.to);
+      const nextPos = Math.max(block.from, Math.min(block.from + joined.length, origPos + delta));
+      this.input.setSelectionRange(nextPos, nextPos);
+      this.reportCursor();
+    } else {
+      this.replaceBlock(block.from, block.to, joined);
+    }
   }
   newline() {
     const { selectionStart: start, value } = this.input;
@@ -468,5 +678,5 @@ export class CodeEditor {
     }
     this.reportCursor();
   }
-  dispose() { cancelAnimationFrame(this.frame); this.root.remove(); }
+  dispose() { cancelAnimationFrame(this.frame); this._resizeObs?.disconnect(); this.root.remove(); }
 }
