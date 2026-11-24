@@ -18,9 +18,9 @@ class BuzzerStreamProcessor extends AudioWorkletProcessor {
         return;
       }
       if (data instanceof Float32Array && data.length > 0) {
-        // Trim excess backlog if tab/render fell behind so key presses remain low-latency (< ~80 ms)
-        const maxQueued = 4096;
-        const targetAfterTrim = 1800;
+        // Trim excess backlog if tab/render fell behind so key presses remain low-latency (< ~130 ms)
+        const maxQueued = 6400;
+        const targetAfterTrim = 2400;
         if (this.count + data.length > maxQueued) {
           const drop = Math.min(this.count, (this.count + data.length) - targetAfterTrim);
           this.readIdx = (this.readIdx + drop) % this.cap;
@@ -32,7 +32,7 @@ class BuzzerStreamProcessor extends AudioWorkletProcessor {
           this.writeIdx = (this.writeIdx + 1) % this.cap;
         }
         this.count += n;
-        if (!this.primed && this.count >= 960) this.primed = true;
+        if (!this.primed && this.count >= 1200) this.primed = true;
       }
     };
   }
@@ -67,7 +67,6 @@ class BuzzerStreamProcessor extends AudioWorkletProcessor {
         if (Math.abs(this.lastOut) < 1e-4) this.lastOut = 0;
         out[i++] = this.lastOut;
       }
-      this.primed = false;
     }
     return true;
   }

@@ -364,7 +364,7 @@ function setStatus() {
   syncKeys();
 }
 function pause() {
-  S.running = false; accumulator = 0; wallTimeAccum = 0; clearMuxDisplayState(); resetBuzzerTracker(false); sampleOutputs(); setStatus();
+  S.running = false; accumulator = 0; wallTimeAccum = 0; rtlAudioSampleFrac = 0; clearMuxDisplayState(); resetBuzzerTracker(false); sampleOutputs(); setStatus();
   if (waves && !$('#app')?.classList.contains('no-waves')) {
     waves.draw();
   }
@@ -729,12 +729,14 @@ let rtlRunner = null;
 let rtlSignalMap = [];
 let rtlInputMap = new Map();
 let rtlIdleBeep = null;
+let rtlAudioSampleFrac = 0;
 
 function clearRtlRunner() {
   rtlRunner = null;
   rtlSignalMap = [];
   rtlInputMap.clear();
   rtlIdleBeep = null;
+  rtlAudioSampleFrac = 0;
   rtlAdaptiveMaxCycles = 2500000;
 }
 
@@ -811,8 +813,12 @@ function runRtlStepBatch(cycles, wallDt = 0) {
   const hasScalarBeep = !!(S.bindings.beep && S.bindings.beep.bit === null);
   let audioOut = null;
   if (cycles > 0 && S.running && hasScalarBeep && !audio.isMuted() && wallDt > 0) {
-    const aSamples = Math.max(1, Math.min(4096, Math.round(wallDt * audio.sampleRate())));
-    audioOut = new Float32Array(aSamples);
+    // Exact sample-locked audio clock: sample count derives strictly from simulated cycles/rate
+    // with fractional carry-over so pitch never FM-warbles on frame-time jitter
+    const exactSamples = wallDt * audio.sampleRate() + rtlAudioSampleFrac;
+    const aSamples = Math.min(4096, Math.floor(exactSamples));
+    rtlAudioSampleFrac = Math.max(0, exactSamples - aSamples);
+    if (aSamples > 0) audioOut = new Float32Array(aSamples);
   }
   const res = rtlRunner.runBatch(cycles, pickRtlSampleCount(cycles), audioOut);
   const template = S.sim.signals.map(s => S.values.get(s.short) ?? S.inputs[s.id] ?? '0'.repeat(s.width));
@@ -3194,8 +3200,7 @@ function frame(now) {
       const cycles = Math.min(cap, Math.floor(accumulator));
       if (Number.isInteger(cycles) && cycles > 0) {
         accumulator = Math.max(0, accumulator - cycles);
-        const simAudioDt = S.clkHz > 0 ? (cycles / S.clkHz) / Math.max(0.05, rate) : frameDt;
-        const audioDt = Math.min(0.05, Math.max(dt, simAudioDt));
+        const audioDt = S.clkHz > 0 ? Math.min(0.05, (cycles / S.clkHz) / Math.max(0.05, rate)) : frameDt;
         runRtlStepBatch(cycles, audioDt);
       }
     } else {
