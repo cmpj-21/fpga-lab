@@ -1040,6 +1040,10 @@ async function createTerminalSession({ shell = '', cwd = '', cols = 120, rows = 
   proc.stdout.on('data', onChunk);
   proc.stderr.on('data', onChunk);
   proc.on('close', code => {
+    if (session.orphanTimer) {
+      clearTimeout(session.orphanTimer);
+      session.orphanTimer = null;
+    }
     broadcastTermEvent(session, { type: 'exit', code: code ?? 0 });
     for (const res of session.clients) {
       try { res.end(); } catch {}
@@ -1084,13 +1088,28 @@ function resizeTerminalSession({ id = '', cols = 120, rows = 28 } = {}) {
 function closeTerminalSession({ id = '' } = {}) {
   const session = id ? termSessions.get(id) : null;
   if (session) {
+    if (session.orphanTimer) {
+      clearTimeout(session.orphanTimer);
+      session.orphanTimer = null;
+    }
     for (const res of session.clients) {
       try { res.end(); } catch {}
     }
     session.clients.clear();
     try { session.proc.stdin.end(); } catch {}
     const proc = session.proc;
-    const killTimer = setTimeout(() => { try { if (proc.exitCode === null && !proc.killed) proc.kill(); } catch {} }, 180);
+    const pid = proc?.pid;
+    const killTimer = setTimeout(() => {
+      try {
+        if (proc.exitCode === null && !proc.killed) {
+          if (process.platform === 'win32' && pid) {
+            spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+          } else {
+            proc.kill();
+          }
+        }
+      } catch {}
+    }, 220);
     killTimer.unref?.();
     termSessions.delete(id);
   }
@@ -1170,12 +1189,26 @@ const server = http.createServer(async (req, res) => {
         'Connection': 'keep-alive',
         'X-Accel-Buffering': 'no',
       });
+      if (session.orphanTimer) {
+        clearTimeout(session.orphanTimer);
+        session.orphanTimer = null;
+      }
       if (session.replayBuf) {
         res.write(`data: ${JSON.stringify({ type: 'data', data: session.replayBuf })}\n\n`);
       }
       session.clients.add(res);
       req.on('close', () => {
         session.clients.delete(res);
+        // Reap abandoned sessions (e.g. after browser refresh/close) if no client reconnects within 15s
+        if (session.clients.size === 0 && termSessions.get(id) === session && !session.orphanTimer) {
+          session.orphanTimer = setTimeout(() => {
+            session.orphanTimer = null;
+            if (session.clients.size === 0 && termSessions.get(id) === session) {
+              closeTerminalSession({ id });
+            }
+          }, 15000);
+          session.orphanTimer.unref?.();
+        }
       });
       return;
     }

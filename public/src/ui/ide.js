@@ -2798,6 +2798,13 @@ export function createIde(api) {
       });
 
       xterm.onData(inputData => {
+        if (term.exited) {
+          if (inputData === '\r' || inputData === '\n') {
+            const shellToRestart = term.shell;
+            closeTerminalTab(term.id, { restartShell: shellToRestart });
+          }
+          return;
+        }
         sendTermWrite(term, inputData);
       });
 
@@ -2809,7 +2816,11 @@ export function createIde(api) {
           if (msg.type === 'data' && msg.data) {
             xterm.write(msg.data);
           } else if (msg.type === 'exit') {
-            xterm.write(`\r\n\x1b[90m[Process exited with code ${msg.code ?? 0}]\x1b[0m\r\n`);
+            term.exited = true;
+            try { es.close(); } catch {}
+            const codeNum = msg.code ?? 0;
+            const hexHint = codeNum > 65535 ? ` (0x${(codeNum >>> 0).toString(16).toUpperCase()})` : '';
+            xterm.write(`\r\n\x1b[90m[Process exited with code ${codeNum}${hexHint} — press Enter to restart shell]\x1b[0m\r\n`);
           }
         } catch {}
       };
@@ -2837,7 +2848,7 @@ export function createIde(api) {
     });
   }
 
-  async function closeTerminalTab(id) {
+  async function closeTerminalTab(id, { restartShell = '' } = {}) {
     const idx = termSessionsList.findIndex(t => t.id === id);
     if (idx < 0) return;
     const [removed] = termSessionsList.splice(idx, 1);
@@ -2849,8 +2860,8 @@ export function createIde(api) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id }),
     }).catch(() => {});
-    if (!termSessionsList.length) {
-      await createTerminalTab();
+    if (restartShell || !termSessionsList.length) {
+      await createTerminalTab(restartShell);
       return;
     }
     if (activeTermId === id) {
@@ -2859,6 +2870,15 @@ export function createIde(api) {
       renderTerminalTabs();
     }
   }
+
+  window.addEventListener('pagehide', () => {
+    for (const t of termSessionsList) {
+      try { t.es?.close(); } catch {}
+      try {
+        navigator.sendBeacon?.('/api/terminal/close', new Blob([JSON.stringify({ id: t.id })], { type: 'application/json' }));
+      } catch {}
+    }
+  });
 
   function updateTermCwd(nextCwd) {
     if (!nextCwd) return;
