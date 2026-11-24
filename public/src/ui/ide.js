@@ -2751,6 +2751,7 @@ export function createIde(api) {
         fontFamily: '"Cascadia Mono", Consolas, "Segoe UI Emoji", monospace',
         fontSize: termOpts.fontSize,
         lineHeight: 1,
+        minimumContrastRatio: 4.5,
         scrollback: 5000,
         convertEol: false,
         allowProposedApi: true,
