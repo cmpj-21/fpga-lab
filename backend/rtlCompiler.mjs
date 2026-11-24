@@ -438,7 +438,7 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
   // Reject JS reserved keywords or internal runner names as hardware identifiers
   const JS_RESERVED = new Set(['break','case','catch','class','const','continue','debugger','default','delete','do','else','enum','export','extends','false','finally','for','function','if','import','in','instanceof','let','new','null','return','super','switch','this','throw','true','try','typeof','var','void','while','with','yield','await','arguments','eval','Math','Number','Uint32Array','meta','reset','setInput','setBeepPort','runBatch']);
   for (const name of symWidths.keys()) {
-    if (JS_RESERVED.has(name) || name.startsWith('_rt_') || name.startsWith('_next_')) return null;
+    if (JS_RESERVED.has(name) || name.startsWith('_rt_') || name.startsWith('_next_') || name.startsWith('_st_')) return null;
   }
 
   // Parse remaining `assign dst = rhs;` and `always @* dst = rhs;`
@@ -525,9 +525,20 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
   if (clkPort) lines.push(`  let ${clkPort} = 0;`);
   for (const ff of ffNodes) {
     const init = initVals.has(ff.dst) ? initVals.get(ff.dst) : 0;
-    lines.push(`  let ${ff.dst} = ${init};`);
+    lines.push(`  let _st_${ff.dst} = ${init};`);
   }
   const scalarOutputs = outputPorts.filter(p => p.width === 1);
+  // Classify combinational nodes that transitively depend on flip-flops vs pure input/constant logic
+  // (primary inputs never change within a single stepping chunk, so pure input logic can be hoisted out of hot loops)
+  const dependsOnState = new Set(ffSet);
+  for (const n of sortedComb) {
+    for (const d of n.deps) {
+      if (dependsOnState.has(d)) {
+        dependsOnState.add(n.dst);
+        break;
+      }
+    }
+  }
   const collectCombCone = seedNames => {
     const needed = new Set();
     const stack = [...seedNames];
@@ -540,10 +551,15 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
     }
     return sortedComb.filter(n => needed.has(n.dst));
   };
+  const emitNodes = (nodes, indent) => nodes.map(n => `${indent}${n.emit().replace(/\n/g, `\n${indent}`)}`).join('\n');
   const ffSeedNames = [];
   for (const ff of ffNodes) for (const d of ff.deps) ffSeedNames.push(d);
   const ffCombNodes = collectCombCone(ffSeedNames);
-  const combEmitNoAudio = ffCombNodes.map(n => `      ${n.emit().replace(/\n/g, '\n      ')}`).join('\n');
+  const ffInvNodes = ffCombNodes.filter(n => !dependsOnState.has(n.dst));
+  const ffDynNodes = ffCombNodes.filter(n => dependsOnState.has(n.dst));
+  const ffLoadEmit = indent => ffNodes.map(ff => `${indent}let ${ff.dst} = _st_${ff.dst};`).join('\n');
+  const ffStoreEmit = indent => ffNodes.map(ff => `${indent}_st_${ff.dst} = ${ff.dst};`).join('\n');
+  const ffReadOnlyEmit = indent => ffNodes.map(ff => `${indent}const ${ff.dst} = _st_${ff.dst};`).join('\n');
   const nextEmit = ffNodes.map(ff => {
     const wInfo = symWidths.get(ff.dst);
     const expr = ff.rst ? `(${ff.rst} ? (${ff.rstCode}) : (${ff.rhsCode}))` : ff.rhsCode;
@@ -555,6 +571,7 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
 
   lines.push(`  const _rt_snap = new Uint32Array(${observedSignals.length});`);
   lines.push(`  function _rt_evalTo(_rt_dst) {`);
+  if (ffNodes.length) lines.push(ffReadOnlyEmit('    '));
   lines.push(combEmitTop);
   lines.push(snapWrites);
   lines.push(`  }`);
@@ -562,7 +579,7 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
   lines.push(`  function reset() {`);
   for (const ff of ffNodes) {
     const init = initVals.has(ff.dst) ? initVals.get(ff.dst) : 0;
-    lines.push(`    ${ff.dst} = ${init};`);
+    lines.push(`    _st_${ff.dst} = ${init};`);
   }
   lines.push(`  }`);
 
@@ -575,11 +592,14 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
   lines.push(`  function setBeepPort(_rt_name) { _rt_beepName = _rt_name || ''; }`);
 
   lines.push(`  function _rt_stepNoAudio(_rt_n) {`);
+  if (ffNodes.length) lines.push(ffLoadEmit('    '));
+  if (ffInvNodes.length) lines.push(emitNodes(ffInvNodes, '    '));
   lines.push(`    for (let _rt_k = 0; _rt_k < _rt_n; _rt_k++) {`);
-  lines.push(combEmitNoAudio);
+  if (ffDynNodes.length) lines.push(emitNodes(ffDynNodes, '      '));
   lines.push(nextEmit);
   lines.push(commitEmit);
   lines.push(`    }`);
+  if (ffNodes.length) lines.push(ffStoreEmit('    '));
   lines.push(`  }`);
 
   const useSpecializedAudio = scalarOutputs.length > 0 && scalarOutputs.length <= 16;
@@ -587,17 +607,21 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
     lines.push(`  const _rt_audioSteppers = [`);
     for (const p of scalarOutputs) {
       const coneNodes = collectCombCone([...ffSeedNames, p.name]);
-      const audioCombEmit = coneNodes.map(n => `        ${n.emit().replace(/\n/g, '\n        ')}`).join('\n');
+      const invNodes = coneNodes.filter(n => !dependsOnState.has(n.dst));
+      const dynNodes = coneNodes.filter(n => dependsOnState.has(n.dst));
       const nextEmitIndented = nextEmit.replace(/^/gm, '  ');
       const commitEmitIndented = commitEmit.replace(/^/gm, '  ');
       lines.push(`    function(_rt_n) {`);
       lines.push(`      let _rt_beepSum = 0;`);
+      if (ffNodes.length) lines.push(ffLoadEmit('      '));
+      if (invNodes.length) lines.push(emitNodes(invNodes, '      '));
       lines.push(`      for (let _rt_k = 0; _rt_k < _rt_n; _rt_k++) {`);
-      lines.push(audioCombEmit);
+      if (dynNodes.length) lines.push(emitNodes(dynNodes, '        '));
       lines.push(`        _rt_beepSum += ${p.name};`);
       lines.push(nextEmitIndented);
       lines.push(commitEmitIndented);
       lines.push(`      }`);
+      if (ffNodes.length) lines.push(ffStoreEmit('      '));
       lines.push(`      return _rt_beepSum;`);
       lines.push(`    },`);
     }
@@ -610,11 +634,14 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
     lines.push(`  }`);
   } else {
     const allHotNodes = collectCombCone([...ffSeedNames, ...scalarOutputs.map(p => p.name)]);
-    const combEmitAll = allHotNodes.map(n => `      ${n.emit().replace(/\n/g, '\n      ')}`).join('\n');
+    const allInvNodes = allHotNodes.filter(n => !dependsOnState.has(n.dst));
+    const allDynNodes = allHotNodes.filter(n => dependsOnState.has(n.dst));
     lines.push(`  function _rt_stepWithAudio(_rt_n, _rt_beepIdx) {`);
     lines.push(`    let _rt_beepSum = 0;`);
+    if (ffNodes.length) lines.push(ffLoadEmit('    '));
+    if (allInvNodes.length) lines.push(emitNodes(allInvNodes, '    '));
     lines.push(`    for (let _rt_k = 0; _rt_k < _rt_n; _rt_k++) {`);
-    lines.push(combEmitAll);
+    if (allDynNodes.length) lines.push(emitNodes(allDynNodes, '      '));
     if (scalarOutputs.length > 1) {
       lines.push(`      let _rt_b = 0;`);
       lines.push(`      switch (_rt_beepIdx) {`);
@@ -625,6 +652,7 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
     lines.push(nextEmit);
     lines.push(commitEmit);
     lines.push(`    }`);
+    if (ffNodes.length) lines.push(ffStoreEmit('    '));
     lines.push(`    return _rt_beepSum;`);
     lines.push(`  }`);
   }

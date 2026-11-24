@@ -858,10 +858,10 @@ function runRtlStepBatch(cycles, wallDt = 0) {
   }
   if (cycles >= 10000) {
     const batchMs = performance.now() - batchStart;
-    if (batchMs > 10.5) {
-      rtlAdaptiveMaxCycles = Math.max(50000, Math.round(rtlAdaptiveMaxCycles * Math.min(0.85, 9.5 / batchMs)));
-    } else if (batchMs < 6.5 && cycles >= rtlAdaptiveMaxCycles * 0.8) {
-      rtlAdaptiveMaxCycles = Math.min(2500000, Math.round(rtlAdaptiveMaxCycles * 1.15));
+    if (batchMs > 13.5) {
+      rtlAdaptiveMaxCycles = Math.max(100000, Math.round(rtlAdaptiveMaxCycles * Math.min(0.88, 12.0 / batchMs)));
+    } else if (batchMs < 10.5 && cycles >= rtlAdaptiveMaxCycles * 0.75) {
+      rtlAdaptiveMaxCycles = Math.min(3000000, Math.round(rtlAdaptiveMaxCycles * 1.18));
     }
   }
 }
@@ -3186,15 +3186,16 @@ function frame(now) {
   if (S.running) {
     const rate = 10 ** ((S.speed - 55) / 25);
     if (rtlRunner && !S.vcd) {
-      const frameDt = Math.min(0.025, dt);
+      const frameDt = Math.min(0.035, dt);
       const stepWall = frameDt * rate;
-      const cap = Math.max(50000, rtlAdaptiveMaxCycles);
+      const cap = Math.max(100000, rtlAdaptiveMaxCycles);
       accumulator += S.clkHz * stepWall;
       accumulator = Math.min(accumulator, cap * 2);
       const cycles = Math.min(cap, Math.floor(accumulator));
       if (Number.isInteger(cycles) && cycles > 0) {
         accumulator = Math.max(0, accumulator - cycles);
-        const audioDt = S.clkHz > 0 ? Math.min(0.04, (cycles / S.clkHz) / Math.max(0.05, rate)) : frameDt;
+        const simAudioDt = S.clkHz > 0 ? (cycles / S.clkHz) / Math.max(0.05, rate) : frameDt;
+        const audioDt = Math.min(0.05, Math.max(dt, simAudioDt));
         runRtlStepBatch(cycles, audioDt);
       }
     } else {

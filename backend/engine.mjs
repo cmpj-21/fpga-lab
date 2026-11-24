@@ -351,7 +351,7 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
     const runFlags = [`--std=${standard}`, '-fsynopsys', '-fexplicit', `--work=${topLibrary}`, `--workdir=${cacheDir}`, `-P${cacheDir}`];
     let rtlCode = null;
     if (!sdf) {
-      const cachedRtlPath = path.join(cacheDir, 'rtl-v3.mjs');
+      const cachedRtlPath = path.join(cacheDir, 'rtl-v4.mjs');
       if (!genericArgs.length) {
         rtlCode = await fs.readFile(cachedRtlPath, 'utf8').catch(() => null);
       }
