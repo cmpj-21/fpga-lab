@@ -2819,8 +2819,12 @@ export function createIde(api) {
             term.exited = true;
             try { es.close(); } catch {}
             const codeNum = msg.code ?? 0;
+            if (codeNum === 0) {
+              closeTerminalTab(term.id);
+              return;
+            }
             const hexHint = codeNum > 65535 ? ` (0x${(codeNum >>> 0).toString(16).toUpperCase()})` : '';
-            xterm.write(`\r\n\x1b[90m[Process exited with code ${codeNum}${hexHint} — press Enter to restart shell]\x1b[0m\r\n`);
+            xterm.write(`\r\n\x1b[90m[Shell crashed with code ${codeNum}${hexHint} — press Enter to restart]\x1b[0m\r\n`);
           }
         } catch {}
       };
