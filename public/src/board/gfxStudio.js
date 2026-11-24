@@ -1777,6 +1777,8 @@ export function createGfxStudio(ctx) {
     }
   }
 
+  const tmpAutoFocusCenter = new THREE.Vector3();
+  const tmpPostBufSize = new THREE.Vector2();
   function updateCameraOptics() {
     controls.autoRotateSpeed = gfx.orbitSpeed;
     const dist = Math.max(10, camera.position.distanceTo(controls.target));
@@ -1803,7 +1805,7 @@ export function createGfxStudio(ctx) {
       if (ctx.getSelectedBox) {
         const selBox = ctx.getSelectedBox();
         if (selBox && !selBox.isEmpty()) {
-          gfx.dofFocus = Math.round(camera.position.distanceTo(selBox.getCenter(new THREE.Vector3())));
+          gfx.dofFocus = Math.round(camera.position.distanceTo(selBox.getCenter(tmpAutoFocusCenter)));
           return;
         }
       }
@@ -1867,7 +1869,7 @@ export function createGfxStudio(ctx) {
       return;
     }
 
-    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const size = renderer.getDrawingBufferSize(tmpPostBufSize);
     ensureRenderTargets(size.x, size.y);
 
     // 1. Render Scene to HDR RenderTarget (4x hardware MSAA when depth-buffer FX are off, depth target otherwise)

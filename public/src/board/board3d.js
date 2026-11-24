@@ -425,25 +425,29 @@ export async function createBoard3D(canvas, opts = {}) {
       const target = state.power ? (isPwr ? 1 : led.target) : 0;
       led.duty = isPwr ? target : (tauMs > 0 ? led.duty + (target - led.duty) * decayAlpha : target);
       if (led.duty < 1e-4) led.duty = 0;
-      const lit = state.power ? (isPwr ? 1 : tdmCurve(led.duty)) : 0;
-      led.mesh.material.emissiveIntensity = lit * (.7 + state.glow * 2.4);
-      tmpColorA.setHex(isPwr ? 0x183520 : 0x491c20);
-      tmpColorB.setHex(isPwr ? 0x4fd577 : 0xf55f48);
-      led.mesh.material.color.lerpColors(tmpColorA, tmpColorB, Math.min(1, lit));
+      if (!studio) {
+        const lit = state.power ? (isPwr ? 1 : tdmCurve(led.duty)) : 0;
+        led.mesh.material.emissiveIntensity = lit * (.7 + state.glow * 2.4);
+        tmpColorA.setHex(isPwr ? 0x183520 : 0x491c20);
+        tmpColorB.setHex(isPwr ? 0x4fd577 : 0xf55f48);
+        led.mesh.material.color.lerpColors(tmpColorA, tmpColorB, Math.min(1, lit));
+      }
     }
     for (const digit of segments) {
       for (let bit = 0; bit < 8; bit++) {
         const target = state.power ? digit.target[bit] : 0;
         const duty = tauMs > 0 ? digit.duty[bit] + (target - digit.duty[bit]) * decayAlpha : target;
         digit.duty[bit] = duty < 1e-4 ? 0 : duty;
-        const lit = state.power ? tdmCurve(digit.duty[bit]) : 0;
-        const material = digit.meshes[bit].material;
-        material.emissiveIntensity = lit * (1 + state.glow * 1.7);
-        tmpColorA.setHex(segDefaultOffHex);
-        tmpColorB.setHex(0xe84e3c);
-        material.color.lerpColors(tmpColorA, tmpColorB, Math.min(1, lit));
-        material.roughness = displayFaceRough + (0.35 - displayFaceRough) * Math.min(1, lit);
-        material.envMapIntensity = displayFaceEnv + (1.0 - displayFaceEnv) * Math.min(1, lit);
+        if (!studio) {
+          const lit = state.power ? tdmCurve(digit.duty[bit]) : 0;
+          const material = digit.meshes[bit].material;
+          material.emissiveIntensity = lit * (1 + state.glow * 1.7);
+          tmpColorA.setHex(segDefaultOffHex);
+          tmpColorB.setHex(0xe84e3c);
+          material.color.lerpColors(tmpColorA, tmpColorB, Math.min(1, lit));
+          material.roughness = displayFaceRough + (0.35 - displayFaceRough) * Math.min(1, lit);
+          material.envMapIntensity = displayFaceEnv + (1.0 - displayFaceEnv) * Math.min(1, lit);
+        }
       }
     }
     studio?.updateLedsAndSegments(now, state);

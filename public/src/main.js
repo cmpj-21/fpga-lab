@@ -1361,7 +1361,7 @@ function consume(result, stepFs = 0, skipLegacyBuzzer = false) {
     lastWaveDraw = now;
     if (S.running || manualStepping) {
       if (S.waveMode === 'follow' && S.time > 0) waves.follow(S.time, autoFollowSpan());
-      else if (S.waveMode === 'fit') waves.fit();
+      else if (S.waveMode === 'fit') waves.fit(false);
     }
     waves.draw();
   }
@@ -2785,6 +2785,7 @@ function wire() {
     if ($('#homeView') && !$('#homeView').classList.contains('hidden')) return false;
     if (!$('#themePopover')?.classList.contains('hidden')) return false;
     if (document.querySelector('.ts-pop, .tcp-pop, .menu-pop:not(.hidden), .ctx-menu:not(.hidden)')) return false;
+    if (isTextTypingTarget(target) || isTextTypingTarget(document.activeElement)) return false;
     if (target?.closest?.('.virtual-inputs input')) return false;
     return Boolean(getHoveredSimZone());
   };
