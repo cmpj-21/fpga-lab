@@ -1334,7 +1334,8 @@ function consume(result, stepFs = 0, skipLegacyBuzzer = false) {
   const precMult = 10 ** (15 + (S.sim?.precision ?? -15));
   let prevSampleTimeFs = burstStartTimeFs;
   let totalDisplayWeight = 0;
-  if (S.running && list.length > 0) {
+  const usePov = S.running && appSettings.displayPovEnabled !== false;
+  if (usePov && list.length > 0) {
     segEnergyAccum.fill(0);
     ledEnergyAccum.fill(0);
   }
@@ -1344,7 +1345,7 @@ function consume(result, stepFs = 0, skipLegacyBuzzer = false) {
     S.time = sampleTimeFs;
     S.sim.signals.forEach((signal, i) => S.values.set(signal.short, sample.values[i]));
     waves.push(S.time, S.values);
-    if (S.running) {
+    if (usePov) {
       const dt = sampleTimeFs - prevSampleTimeFs;
       prevSampleTimeFs = sampleTimeFs;
       const w = dt > 0 ? dt : (stepFs > 0 ? stepFs : 1);
@@ -1354,7 +1355,7 @@ function consume(result, stepFs = 0, skipLegacyBuzzer = false) {
     uartSample();
   }
   if (list.length > 0 && !skipLegacyBuzzer) updateBuzzerFromSamples(list, burstStartCycles, burstStartTimeFs, stepFs);
-  if (S.running && list.length > 0 && totalDisplayWeight > 0) {
+  if (usePov && list.length > 0 && totalDisplayWeight > 0) {
     commitDisplayIntegration(totalDisplayWeight, false);
     sampleNonDisplayOutputs(true);
   } else if (list.length > 0) {
@@ -2111,7 +2112,7 @@ function stepPlayback(count) {
   let prevTimeFs = S.time;
   let totalDisplayWeight = 0;
   let stepped = 0;
-  const integrate = S.running && count > 1;
+  const integrate = S.running && count > 1 && appSettings.displayPovEnabled !== false;
   if (integrate) {
     segEnergyAccum.fill(0);
     ledEnergyAccum.fill(0);
@@ -2342,10 +2343,15 @@ function applyAllSettings({ persist = true } = {}) {
   });
   ide?.setWatchExternalEnabled?.(appSettings.watchExternalFiles !== false);
   audio.setVolume(appSettings.masterVolume);
+  const povOn = appSettings.displayPovEnabled !== false;
   board?.setDisplayOptics?.({
-    persistenceMs: appSettings.displayPersistenceMs ?? 28,
-    tdmPeakBoost: appSettings.tdmPeakBoost !== false,
+    persistenceMs: povOn ? (appSettings.displayPersistenceMs ?? 28) : 0,
+    tdmPeakBoost: povOn && appSettings.tdmPeakBoost !== false,
   });
+  if (!povOn) {
+    clearMuxDisplayState();
+    sampleOutputs();
+  }
   syncSettingsUI();
   if (persist) persistAppState({ settings: appSettings });
 }
@@ -2521,12 +2527,21 @@ function syncSettingsUI() {
     $('#setBoardGlow').value = $('#glow').value;
     if ($('#setGlowVal')) $('#setGlowVal').textContent = `${$('#glow').value}%`;
   }
+  const povOn = appSettings.displayPovEnabled !== false;
+  if ($('#setDisplayPov')) $('#setDisplayPov').checked = povOn;
+  if ($('#tglPov')) $('#tglPov').checked = povOn;
   if ($('#setTdmPersistence')) {
     const tau = Number.isFinite(Number(appSettings.displayPersistenceMs)) ? Number(appSettings.displayPersistenceMs) : 28;
     $('#setTdmPersistence').value = String(tau);
-    if ($('#setTdmTauVal')) $('#setTdmTauVal').textContent = tau <= 0 ? 'Instant' : `${tau} ms`;
+    $('#setTdmPersistence').disabled = !povOn;
+    if ($('#setTdmTauVal')) $('#setTdmTauVal').textContent = !povOn ? 'Raw FPS' : (tau <= 0 ? 'Instant' : `${tau} ms`);
   }
-  if ($('#setTdmPeakBoost')) $('#setTdmPeakBoost').checked = appSettings.tdmPeakBoost !== false;
+  if ($('#setTdmPeakBoost')) {
+    $('#setTdmPeakBoost').checked = appSettings.tdmPeakBoost !== false;
+    $('#setTdmPeakBoost').disabled = !povOn;
+  }
+  $('#setTdmTauRow')?.style.setProperty('opacity', povOn ? '1' : '0.52');
+  $('#setTdmPeakRow')?.style.setProperty('opacity', povOn ? '1' : '0.52');
 }
 function wireSettingsAndThemes() {
   $$('.set-nav-btn').forEach(btn => btn.addEventListener('click', () => switchSettingsTab(btn.dataset.settab)));
@@ -2689,6 +2704,15 @@ function wireSettingsAndThemes() {
     if ($('#glow')) { $('#glow').value = e.target.value; $('#glow').dispatchEvent(new Event('input')); }
     if ($('#setGlowVal')) $('#setGlowVal').textContent = `${e.target.value}%`;
   });
+  const onPovToggle = checked => {
+    appSettings.displayPovEnabled = !!checked;
+    applyAllSettings();
+    toast(appSettings.displayPovEnabled
+      ? 'Display mode: Persistence of Vision (PoV ON)'
+      : 'Display mode: Raw FPS (per-frame snapshot)');
+  };
+  $('#setDisplayPov')?.addEventListener('change', e => onPovToggle(e.target.checked));
+  $('#tglPov')?.addEventListener('change', e => onPovToggle(e.target.checked));
   $('#setTdmPersistence')?.addEventListener('input', e => {
     appSettings.displayPersistenceMs = Number(e.target.value);
     applyAllSettings();
@@ -3282,7 +3306,7 @@ async function boot() {
   window.addEventListener('pointerdown', unlockAudio, { passive: true });
   window.addEventListener('keydown', unlockAudio, { passive: true });
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
-  try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { trackUiAction('3D', $('#view3d'), `${pressed ? 'press' : 'release'} ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.65); board.setDisplayOptics?.({ persistenceMs: appSettings.displayPersistenceMs ?? 28, tdmPeakBoost: appSettings.tdmPeakBoost !== false }); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
+  try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { trackUiAction('3D', $('#view3d'), `${pressed ? 'press' : 'release'} ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.65); const initPov = appSettings.displayPovEnabled !== false; board.setDisplayOptics?.({ persistenceMs: initPov ? (appSettings.displayPersistenceMs ?? 28) : 0, tdmPeakBoost: initPov && appSettings.tdmPeakBoost !== false }); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames'), $('#waveScrollTrack'), $('#waveScrollThumb'));
   ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, restartSimulation, restoreSavedCompileState, renderSources, openTools, openBottomTab, syncNavigation, projectData, saveProject, persistAppState, prepareExit, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations, reloadQsfText, getHdlRoot: () => currentHdlRoot, openSettings: tab => openSettingsModal(tab), toggleScheme });
   applyTheme(activeThemeId);

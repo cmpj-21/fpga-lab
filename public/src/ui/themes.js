@@ -919,6 +919,7 @@ export const DEFAULT_SETTINGS = {
   termCursorBlink: true,
   watchExternalFiles: true,
   masterVolume: 50,
+  displayPovEnabled: true,
   displayPersistenceMs: 28,
   tdmPeakBoost: true,
 };

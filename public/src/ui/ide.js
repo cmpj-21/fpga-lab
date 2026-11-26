@@ -1,6 +1,7 @@
 // IDE shell controller: resizable panes, multi-tab VHDL code editor, problems diagnostics, menus and status bar.
 import { CodeEditor, renderMarkdownHtml } from './editor.js';
 import { DEMO_SRC, DEMO_TOP } from './demo.js';
+import { generateBoardReadme, DEFAULT_BOARD_ID } from '../board/boardReadme.js';
 import { Terminal } from '/vendor/xterm.mjs?v=2';
 
 const $ = selector => document.querySelector(selector);
@@ -2200,7 +2201,7 @@ export function createIde(api) {
     await executeNativeExit();
   }
   window.__traceRequestClose = requestAppClose;
-  async function launchTemplateProject({ name, entity, standard = '08', templateKind = 'board_io', extraFiles = '' }) {
+  async function launchTemplateProject({ name, entity, standard = '08', templateKind = 'board_io', extraFiles = '', boardId = DEFAULT_BOARD_ID }) {
     const cleanEntity = entity.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
     if (!/^[a-z][a-z0-9_]*$/i.test(cleanEntity)) {
       api.toast('Top-level entity must start with a letter and use letters, digits or underscores.', 'err');
@@ -2256,6 +2257,30 @@ export function createIde(api) {
     for (const src of sources) openFile(src.name, { focus: false });
     openFile(fileName);
     await api.saveProjectToDisk?.({ dir: picked.dir, quiet: true });
+    // Auto-generate detailed board reference README.md inside newly created project folders (never overwrite an existing README.md)
+    try {
+      const checkRes = await fetch('/api/project/read-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir: picked.dir, rel: 'README.md' }),
+      });
+      if (!checkRes.ok) {
+        const readmeText = generateBoardReadme({
+          projectName: name || cleanEntity,
+          entity: cleanEntity,
+          standard,
+          boardId,
+          assignments,
+          files: sources.map(s => s.name),
+        });
+        await fetch('/api/project/write-file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dir: picked.dir, rel: 'README.md', content: readmeText }),
+        });
+        await refreshProjectTree();
+      }
+    } catch {}
     captureBaseline(name || cleanEntity, { prevRecents, prevStorage });
     api.syncProjectSaveUI?.();
     showHome(false);
@@ -3618,6 +3643,7 @@ export function createIde(api) {
         standard: $('#npStandard').value || '08',
         templateKind: $('#npTemplate').value || 'blank',
         extraFiles: $('#npExtraFiles')?.value || '',
+        boardId: $('#npBoard')?.value || DEFAULT_BOARD_ID,
       });
     });
     $$('[data-starter]').forEach(btn => btn.addEventListener('click', () => {
