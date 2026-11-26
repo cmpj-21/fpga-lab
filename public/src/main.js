@@ -1,5 +1,6 @@
 import { createBoard3D } from './board/board3d.js';
 import { NET_PIN, PIN_NET, LED_NETS, KEY_NETS, SEG_NETS, DIGIT_NETS, BOARD_PINOUT_GROUPS } from './board/boardDef.js';
+import { suggestPinAssignments } from './board/pinAutoMap.js';
 import { parseQsf } from './sim/qsf.js';
 import { parseGenerics } from './sim/generics.js';
 import { UartReceiver } from './sim/uart.js';
@@ -3015,6 +3016,19 @@ function wire() {
   $('#progDrop').onclick = () => $('#progFile').click(); $('#progFile').onchange = e => loadFiles([...e.target.files]).catch(importError);
   window.addEventListener('dragover', e => e.preventDefault()); window.addEventListener('drop', e => { e.preventDefault(); loadFiles([...e.dataTransfer.files]).catch(importError); });
   $('#libSearch').oninput = e => { const query = e.target.value.toLowerCase(); $$('.hdl-group').forEach(group => { let visible = false; group.querySelectorAll('.hdl-file').forEach(file => { const match = file.dataset.name.includes(query); file.hidden = !match; visible ||= match; }); group.hidden = !visible; if (query) group.classList.add('open'); }); };
+  $('#btnPinAutoMap')?.addEventListener('click', () => {
+    const ports = S.discoveredPorts?.length ? S.discoveredPorts : [];
+    if (!ports.length) return toast('Compile your design first so Trace can discover entity ports.', 'err');
+    const suggestions = suggestPinAssignments(ports, S.assignments);
+    if (!suggestions.length) return toast('All recognizable ports are already assigned (or no fuzzy match found).');
+    for (const s of suggestions) S.assignments.set(s.pin, s.portName);
+    saveProject();
+    if (S.vcd) { buildBindings(); renderPins(); sampleOutputs(); }
+    else { markDirty(); renderPins(); }
+    const summary = suggestions.map(s => `${s.label}→PIN_${s.pin}`).join(', ');
+    log(`Auto-mapped ${suggestions.length} pin(s) on RZ-EasyFPGA A2.2: ${summary}. Review in Pin Planner and Compile to apply.`);
+    toast(`Auto-mapped ${suggestions.length} pin${suggestions.length === 1 ? '' : 's'}. Review & Compile to apply.`, 'ok');
+  });
   $('#btnPinReset').onclick = () => { S.assignments.clear(); saveProject(); if (S.vcd) { buildBindings(); renderPins(); sampleOutputs(); } else { markDirty(); renderPins(); toast('Pin map reset. Click Compile to apply changes.'); } };
   $$('.key-btn').forEach(button => {
     const net = button.dataset.key === 'reset' ? 'reset_btn' : button.dataset.key.replace('key', 's');
@@ -3446,9 +3460,61 @@ function wire() {
   if ($('#btnTruthExport')) $('#btnTruthExport').onclick = exportTruthTable;
   window.addEventListener('pagehide', () => { flushState(true); flushActions(true); flushEvents(true); if (S.sim?.id) navigator.sendBeacon(`/api/sim/${S.sim.id}/close`, ''); });
 }
+let perfLastMs = 0;
+let perfLastCycles = 0;
+let perfLastSimFs = 0;
+let perfSmoothRatio = 0;
+let perfSmoothHz = 0;
+function resetPerfTelemetry() {
+  perfLastMs = 0;
+  perfLastCycles = S.cycles;
+  perfLastSimFs = S.time;
+  perfSmoothRatio = 0;
+  perfSmoothHz = 0;
+  const el = $('#roPerf');
+  if (el) { el.classList.add('hidden'); el.classList.remove('rt-ok', 'rt-slow'); el.textContent = ''; }
+}
+function formatEffFreq(hz) {
+  if (!Number.isFinite(hz) || hz <= 0) return '0 Hz';
+  if (hz >= 1e6) return `${(hz / 1e6).toFixed(1)} MHz`;
+  if (hz >= 1e3) return `${(hz / 1e3).toFixed(1)} kHz`;
+  return `${Math.round(hz)} Hz`;
+}
+function updatePerfTelemetry(now) {
+  const el = $('#roPerf');
+  if (!el) return;
+  if (!S.running || !S.sim || S.vcd) {
+    if (!el.classList.contains('hidden')) resetPerfTelemetry();
+    return;
+  }
+  if (!perfLastMs) {
+    perfLastMs = now;
+    perfLastCycles = S.cycles;
+    perfLastSimFs = S.time;
+    return;
+  }
+  const dtSec = (now - perfLastMs) / 1000;
+  if (dtSec < 0.25) return;
+  const dCycles = Math.max(0, S.cycles - perfLastCycles);
+  const dSimSec = Math.max(0, (S.time - perfLastSimFs) / 1e15);
+  perfLastMs = now;
+  perfLastCycles = S.cycles;
+  perfLastSimFs = S.time;
+  const instHz = dCycles / dtSec;
+  const instRatio = dSimSec / dtSec;
+  perfSmoothHz = perfSmoothHz > 0 ? perfSmoothHz * 0.55 + instHz * 0.45 : instHz;
+  perfSmoothRatio = perfSmoothRatio > 0 ? perfSmoothRatio * 0.55 + instRatio * 0.45 : instRatio;
+  const targetRate = 10 ** ((S.speed - 55) / 25);
+  const healthy = perfSmoothRatio >= targetRate * 0.88;
+  el.textContent = `${perfSmoothRatio.toFixed(2)}× · ${formatEffFreq(perfSmoothHz)}`;
+  el.title = `Effective speed: ${perfSmoothRatio.toFixed(2)}× real-time (${formatEffFreq(perfSmoothHz)} effective vs ${formatEffFreq(S.clkHz * targetRate)} target)`;
+  el.classList.remove('hidden');
+  el.classList.toggle('rt-ok', healthy);
+  el.classList.toggle('rt-slow', !healthy);
+}
 function frame(now) {
   requestAnimationFrame(frame); const dt = Math.max(0, Math.min(.1, (now - lastFrame) / 1000)); lastFrame = now;
-  if (now - lastDraw > 250) { $('#roFps').textContent = board ? Math.round(board.fps) : '—'; lastDraw = now; }
+  if (now - lastDraw > 250) { $('#roFps').textContent = board ? Math.round(board.fps) : '—'; updatePerfTelemetry(now); lastDraw = now; }
   if (S.running) {
     if (appSettings.displayPovEnabled === false) {
       if (multiDigitFrame) {
