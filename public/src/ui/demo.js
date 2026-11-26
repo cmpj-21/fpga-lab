@@ -101,12 +101,12 @@ begin
   with scan select dtube3 <= '0' when "10", '1' when others;
   with scan select dtube4 <= '0' when "11", '1' when others;
 
-  -- multiplexed nibble
+  -- multiplexed nibble (dtube1/PIN_133 = rightmost LSB, dtube4/PIN_137 = leftmost MSB)
   with scan select nibble <=
-    count(15 downto 12) when "00",
-    count(11 downto 8)  when "01",
-    count(7 downto 4)   when "10",
-    count(3 downto 0)   when others;
+    count(3 downto 0)   when "00",
+    count(7 downto 4)   when "01",
+    count(11 downto 8)  when "10",
+    count(15 downto 12) when others;
 
   seven_seg <= "10000000" when s4 = '0' else hex_seg(nibble);
 

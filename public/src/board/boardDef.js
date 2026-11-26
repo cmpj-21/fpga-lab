@@ -20,7 +20,8 @@ export const PIN_NET = {
 };
 export const NET_PIN = Object.fromEntries(Object.entries(PIN_NET).map(([pin, net]) => [net, Number(pin)]));
 export const SEG_NETS = ['seg_a', 'seg_b', 'seg_c', 'seg_d', 'seg_e', 'seg_f', 'seg_g', 'seg_dp'];
-export const DIGIT_NETS = ['dtube1', 'dtube2', 'dtube3', 'dtube4'];
+// Physical left-to-right digit order on RZ-EasyFPGA A2.2 (PCB transistors Q4..Q1 = PIN_137..PIN_133)
+export const DIGIT_NETS = ['dtube4', 'dtube3', 'dtube2', 'dtube1'];
 export const LED_NETS = ['led1', 'led2', 'led3', 'led4'];
 export const KEY_NETS = ['s1', 's2', 's3', 's4'];
 
@@ -51,12 +52,12 @@ export const BOARD_PINOUT_GROUPS = [
     ],
   },
   {
-    group: '7-Segment Display Digits',
+    group: '7-Segment Display Digits (Left → Right: Q4..Q1)',
     pins: [
-      { pin: 133, net: 'dtube1', polarity: 'Active-Low', note: 'Digit 1 anode select (0 = enabled)' },
-      { pin: 135, net: 'dtube2', polarity: 'Active-Low', note: 'Digit 2 anode select (0 = enabled)' },
-      { pin: 136, net: 'dtube3', polarity: 'Active-Low', note: 'Digit 3 anode select (0 = enabled)' },
-      { pin: 137, net: 'dtube4', polarity: 'Active-Low', note: 'Digit 4 anode select (0 = enabled)' },
+      { pin: 137, net: 'dtube4', polarity: 'Active-Low', note: 'Leftmost digit (Q4 / MSB / thousands, 0 = enabled)' },
+      { pin: 136, net: 'dtube3', polarity: 'Active-Low', note: '2nd digit from left (Q3 / hundreds, 0 = enabled)' },
+      { pin: 135, net: 'dtube2', polarity: 'Active-Low', note: '3rd digit from left (Q2 / tens, 0 = enabled)' },
+      { pin: 133, net: 'dtube1', polarity: 'Active-Low', note: 'Rightmost digit (Q1 / LSB / ones, 0 = enabled)' },
     ],
   },
   {
@@ -132,11 +133,11 @@ export const BOARD_PARTS = {
   led3: { id: 'led3', group: 'led3', title: 'User LED 3', part: '0603 Red SMD · LED3', category: 'User Output', nets: ['led3'], pins: [85], note: 'Active-low user indicator (0 = lit, 1 = dark)' },
   led4: { id: 'led4', group: 'led4', title: 'User LED 4', part: '0603 Red SMD · LED4', category: 'User Output', nets: ['led4'], pins: [84], note: 'Active-low user indicator (0 = lit, 1 = dark)' },
   pwrled: { id: 'pwrled', group: 'pwrled', title: 'Power Indicator LED', part: '0603 Green SMD · PWR', category: 'Power', nets: [], pins: [], note: '3.3V power rail status indicator' },
-  display: { id: 'display', group: 'display', title: '4-Digit 7-Segment Display', part: 'Multiplexed Red LED · DS1', category: 'User Output', nets: [...DIGIT_NETS, ...SEG_NETS], pins: [133, 135, 136, 137, 128, 121, 125, 129, 132, 126, 124, 127], note: 'Active-low common-anode digits (dtube1..4) & segments (seg_a..dp)' },
-  dtube1: { id: 'dtube1', group: 'display', subMesh: 'dtube_touch_0', title: '7-Seg Digit 1 (DTUBE1)', part: 'Digit 1 Anode · Pin 133', category: 'User Output', nets: ['dtube1', ...SEG_NETS], pins: [133, 128, 121, 125, 129, 132, 126, 124, 127], note: 'Active-low digit 1 select (Pin 133) + shared segment bus (seg_a..dp)' },
-  dtube2: { id: 'dtube2', group: 'display', subMesh: 'dtube_touch_1', title: '7-Seg Digit 2 (DTUBE2)', part: 'Digit 2 Anode · Pin 135', category: 'User Output', nets: ['dtube2', ...SEG_NETS], pins: [135, 128, 121, 125, 129, 132, 126, 124, 127], note: 'Active-low digit 2 select (Pin 135) + shared segment bus (seg_a..dp)' },
-  dtube3: { id: 'dtube3', group: 'display', subMesh: 'dtube_touch_2', title: '7-Seg Digit 3 (DTUBE3)', part: 'Digit 3 Anode · Pin 136', category: 'User Output', nets: ['dtube3', ...SEG_NETS], pins: [136, 128, 121, 125, 129, 132, 126, 124, 127], note: 'Active-low digit 3 select (Pin 136) + shared segment bus (seg_a..dp)' },
-  dtube4: { id: 'dtube4', group: 'display', subMesh: 'dtube_touch_3', title: '7-Seg Digit 4 (DTUBE4)', part: 'Digit 4 Anode · Pin 137', category: 'User Output', nets: ['dtube4', ...SEG_NETS], pins: [137, 128, 121, 125, 129, 132, 126, 124, 127], note: 'Active-low digit 4 select (Pin 137) + shared segment bus (seg_a..dp)' },
+  display: { id: 'display', group: 'display', title: '4-Digit 7-Segment Display', part: 'Multiplexed Red LED · DS1', category: 'User Output', nets: [...DIGIT_NETS, ...SEG_NETS], pins: [137, 136, 135, 133, 128, 121, 125, 129, 132, 126, 124, 127], note: 'Active-low common-anode digits Left→Right: dtube4(137)..dtube1(133) & segments (seg_a..dp)' },
+  dtube4: { id: 'dtube4', group: 'display', subMesh: 'dtube_touch_0', title: '7-Seg Leftmost Digit (DTUBE4 · Q4)', part: 'Leftmost Anode · Pin 137', category: 'User Output', nets: ['dtube4', ...SEG_NETS], pins: [137, 128, 121, 125, 129, 132, 126, 124, 127], note: 'Active-low leftmost digit select (Q4 / Pin 137) + shared segment bus (seg_a..dp)' },
+  dtube3: { id: 'dtube3', group: 'display', subMesh: 'dtube_touch_1', title: '7-Seg 2nd-Left Digit (DTUBE3 · Q3)', part: '2nd-Left Anode · Pin 136', category: 'User Output', nets: ['dtube3', ...SEG_NETS], pins: [136, 128, 121, 125, 129, 132, 126, 124, 127], note: 'Active-low 2nd-from-left digit select (Q3 / Pin 136) + shared segment bus (seg_a..dp)' },
+  dtube2: { id: 'dtube2', group: 'display', subMesh: 'dtube_touch_2', title: '7-Seg 3rd-Left Digit (DTUBE2 · Q2)', part: '3rd-Left Anode · Pin 135', category: 'User Output', nets: ['dtube2', ...SEG_NETS], pins: [135, 128, 121, 125, 129, 132, 126, 124, 127], note: 'Active-low 3rd-from-left digit select (Q2 / Pin 135) + shared segment bus (seg_a..dp)' },
+  dtube1: { id: 'dtube1', group: 'display', subMesh: 'dtube_touch_3', title: '7-Seg Rightmost Digit (DTUBE1 · Q1)', part: 'Rightmost Anode · Pin 133', category: 'User Output', nets: ['dtube1', ...SEG_NETS], pins: [133, 128, 121, 125, 129, 132, 126, 124, 127], note: 'Active-low rightmost digit select (Q1 / Pin 133) + shared segment bus (seg_a..dp)' },
   buzzer: { id: 'buzzer', group: 'buzzer', title: 'Piezo Buzzer', part: 'Magnetic Transducer · BZ1', category: 'User Output', nets: ['beep'], pins: [110], note: 'Active-high audio buzzer transducer → Pin 110 (beep)' },
   ir: { id: 'ir', group: 'ir', title: 'Infrared Receiver', part: '38 kHz Demodulator · U8', category: 'Peripheral', nets: ['ir_rx'], pins: [100], note: '38 kHz IR remote receiver module → Pin 100 (ir_rx)' },
   trim: { id: 'trim', group: 'trim', title: 'LCD Contrast Trimmer', part: '10kΩ Potentiometer · VR1', category: 'Analog / LCD', nets: [], pins: [], note: 'Adjusts V0 contrast voltage for the 1602/12864 LCD header' },

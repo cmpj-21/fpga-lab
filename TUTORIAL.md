@@ -306,7 +306,7 @@ These are the application's reference pin assignments, not a substitute for chec
 | Reset | 25 | `reset_btn` |
 | S1 / S2 / S3 / S4 | 88 / 89 / 90 / 91 | `s1` / `s2` / `s3` / `s4` |
 | LED1 / LED2 / LED3 / LED4 | 87 / 86 / 85 / 84 | `led1` / `led2` / `led3` / `led4` |
-| Display digit enables | 133 / 135 / 136 / 137 | `dtube1` / `dtube2` / `dtube3` / `dtube4` |
+| Display digit enables (Left → Right: Q4..Q1) | 137 / 136 / 135 / 133 | `dtube4` (leftmost) / `dtube3` / `dtube2` / `dtube1` (rightmost) |
 | Buzzer | 110 | `beep` |
 | UART transmit / receive | 114 / 115 | `uart_txd` / `uart_rxd` |
 | VGA HS / VS | 101 / 103 | `vga_hs` / `vga_vs` |

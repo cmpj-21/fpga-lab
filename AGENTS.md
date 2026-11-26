@@ -60,7 +60,7 @@ The board model is strictly referenced against the physical **RZ-EasyFPGA A2.2 (
 | **Tactile Keys** | `s1`, `s2`, `s3`, `s4` | **88, 89, 90, 91** | **Active-Low** (`0` = pressed, `1` = released) |
 | **DIP Switches** | `s1`, `s2`, `s3`, `s4` (shared) | **88, 89, 90, 91** | **Active-Low** (`0` = ON / Grounded, `1` = OFF / Open). Wired in parallel with tactile keys S1–S4. |
 | **User LEDs** | `led1`, `led2`, `led3`, `led4` | **87, 86, 85, 84** | **Active-Low** (`0` = ON, `1` = OFF) |
-| **7-Seg Digits** | `dtube1`, `dtube2`, `dtube3`, `dtube4` | **133, 135, 136, 137** | **Active-Low** (`0` = Enabled, `1` = Disabled) |
+| **7-Seg Digits** | `dtube4`, `dtube3`, `dtube2`, `dtube1` | **137, 136, 135, 133** | **Active-Low** (`0` = Enabled, `1` = Disabled). Physical PCB left-to-right order (`Q4`..`Q1`): `137` (`dtube4`, leftmost/MSB) → `136` (`dtube3`) → `135` (`dtube2`) → `133` (`dtube1`, rightmost/LSB). |
 | **7-Seg Segments**| `seg_a`..`seg_g`, `seg_dp` | **128, 121, 125, 129, 132, 126, 124, 127** | **Active-Low** (`0` = Lit, `1` = Dark) |
 | **Buzzer** | `beep` | **110** | **Active-High** (`1` = Sound on) |
 | **UART Interface** | `uart_txd`, `uart_rxd` | **114, 115** | Serial comms (3.3V TTL) |

@@ -73,9 +73,9 @@ export function generateBoardReadme({
   lines.push('');
   lines.push('> **Important Polarity Notes:**');
   lines.push('> - **Active-Low Inputs (`0` = pressed / ON, `1` = released / OFF):** `reset_btn` (`PIN_25`), tactile keys `s1`–`s4` (`PIN_88`–`PIN_91`), and 4-position DIP switches `DIP1`–`DIP4` (wired directly in parallel with `s1`–`s4` on the same pins `88`–`91`).');
-  lines.push('> - **Active-Low Outputs (`0` = ON / lit, `1` = OFF / dark):** User LEDs `led1`–`led4` (`PIN_87`–`PIN_84`), 7-segment digit selects `dtube1`–`dtube4` (`PIN_133`, `135`, `136`, `137`), and 7-segment cathodes `seg_a`–`seg_g`, `seg_dp` (`PIN_128`, `121`, `125`, `129`, `132`, `126`, `124`, `127`).');
+  lines.push('> - **Active-Low Outputs (`0` = ON / lit, `1` = OFF / dark):** User LEDs `led1`–`led4` (`PIN_87`–`PIN_84`), 7-segment digit selects `dtube4`–`dtube1` (`PIN_137`, `136`, `135`, `133` from **left to right**, PCB transistors `Q4`–`Q1`), and 7-segment cathodes `seg_a`–`seg_g`, `seg_dp` (`PIN_128`, `121`, `125`, `129`, `132`, `126`, `124`, `127`).');
   lines.push('> - **Active-High Output (`1` = sound on):** Piezo buzzer `beep` (`PIN_110`). Drive with a square wave (e.g., 500 Hz–4 kHz) for audible tones.');
-  lines.push('> - **Multiplexed 7-Segment Display:** All 4 digits share the 8 segment lines (`seg_a`..`seg_dp`). Scan `dtube1`–`dtube4` at ~1 kHz–4 kHz (e.g., 10–12 bit prescaler from the 50 MHz clock) for flicker-free persistence of vision.');
+  lines.push('> - **Multiplexed 7-Segment Display:** All 4 digits share the 8 segment lines (`seg_a`..`seg_dp`). Physical **left-to-right** order on the PCB is `PIN_137` (`dtube4`/Q4, leftmost/MSB) → `PIN_136` (`dtube3`/Q3) → `PIN_135` (`dtube2`/Q2) → `PIN_133` (`dtube1`/Q1, rightmost/LSB). Scan at ~1 kHz–4 kHz for flicker-free persistence of vision.');
   lines.push('> - **VGA DB15 Port:** Physical DB15 pins are `PIN_101` (`vga_hs`), `PIN_103` (`vga_vs`), `PIN_104` (`vga_b`), `PIN_105` (`vga_g`), and `PIN_106` (`vga_r`).');
   lines.push('');
 

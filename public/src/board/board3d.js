@@ -119,11 +119,13 @@ export async function createBoard3D(canvas, opts = {}) {
   }
   if (groups.display) {
     groups.display.userData.partId = 'display';
+    // Physical left-to-right order on RZ-EasyFPGA A2.2: Q4(dtube4/137) .. Q1(dtube1/133)
+    const dtubeIds = ['dtube4', 'dtube3', 'dtube2', 'dtube1'];
     for (let d = 0; d < 4; d++) {
       const hitBox = new THREE.Mesh(new THREE.BoxGeometry(.0098, .0032, .0144), touchMat);
       hitBox.name = `dtube_touch_${d}`;
       hitBox.position.set((-1.5 + d) * .0095, .0076, 0);
-      hitBox.userData = { partId: `dtube${d + 1}`, isTouchBox: true };
+      hitBox.userData = { partId: dtubeIds[d], isTouchBox: true };
       groups.display.add(hitBox);
     }
   }
