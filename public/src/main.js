@@ -776,6 +776,10 @@ function ensureRtlWorker() {
         if (waiter) rtlWorkerWaiters.delete(data.seq);
         if (data.gen === rtlWorkerGen && S.sim && rtlWorkerReady) {
           applyRtlBatchResult(data);
+          // Immediately pump pending backlog without sitting idle waiting for next 60Hz rAF!
+          if (S.running && !S.vcd && !rtlWorkerBusy && accumulator >= 200000) {
+            pumpRtlWorkerBatch();
+          }
         }
         waiter?.resolve(data);
       }
@@ -795,6 +799,7 @@ function ensureRtlWorker() {
   return rtlWorker;
 }
 
+let rtlWarmupBatches = 0;
 function clearRtlRunner() {
   rtlRunner = null;
   rtlWorkerReady = false;
@@ -807,6 +812,7 @@ function clearRtlRunner() {
   rtlIdleBeep = null;
   rtlAudioSampleFrac = 0;
   rtlAdaptiveMaxCycles = 2500000;
+  rtlWarmupBatches = 0;
 }
 
 function bindRtlMeta(meta) {
@@ -953,10 +959,12 @@ function applyRtlBatchResult({ cyclesRun, execMs, nSamples, stride, offsets, fla
     consume({ samples }, trueCycleFs, false);
   }
   if (cyclesRun >= 10000 && Number.isFinite(execMs)) {
-    // Emergency anti-freeze guard only (Worker runs off-thread so 1x real-time never stalls WebGL)
-    if (execMs > 45) {
-      rtlAdaptiveMaxCycles = Math.max(250000, Math.round(rtlAdaptiveMaxCycles * Math.min(0.85, 36 / execMs)));
-    } else if (execMs < 28 && rtlAdaptiveMaxCycles < 2500000) {
+    // Allow first 4 batches for JS JIT warmup (especially SpiderMonkey IonMonkey) before adapting cap
+    if (rtlWarmupBatches < 4) {
+      rtlWarmupBatches++;
+    } else if (execMs > 55) {
+      rtlAdaptiveMaxCycles = Math.max(400000, Math.round(rtlAdaptiveMaxCycles * Math.min(0.88, 42 / execMs)));
+    } else if (execMs < 35 && rtlAdaptiveMaxCycles < 2500000) {
       rtlAdaptiveMaxCycles = Math.min(2500000, Math.round(rtlAdaptiveMaxCycles * 1.25));
     }
   }
@@ -3523,6 +3531,17 @@ function updatePerfTelemetry(now) {
   el.classList.toggle('rt-ok', healthy);
   el.classList.toggle('rt-slow', !healthy);
 }
+function pumpRtlWorkerBatch(fallbackDt = 0.0167) {
+  if (!S.running || !hasActiveRtl() || S.vcd || rtlWorkerBusy) return;
+  const rate = 10 ** ((S.speed - 55) / 25);
+  const cap = Math.max(400000, rtlAdaptiveMaxCycles);
+  const cycles = Math.min(cap, Math.floor(accumulator));
+  if (Number.isInteger(cycles) && cycles > 0) {
+    accumulator = Math.max(0, accumulator - cycles);
+    const audioDt = S.clkHz > 0 ? Math.min(0.06, (cycles / S.clkHz) / Math.max(0.05, rate)) : fallbackDt;
+    runRtlStepBatch(cycles, audioDt);
+  }
+}
 function frame(now) {
   requestAnimationFrame(frame); const dt = Math.max(0, Math.min(.1, (now - lastFrame) / 1000)); lastFrame = now;
   if (now - lastDraw > 250) { $('#roFps').textContent = board ? Math.round(board.fps) : '—'; updatePerfTelemetry(now); lastDraw = now; }
@@ -3548,17 +3567,10 @@ function frame(now) {
     if (hasActiveRtl() && !S.vcd) {
       const frameDt = Math.min(0.05, dt);
       const stepWall = frameDt * rate;
-      const cap = Math.max(250000, rtlAdaptiveMaxCycles);
+      const cap = Math.max(400000, rtlAdaptiveMaxCycles);
       accumulator += S.clkHz * stepWall;
       accumulator = Math.min(accumulator, cap * 2);
-      if (!rtlWorkerBusy) {
-        const cycles = Math.min(cap, Math.floor(accumulator));
-        if (Number.isInteger(cycles) && cycles > 0) {
-          accumulator = Math.max(0, accumulator - cycles);
-          const audioDt = S.clkHz > 0 ? Math.min(0.06, (cycles / S.clkHz) / Math.max(0.05, rate)) : frameDt;
-          runRtlStepBatch(cycles, audioDt);
-        }
-      }
+      pumpRtlWorkerBatch(frameDt);
     } else {
       const maxPerFrame = S.clkHz >= 10000 ? adaptiveMaxCycles : 4096;
       const stepWall = dt * rate;

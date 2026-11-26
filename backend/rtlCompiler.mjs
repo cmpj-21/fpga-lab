@@ -36,6 +36,16 @@ function maskExpr(code, width) {
   return `((${code}) & ${mask})`;
 }
 
+function isSafeInt32Unsigned(expr) {
+  if (!expr || expr.signed) return false;
+  if (/^\d+$/.test(expr.code)) {
+    const v = Number(expr.code);
+    return Number.isSafeInteger(v) && v >= 0 && v <= 0x7fffffff;
+  }
+  const ew = expr.effWidth ?? expr.width;
+  return Number.isInteger(ew) && ew >= 1 && ew <= 30;
+}
+
 function signedExpr(code, width) {
   if (width >= 32) return `((${code}) | 0)`;
   const shift = 32 - width;
@@ -142,10 +152,11 @@ function compileExpression(rawExpr, symWidths, memNames) {
     while (peek()?.v === '==' || peek()?.v === '!=') {
       const op = eat().v;
       const right = parseRel();
-      const l = left.signed ? signedExpr(left.code, left.width) : `(${left.code} >>> 0)`;
-      const r = right.signed ? signedExpr(right.code, right.width) : `(${right.code} >>> 0)`;
+      const safeI32 = !left.signed && !right.signed && isSafeInt32Unsigned(left) && isSafeInt32Unsigned(right);
+      const l = left.signed ? signedExpr(left.code, left.width) : (safeI32 ? left.code : `(${left.code} >>> 0)`);
+      const r = right.signed ? signedExpr(right.code, right.width) : (safeI32 ? right.code : `(${right.code} >>> 0)`);
       const jsOp = op === '==' ? '===' : '!==';
-      left = { code: `(${l} ${jsOp} ${r} ? 1 : 0)`, width: 1 };
+      left = { code: `(${l} ${jsOp} ${r} ? 1 : 0)`, width: 1, effWidth: 1 };
     }
     return left;
   }
@@ -156,10 +167,10 @@ function compileExpression(rawExpr, symWidths, memNames) {
       const op = eat().v;
       const right = parseShift();
       const useSigned = !!(left.signed || right.signed);
-      const w = Math.max(left.width, right.width);
-      const l = useSigned ? signedExpr(left.code, left.width) : `(${left.code} >>> 0)`;
-      const r = useSigned ? signedExpr(right.code, right.width) : `(${right.code} >>> 0)`;
-      left = { code: `(${l} ${op} ${r} ? 1 : 0)`, width: 1, signed: false };
+      const safeI32 = !useSigned && isSafeInt32Unsigned(left) && isSafeInt32Unsigned(right);
+      const l = useSigned ? signedExpr(left.code, left.width) : (safeI32 ? left.code : `(${left.code} >>> 0)`);
+      const r = useSigned ? signedExpr(right.code, right.width) : (safeI32 ? right.code : `(${right.code} >>> 0)`);
+      left = { code: `(${l} ${op} ${r} ? 1 : 0)`, width: 1, effWidth: 1, signed: false };
     }
     return left;
   }
@@ -181,7 +192,14 @@ function compileExpression(rawExpr, symWidths, memNames) {
       const op = eat().v;
       const right = parseMul();
       const w = Math.max(left.width, right.width);
-      left = { code: maskExpr(`(${left.code}) ${op} (${right.code})`, w), width: w };
+      const lEw = left.effWidth ?? left.width;
+      const rEw = right.effWidth ?? right.width;
+      if (op === '+' && w >= 32 && isSafeInt32Unsigned(left) && isSafeInt32Unsigned(right) && Math.max(lEw, rEw) <= 29) {
+        const eff = Math.max(lEw, rEw) + 1;
+        left = { code: `((${left.code}) + (${right.code}))`, width: w, effWidth: eff };
+      } else {
+        left = { code: maskExpr(`(${left.code}) ${op} (${right.code})`, w), width: w, effWidth: w };
+      }
     }
     return left;
   }
@@ -237,22 +255,34 @@ function compileExpression(rawExpr, symWidths, memNames) {
       eat('}');
       const totalWidth = parts.reduce((a, b) => a + b.width, 0);
       if (totalWidth > 32) throw new Error('Wide concat fallback to GHDL');
-      let acc = parts[0].code;
-      for (let k = 1; k < parts.length; k++) {
-        acc = `(((${acc}) << ${parts[k].width}) | (${parts[k].code}))`;
+      // Elide leading literal zero-padding (e.g. {6'b0, clk_cnt}) so value stays pure Int32!
+      let start = 0;
+      while (start < parts.length && parts[start].code === '0') start++;
+      if (start >= parts.length) return { code: '0', width: totalWidth, effWidth: 1 };
+      const nzParts = parts.slice(start);
+      const effWidth = nzParts.reduce((a, b) => a + (b.effWidth ?? b.width), 0);
+      if (nzParts.length === 1) {
+        const p0 = nzParts[0];
+        return { code: p0.code, width: totalWidth, effWidth: p0.effWidth ?? p0.width };
       }
-      return { code: maskExpr(acc, totalWidth), width: totalWidth };
+      let acc = nzParts[0].code;
+      for (let k = 1; k < nzParts.length; k++) {
+        acc = `(((${acc}) << ${nzParts[k].width}) | (${nzParts[k].code}))`;
+      }
+      return { code: effWidth <= 30 ? maskExpr(acc, effWidth) : maskExpr(acc, totalWidth), width: totalWidth, effWidth: Math.min(totalWidth, effWidth) };
     }
     if (tok.t === 'lit') {
       eat();
       const parsed = parseBinaryLiteral(tok.v);
       if (!parsed) throw new Error(`Unsupported literal ${tok.v}`);
-      return { code: `${parsed.val}`, width: parsed.width };
+      const ew = parsed.val === 0 ? 1 : (32 - Math.clz32(parsed.val));
+      return { code: `${parsed.val}`, width: parsed.width, effWidth: Math.min(parsed.width, ew) };
     }
     if (tok.t === 'num') {
       eat();
-      const n = Number(tok.v);
-      return { code: `${n >>> 0}`, width: 32 };
+      const n = Number(tok.v) >>> 0;
+      const ew = n === 0 ? 1 : (32 - Math.clz32(n));
+      return { code: `${n}`, width: 32, effWidth: ew };
     }
     if (tok.t === 'id') {
       eat();
@@ -260,7 +290,7 @@ function compileExpression(rawExpr, symWidths, memNames) {
         eat('(');
         const inner = parseTernary();
         eat(')');
-        return { code: inner.code, width: inner.width, signed: tok.v === '$signed' };
+        return { code: inner.code, width: inner.width, effWidth: inner.effWidth ?? inner.width, signed: tok.v === '$signed' };
       }
       const info = symWidths.get(tok.v);
       if (!info) throw new Error(`Unknown identifier "${tok.v}"`);
@@ -276,24 +306,24 @@ function compileExpression(rawExpr, symWidths, memNames) {
           if (!Number.isInteger(hi) || !Number.isInteger(lo) || hi < lo) throw new Error(`Non-const slice on ${tok.v}`);
           const sw = hi - lo + 1;
           const shift = lo - (info.lo || 0);
-          return { code: maskExpr(shift > 0 ? `(${tok.v} >>> ${shift})` : tok.v, sw), width: sw };
+          return { code: maskExpr(shift > 0 ? `(${tok.v} >>> ${shift})` : tok.v, sw), width: sw, effWidth: sw };
         }
         eat(']');
         if (memNames.has(tok.v)) {
-          return { code: `(${tok.v}[${first.code}] || 0)`, width: info.width };
+          return { code: `(${tok.v}[${first.code}] || 0)`, width: info.width, effWidth: info.width };
         }
         const offset = Number(first.code) - (info.lo || 0);
         if (!Number.isInteger(offset) || offset < 0 || offset >= info.width) throw new Error(`Unsupported index on ${tok.v}`);
-        return { code: maskExpr(offset > 0 ? `(${tok.v} >>> ${offset})` : tok.v, 1), width: 1 };
+        return { code: maskExpr(offset > 0 ? `(${tok.v} >>> ${offset})` : tok.v, 1), width: 1, effWidth: 1 };
       }
-      return { code: tok.v, width: info.width };
+      return { code: tok.v, width: info.width, effWidth: info.effWidth ?? info.width };
     }
     throw new Error(`Unexpected token ${tok.v} in "${rawExpr}"`);
   }
 
   const res = parseTernary();
   if (pos !== tokens.length) throw new Error(`Trailing tokens in "${rawExpr}"`);
-  return { code: res.code, width: res.width, deps };
+  return { code: res.code, width: res.width, effWidth: res.effWidth ?? res.width, signed: !!res.signed, deps };
 }
 
 export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = {}) {
@@ -443,16 +473,31 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
 
   // Parse remaining `assign dst = rhs;` and `always @* dst = rhs;`
   const assignRe = /(?:assign|always\s*@\s*\*)\s+([a-zA-Z_]\w*)\s*=\s*([^;]+);/g;
+  const rawAssigns = [];
   let am;
-  while ((am = assignRe.exec(rest))) {
-    const dst = am[1], rhsRaw = am[2];
+  while ((am = assignRe.exec(rest))) rawAssigns.push({ dst: am[1], rhsRaw: am[2] });
+  const aliasTarget = new Map();
+  const resolveAlias = name => {
+    let cur = name, hops = 0;
+    while (aliasTarget.has(cur) && hops++ < 16) cur = aliasTarget.get(cur);
+    return cur;
+  };
+  for (const { dst, rhsRaw } of rawAssigns) {
     const expr = compileExpression(rhsRaw, symWidths, memNames);
     const wInfo = symWidths.get(dst);
     if (!wInfo) return null;
+    const exprEw = expr.effWidth ?? expr.width;
+    const noMaskNeeded = !expr.signed && Number.isInteger(exprEw) && exprEw >= 1 && exprEw <= wInfo.width && exprEw <= 30;
+    if (noMaskNeeded) wInfo.effWidth = Math.min(wInfo.width, exprEw);
+    const isPlainId = noMaskNeeded && /^[a-zA-Z_]\w*$/.test(expr.code) && !memNames.has(expr.code) && !localparams.has(expr.code);
+    if (isPlainId && expr.code !== dst) {
+      aliasTarget.set(dst, expr.code);
+    }
     combNodes.push({
       dst,
       deps: expr.deps,
-      emit: () => `const ${dst} = ${maskExpr(expr.code, wInfo.width)};`,
+      aliasOf: isPlainId && expr.code !== dst ? expr.code : null,
+      emit: () => `const ${dst} = ${noMaskNeeded ? expr.code : maskExpr(expr.code, wInfo.width)};`,
     });
   }
 
@@ -603,7 +648,18 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
     }
     return sortedComb.filter(n => needed.has(n.dst));
   };
-  const emitNodes = (nodes, indent) => nodes.map(n => `${indent}${n.emit().replace(/\n/g, `\n${indent}`)}`).join('\n');
+  const substAliases = code => {
+    if (!aliasTarget.size) return code;
+    return code.replace(/\b[a-zA-Z_]\w*\b/g, id => (aliasTarget.has(id) ? resolveAlias(id) : id));
+  };
+  const emitNodes = (nodes, indent, elideAliases = false) => nodes
+    .filter(n => !(elideAliases && n.aliasOf))
+    .map(n => {
+      const raw = n.emit();
+      const text = elideAliases ? raw.replace(/^const\s+([a-zA-Z_]\w*)\s*=\s*/, 'const $1 = ').replace(/=\s*([\s\S]+)$/, (_, rhs) => `= ${substAliases(rhs)}`) : raw;
+      return `${indent}${text.replace(/\n/g, `\n${indent}`)}`;
+    })
+    .join('\n');
   const ffSeedNames = [];
   for (const ff of ffNodes) for (const d of ff.deps) ffSeedNames.push(d);
   const ffCombNodes = collectCombCone(ffSeedNames);
@@ -615,7 +671,7 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
   const nextEmit = ffNodes.map(ff => {
     const wInfo = symWidths.get(ff.dst);
     const expr = ff.rst ? `(${ff.rst} ? (${ff.rstCode}) : (${ff.rhsCode}))` : ff.rhsCode;
-    return `      const _next_${ff.dst} = ${maskExpr(expr, wInfo.width)};`;
+    return `      const _next_${ff.dst} = ${maskExpr(substAliases(expr), wInfo.width)};`;
   }).join('\n');
   const commitEmit = ffNodes.map(ff => `      ${ff.dst} = _next_${ff.dst};`).join('\n');
   const snapWrites = observedSignals.map((s, idx) => `    _rt_dst[${idx}] = ${s.name} >>> 0;`).join('\n');
@@ -645,9 +701,9 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
 
   lines.push(`  function _rt_stepNoAudio(_rt_n) {`);
   if (ffNodes.length) lines.push(ffLoadEmit('    '));
-  if (ffInvNodes.length) lines.push(emitNodes(ffInvNodes, '    '));
+  if (ffInvNodes.length) lines.push(emitNodes(ffInvNodes, '    ', true));
   lines.push(`    for (let _rt_k = 0; _rt_k < _rt_n; _rt_k++) {`);
-  if (ffDynNodes.length) lines.push(emitNodes(ffDynNodes, '      '));
+  if (ffDynNodes.length) lines.push(emitNodes(ffDynNodes, '      ', true));
   lines.push(nextEmit);
   lines.push(commitEmit);
   lines.push(`    }`);
@@ -663,27 +719,53 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
       const dynNodes = coneNodes.filter(n => dependsOnState.has(n.dst));
       const nextEmitIndented = nextEmit.replace(/^/gm, '  ');
       const commitEmitIndented = commitEmit.replace(/^/gm, '  ');
-      lines.push(`    function(_rt_n) {`);
-      lines.push(`      let _rt_beepSum = 0;`);
+      const beepExpr = resolveAlias(p.name);
+      lines.push(`    function(_rt_total, _rt_sTarget, _rt_audioOut) {`);
+      lines.push(`      const _rt_samples = [];`);
+      lines.push(`      const _rt_sampleStep = _rt_total / _rt_sTarget;`);
+      lines.push(`      let _rt_nextSampleAt = _rt_sampleStep;`);
+      lines.push(`      const _rt_aCount = _rt_audioOut.length;`);
+      lines.push(`      const _rt_audioStep = _rt_total / _rt_aCount;`);
+      lines.push(`      let _rt_nextAudioAt = _rt_audioStep;`);
+      lines.push(`      let _rt_c = 0, _rt_beepSum = 0, _rt_beepCnt = 0, _rt_aIdx = 0, _rt_lastAudio = 0;`);
       if (ffNodes.length) lines.push(ffLoadEmit('      '));
-      if (invNodes.length) lines.push(emitNodes(invNodes, '      '));
-      lines.push(`      for (let _rt_k = 0; _rt_k < _rt_n; _rt_k++) {`);
-      if (dynNodes.length) lines.push(emitNodes(dynNodes, '        '));
-      lines.push(`        _rt_beepSum += ${p.name};`);
-      lines.push(nextEmitIndented);
-      lines.push(commitEmitIndented);
+      if (invNodes.length) lines.push(emitNodes(invNodes, '      ', true));
+      lines.push(`      while (_rt_c < _rt_total) {`);
+      lines.push(`        let _rt_next = _rt_total;`);
+      lines.push(`        if (_rt_aIdx < _rt_aCount) { const _rt_at = Math.ceil(_rt_nextAudioAt); if (_rt_at < _rt_next) _rt_next = _rt_at; }`);
+      lines.push(`        if (_rt_samples.length < _rt_sTarget - 1) { const _rt_st = Math.ceil(_rt_nextSampleAt); if (_rt_st < _rt_next) _rt_next = _rt_st; }`);
+      lines.push(`        const _rt_chunk = Math.max(1, _rt_next - _rt_c);`);
+      lines.push(`        for (let _rt_k = 0; _rt_k < _rt_chunk; _rt_k++) {`);
+      if (dynNodes.length) lines.push(emitNodes(dynNodes, '          ', true));
+      lines.push(`          _rt_beepSum += ${beepExpr};`);
+      lines.push(nextEmitIndented.replace(/^/gm, '  '));
+      lines.push(commitEmitIndented.replace(/^/gm, '  '));
+      lines.push(`        }`);
+      lines.push(`        _rt_c += _rt_chunk; _rt_beepCnt += _rt_chunk;`);
+      lines.push(`        if (_rt_c >= _rt_nextAudioAt && _rt_aIdx < _rt_aCount) {`);
+      lines.push(`          _rt_lastAudio = (_rt_beepSum / _rt_beepCnt) * 2 - 1;`);
+      lines.push(`          _rt_audioOut[_rt_aIdx++] = _rt_lastAudio;`);
+      lines.push(`          _rt_beepSum = 0; _rt_beepCnt = 0;`);
+      lines.push(`          _rt_nextAudioAt += _rt_audioStep;`);
+      lines.push(`        }`);
+      lines.push(`        if (_rt_c >= _rt_nextSampleAt && _rt_samples.length < _rt_sTarget - 1) {`);
+      if (ffNodes.length) lines.push(ffStoreEmit('          '));
+      lines.push(`          _rt_evalTo(_rt_snap);`);
+      lines.push(`          _rt_samples.push({ offset: _rt_c, vals: _rt_snap.slice() });`);
+      lines.push(`          _rt_nextSampleAt += _rt_sampleStep;`);
+      lines.push(`        }`);
       lines.push(`      }`);
       if (ffNodes.length) lines.push(ffStoreEmit('      '));
-      lines.push(`      return _rt_beepSum;`);
+      lines.push(`      if (_rt_aIdx < _rt_aCount) {`);
+      lines.push(`        if (_rt_beepCnt > 0) _rt_lastAudio = (_rt_beepSum / _rt_beepCnt) * 2 - 1;`);
+      lines.push(`        while (_rt_aIdx < _rt_aCount) _rt_audioOut[_rt_aIdx++] = _rt_lastAudio;`);
+      lines.push(`      }`);
+      lines.push(`      _rt_evalTo(_rt_snap);`);
+      lines.push(`      _rt_samples.push({ offset: _rt_total, vals: _rt_snap.slice() });`);
+      lines.push(`      return { samples: _rt_samples, cyclesRun: _rt_total };`);
       lines.push(`    },`);
     }
     lines.push(`  ];`);
-    lines.push(`  function _rt_stepWithAudio(_rt_n, _rt_beepIdx) {`);
-    lines.push(`    const _rt_fn = _rt_audioSteppers[_rt_beepIdx];`);
-    lines.push(`    if (_rt_fn) return _rt_fn(_rt_n);`);
-    lines.push(`    _rt_stepNoAudio(_rt_n);`);
-    lines.push(`    return 0;`);
-    lines.push(`  }`);
   } else {
     const allHotNodes = collectCombCone([...ffSeedNames, ...scalarOutputs.map(p => p.name)]);
     const allInvNodes = allHotNodes.filter(n => !dependsOnState.has(n.dst));
@@ -716,6 +798,12 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
   lines.push(`      _rt_samples.push({ offset: 0, vals: _rt_snap.slice() });`);
   lines.push(`      return { samples: _rt_samples, cyclesRun: 0 };`);
   lines.push(`    }`);
+  if (useSpecializedAudio) {
+    lines.push(`    if (_rt_audioOut && _rt_audioOut.length > 0) {`);
+    lines.push(`      const _rt_runner = _rt_audioSteppers[_rt_beepIdx];`);
+    lines.push(`      if (_rt_runner) return _rt_runner(_rt_total, _rt_sTarget, _rt_audioOut);`);
+    lines.push(`    }`);
+  }
   lines.push(`    const _rt_sampleStep = _rt_total / _rt_sTarget;`);
   lines.push(`    let _rt_nextSampleAt = _rt_sampleStep;`);
   lines.push(`    const _rt_aCount = _rt_audioOut ? _rt_audioOut.length : 0;`);
@@ -732,13 +820,18 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
   lines.push(`        const _rt_sTargetC = Math.ceil(_rt_nextSampleAt);`);
   lines.push(`        if (_rt_sTargetC < _rt_next) _rt_next = _rt_sTargetC;`);
   lines.push(`      }`);
-  lines.push(`      const _rt_chunk = Math.max(1, _rt_next - _rt_c);`);
-  lines.push(`      if (_rt_aCount > 0) {`);
-  lines.push(`        _rt_beepSum += _rt_stepWithAudio(_rt_chunk, _rt_beepIdx);`);
-  lines.push(`        _rt_beepCnt += _rt_chunk;`);
-  lines.push(`      } else {`);
-  lines.push(`        _rt_stepNoAudio(_rt_chunk);`);
-  lines.push(`      }`);
+      lines.push(`      const _rt_chunk = Math.max(1, _rt_next - _rt_c);`);
+      if (!useSpecializedAudio) {
+        lines.push(`      if (_rt_aCount > 0) {`);
+        lines.push(`        _rt_beepSum += _rt_stepWithAudio(_rt_chunk, _rt_beepIdx);`);
+        lines.push(`        _rt_beepCnt += _rt_chunk;`);
+        lines.push(`      } else {`);
+        lines.push(`        _rt_stepNoAudio(_rt_chunk);`);
+        lines.push(`      }`);
+      } else {
+        lines.push(`      _rt_stepNoAudio(_rt_chunk);`);
+        lines.push(`      if (_rt_aCount > 0) _rt_beepCnt += _rt_chunk;`);
+      }
   lines.push(`      _rt_c += _rt_chunk;`);
   lines.push(`      if (_rt_aCount > 0 && _rt_c >= _rt_nextAudioAt && _rt_aIdx < _rt_aCount) {`);
   lines.push(`        _rt_lastAudio = (_rt_beepSum / _rt_beepCnt) * 2 - 1;`);
