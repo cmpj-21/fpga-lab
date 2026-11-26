@@ -821,6 +821,8 @@ static bool StartBackendServer() {
     SetEnvironmentVariableW(L"OPEN_BROWSER", L"0");
     SetEnvironmentVariableW(L"TRACE_PACKAGED", L"1");
     SetEnvironmentVariableW(L"TRACE_DATA_DIR", g_app.dataDir.c_str());
+    SetEnvironmentVariableW(L"TRACE_INSTALL_DIR", g_app.exeDir.c_str());
+    SetEnvironmentVariableW(L"TRACE_HOST_PID", std::to_wstring(GetCurrentProcessId()).c_str());
 
     std::wstring cmd = L"\"" + nodeExe + L"\" \"" + serverMjs + L"\"";
     std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());

@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compileDesign, restartSession, configuration, sessions, closeAllSessions, setEngineLogger } from './backend/engine.mjs';
+import { readAppVersionInfo, detectInstallMode, checkForUpdates, getUpdateStatus, applyUpdate } from './backend/updater.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -1123,7 +1124,32 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://127.0.0.1:${activePort}`);
     if (url.pathname === '/api/health') {
       const cfg = await configuration().catch(e => ({ version: null, error: e.message }));
-      return send(res, 200, { ok: !!cfg.version, app: 'trace-workbench', hdlRoot, backend: cfg.version, error: cfg.error, sessions: sessions.size, logFile: LOG_FILE, actionLogFile: ACTION_LOG_FILE, stateFile: STATE_FILE });
+      const appInfo = readAppVersionInfo();
+      const install = detectInstallMode();
+      return send(res, 200, { ok: !!cfg.version, app: 'trace-workbench', version: appInfo.version, installMode: install.mode, hdlRoot, backend: cfg.version, error: cfg.error, sessions: sessions.size, logFile: LOG_FILE, actionLogFile: ACTION_LOG_FILE, stateFile: STATE_FILE });
+    }
+    if (url.pathname === '/api/update/check' && req.method === 'GET') {
+      try {
+        return send(res, 200, await checkForUpdates());
+      } catch (e) {
+        return send(res, 502, { ok: false, error: e.message || 'Update check failed.' });
+      }
+    }
+    if (url.pathname === '/api/update/status' && req.method === 'GET') {
+      return send(res, 200, { ok: true, ...getUpdateStatus() });
+    }
+    if (url.pathname === '/api/update/apply' && req.method === 'POST') {
+      try {
+        const result = await applyUpdate({
+          onExitRequest: () => {
+            if (typeof shutdown === 'function') shutdown('update');
+            else process.exit(0);
+          },
+        });
+        return send(res, 200, result);
+      } catch (e) {
+        return send(res, 500, { ok: false, error: e.message || 'Update installation failed.' });
+      }
     }
     if (url.pathname === '/api/state' && req.method === 'GET') {
       return send(res, 200, { ok: true, state: await readAppState() });

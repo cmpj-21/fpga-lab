@@ -3275,6 +3275,7 @@ export function createIde(api) {
     tutorial: () => openTutorial(),
     limits: () => $('#btnLimits').click(),
     shortcuts: () => $('#keysDialog')?.showModal(),
+    checkUpdates: () => window.__lab?.checkUpdates?.({ openDialog: true }),
   };
   function closeMenus() {
     $$('.menu-pop').forEach(pop => pop.classList.add('hidden'));

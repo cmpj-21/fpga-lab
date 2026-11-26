@@ -46,7 +46,7 @@
       <div class="menu"><button class="menu-btn" data-menu="edit" aria-expanded="false">Edit</button><div class="menu-pop hidden" data-pop="edit"><button data-cmd="undo"><span>Undo</span><kbd>Ctrl+Z</kbd></button><button data-cmd="redo"><span>Redo</span><kbd>Ctrl+Y</kbd></button><hr><button data-cmd="comment"><span>Toggle Line Comment</span><kbd>Ctrl+/</kbd></button><button data-cmd="dupLine"><span>Duplicate Line Down</span><kbd>Shift+Alt+↓</kbd></button><button data-cmd="delLine"><span>Delete Line</span><kbd>Ctrl+Shift+K</kbd></button><button data-cmd="wordWrap"><span>Toggle Word Wrap</span><kbd>Alt+Z</kbd></button></div></div>
       <div class="menu"><button class="menu-btn" data-menu="view" aria-expanded="false">View</button><div class="menu-pop hidden" data-pop="view"><button data-cmd="viewExplorer"><span>Project Explorer</span><kbd>Ctrl+Shift+E</kbd></button><button data-cmd="viewPins"><span>Pin Planner</span></button><button data-cmd="toggleEditor"><span>Toggle Code Editor Pane</span><kbd>Ctrl+E</kbd></button><button data-cmd="toggleBoard"><span>Toggle 3D Board Viewport</span><kbd>Alt+B</kbd></button><button data-cmd="wordWrap"><span>Toggle Word Wrap</span><kbd>Alt+Z</kbd></button><hr><button data-cmd="panelWaves"><span>Logic Analyzer (Waveforms)</span></button><button data-cmd="panelTerminal"><span>Integrated Terminal</span><kbd>Ctrl+`</kbd></button><button data-cmd="panelProblems"><span>Problems</span></button><button data-cmd="panelConsole"><span>Output Console</span></button><button data-cmd="panelPinout"><span>Board Pinout Reference</span></button><button data-cmd="panelTruth"><span>Truth Table Generator</span></button><button data-cmd="panelUart"><span>UART Serial Monitor</span></button><button data-cmd="panelBitstream"><span>Bitstream Inspector</span></button><hr><button data-cmd="photo"><span>Photo Studio</span><kbd>P</kbd></button><button data-cmd="fullscreen"><span>Toggle Full Screen</span><kbd>F11</kbd></button><button data-cmd="theme"><span>Color Theme…</span></button><button data-cmd="toggleScheme"><span>Toggle Dark / Light Mode</span></button><button data-cmd="settings"><span>Settings…</span><kbd>Ctrl+,</kbd></button><button data-cmd="resetLayout"><span>Reset IDE Layout</span></button></div></div>
       <div class="menu"><button class="menu-btn" data-menu="run" aria-expanded="false">Build &amp; Sim</button><div class="menu-pop hidden" data-pop="run"><button data-cmd="save"><span>Build &amp; Compile</span><kbd>F7</kbd></button><button data-cmd="flash"><span>Flash to Board</span><kbd>Ctrl+B</kbd></button><button data-cmd="projectSettings"><span>Project &amp; Compiler Settings…</span></button><hr><button data-cmd="restart"><span>Restart Simulation</span></button><button data-cmd="step"><span>Step Clock Cycle</span><kbd>.</kbd></button><button data-cmd="run"><span>Run / Pause Simulation</span><kbd>Space</kbd></button></div></div>
-      <div class="menu"><button class="menu-btn" data-menu="help" aria-expanded="false">Help</button><div class="menu-pop hidden" data-pop="help"><button data-cmd="tutorial"><span>Interactive Tutorial (TUTORIAL.md)</span></button><button data-cmd="shortcuts"><span>Keyboard Shortcuts</span></button><button data-cmd="limits"><span>Simulation Model &amp; Limits</span></button></div></div>
+      <div class="menu"><button class="menu-btn" data-menu="help" aria-expanded="false">Help</button><div class="menu-pop hidden" data-pop="help"><button data-cmd="tutorial"><span>Interactive Tutorial (TUTORIAL.md)</span></button><button data-cmd="shortcuts"><span>Keyboard Shortcuts</span></button><button data-cmd="limits"><span>Simulation Model &amp; Limits</span></button><hr><button data-cmd="checkUpdates"><span>Check for Updates…</span></button></div></div>
     </nav>
     <span class="header-divider"></span><span class="workspace-name">EP4CE6E22C8N · Cyclone IV</span>
     <div class="transport">
@@ -699,6 +699,8 @@
           <label class="set-row"><div><strong>Auto-Reload External File Edits</strong><span>Watch active project folder on disk and sync clean tabs &amp; Explorer automatically</span></div><input id="setWatchExternal" type="checkbox" checked></label>
           <div class="set-row"><div><strong>Local HDL Library Folder</strong><span id="setHdlRootPath" class="mono">—</span></div><button id="setChangeHdlRootBtn" type="button" class="btn">Change Folder…</button></div>
           <label class="set-row"><div><strong>Confirm Before Exiting on Home Screen</strong><span>Ask before closing Trace from the Welcome screen</span></div><input id="setConfirmHomeExit" type="checkbox" checked></label>
+          <label class="set-row"><div><strong>Check for Updates on Startup</strong><span>Check GitHub Releases (~2 KB) for newer Portable &amp; Installer builds</span></div><input id="setAutoCheckUpdates" type="checkbox" checked></label>
+          <div class="set-row"><div><strong>Trace Updates</strong><span id="setVersionLabel" class="mono">Check GitHub Releases</span></div><button id="setCheckUpdatesBtn" type="button" class="btn">Check for Updates…</button></div>
         </div>
       </section>
       <section class="set-pane" data-setpane="hardware">
@@ -719,6 +721,32 @@
     <span class="hint">Changes apply immediately and save automatically to local preferences.</span>
     <div class="confirm-actions">
       <button type="button" class="btn dark" data-close="settingsDialog">Done</button>
+    </div>
+  </div>
+</dialog>
+<dialog id="updateDialog" class="update-dialog">
+  <div class="dialog-head">
+    <h2>Trace FPGA Workbench Updates</h2>
+    <button class="icon-btn" data-close="updateDialog" aria-label="Close update dialog">×</button>
+  </div>
+  <div class="update-body">
+    <div class="upd-row">
+      <span id="updBadge" class="upd-badge mono">Checking…</span>
+      <span id="updModeChip" class="upd-mode mono"></span>
+    </div>
+    <p id="updSummary" class="upd-summary">Checking GitHub Releases for the latest version…</p>
+    <div id="updProgressWrap" class="upd-prog-wrap hidden">
+      <div class="upd-prog-track"><div id="updProgressFill" class="upd-prog-fill" style="width:0%"></div></div>
+      <span id="updProgressLabel" class="mono upd-prog-label">0%</span>
+    </div>
+    <pre id="updNotes" class="upd-notes mono hidden"></pre>
+  </div>
+  <div class="dialog-foot confirm-foot">
+    <a id="updReleaseLink" class="text-btn hidden" href="https://github.com/cmpj-21/fpga-lab/releases" target="_blank" rel="noopener">Open Release Page ↗</a>
+    <div class="confirm-actions">
+      <button id="updRecheckBtn" type="button" class="btn">Check Again</button>
+      <button id="updInstallBtn" type="button" class="btn dark hidden">Download &amp; Install</button>
+      <button type="button" class="btn" data-close="updateDialog">Close</button>
     </div>
   </div>
 </dialog>

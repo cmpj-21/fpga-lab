@@ -430,6 +430,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR lpCmdLine, int nCmdSho
     }
 
     SetEnvironmentVariableW(L"TRACE_PORTABLE", L"1");
+    SetEnvironmentVariableW(L"TRACE_PORTABLE_EXE", selfPath.c_str());
+    SetEnvironmentVariableW(L"TRACE_PORTABLE_CACHE_DIR", cacheDir.c_str());
     // True portable user data: store config, logs & WebView2 profile in TraceData\ beside this .exe,
     // unless the user already configured an explicit TRACE_DATA_DIR override.
     wchar_t existingDataDir[MAX_PATH * 4] = {};

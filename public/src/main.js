@@ -2927,6 +2927,16 @@ function wireSettingsAndThemes() {
   $('#setConfirmHomeExit')?.addEventListener('change', e => {
     ide?.setSkipHomeExitConfirm?.(!e.target.checked);
   });
+  $('#setAutoCheckUpdates')?.addEventListener('change', e => {
+    appSettings.autoCheckUpdates = e.target.checked;
+    applyAllSettings();
+  });
+  $('#setCheckUpdatesBtn')?.addEventListener('click', () => {
+    $('#settingsDialog')?.close();
+    checkUpdates({ openDialog: true });
+  });
+  $('#updRecheckBtn')?.addEventListener('click', () => checkUpdates({ openDialog: true }));
+  $('#updInstallBtn')?.addEventListener('click', () => startSelfUpdate());
 
   // Audio & 3D Board settings
   $('#setMasterVolume')?.addEventListener('input', e => {
@@ -3660,6 +3670,132 @@ function setBoardViewMode(mode, { save = true } = {}) {
   const hint = $('.board-nav-hint');
   if (hint) hint.textContent = use2d ? 'Click S1–S4, Reset, DIP 1–4, or Power · Lightweight 2D Canvas (WebGL paused)' : 'Click: Interact · Drag: Orbit · Scroll: Zoom';
 }
+let appVersionInfo = { version: '', installMode: 'dev' };
+let updatePollTimer = 0;
+function formatInstallModeLabel(mode) {
+  return ({
+    'portable-exe': 'Portable EXE',
+    'portable-zip': 'Portable ZIP',
+    installed: 'Windows Installer',
+    dev: 'Dev Checkout',
+  })[mode] || mode;
+}
+function renderUpdateDialogState(info, errMsg = '') {
+  const badge = $('#updBadge');
+  const modeChip = $('#updModeChip');
+  const summary = $('#updSummary');
+  const notes = $('#updNotes');
+  const link = $('#updReleaseLink');
+  const installBtn = $('#updInstallBtn');
+  const progWrap = $('#updProgressWrap');
+  if (!badge) return;
+  badge.classList.remove('ok', 'err');
+  progWrap?.classList.add('hidden');
+  if (errMsg) {
+    badge.textContent = 'Check failed';
+    badge.classList.add('err');
+    summary.textContent = errMsg;
+    notes?.classList.add('hidden');
+    installBtn?.classList.add('hidden');
+    return;
+  }
+  if (!info) {
+    badge.textContent = 'Checking…';
+    summary.textContent = 'Checking GitHub Releases for the latest Trace FPGA Workbench version…';
+    notes?.classList.add('hidden');
+    installBtn?.classList.add('hidden');
+    return;
+  }
+  modeChip.textContent = formatInstallModeLabel(info.installMode);
+  if (info.releaseUrl && link) {
+    link.href = info.releaseUrl;
+    link.classList.remove('hidden');
+  }
+  if (info.updateAvailable) {
+    badge.textContent = `Update available: v${info.currentVersion} → v${info.latestVersion}`;
+    const sizeMb = info.asset?.size ? ` (${(info.asset.size / 1048576).toFixed(1)} MB)` : '';
+    const shaNote = info.asset?.sha256 ? ' · SHA-256 verified' : '';
+    summary.textContent = info.canSelfUpdate
+      ? `Version ${info.latestVersion} is ready to download and install automatically for ${formatInstallModeLabel(info.installMode)}${sizeMb}${shaNote}. Your projects and TraceData are preserved.`
+      : `Version ${info.latestVersion} is available on GitHub! Since you are running from a local dev checkout, run \`git pull\` or open the release page.`;
+    installBtn?.classList.toggle('hidden', !info.canSelfUpdate);
+    if (installBtn) { installBtn.disabled = false; installBtn.textContent = 'Download & Install'; }
+  } else {
+    badge.textContent = `Up to date · v${info.currentVersion}`;
+    badge.classList.add('ok');
+    summary.textContent = `You are running the latest version of Trace FPGA Workbench (v${info.currentVersion}).`;
+    installBtn?.classList.add('hidden');
+  }
+  if (info.notes && notes) {
+    notes.textContent = info.notes;
+    notes.classList.remove('hidden');
+  } else {
+    notes?.classList.add('hidden');
+  }
+}
+async function checkUpdates({ openDialog = false, silent = false } = {}) {
+  const dlg = $('#updateDialog');
+  if (openDialog && dlg && !dlg.open) {
+    renderUpdateDialogState(null);
+    dlg.showModal();
+  }
+  try {
+    const res = await fetch('/api/update/check');
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'Could not check for updates.');
+    if (openDialog) renderUpdateDialogState(data);
+    else if (data.updateAvailable && !silent) {
+      toast(`Update v${data.latestVersion} is available! Open Help → Check for Updates…`, 'ok');
+    } else if (data.updateAvailable && silent) {
+      toast(`Trace v${data.latestVersion} available (Help → Check for Updates…)`);
+    }
+    return data;
+  } catch (err) {
+    if (openDialog) renderUpdateDialogState(null, err.message || 'Could not reach GitHub Releases.');
+    return null;
+  }
+}
+async function startSelfUpdate() {
+  const installBtn = $('#updInstallBtn');
+  const progWrap = $('#updProgressWrap');
+  const progFill = $('#updProgressFill');
+  const progLabel = $('#updProgressLabel');
+  const summary = $('#updSummary');
+  if (installBtn) { installBtn.disabled = true; installBtn.textContent = 'Updating…'; }
+  progWrap?.classList.remove('hidden');
+  if (progFill) progFill.style.width = '5%';
+  if (progLabel) progLabel.textContent = 'Starting…';
+  clearInterval(updatePollTimer);
+  updatePollTimer = setInterval(async () => {
+    try {
+      const st = await fetch('/api/update/status').then(r => r.json());
+      if (progFill) progFill.style.width = `${Math.max(4, st.percent || 0)}%`;
+      if (progLabel) {
+        if (st.phase === 'downloading') progLabel.textContent = `Downloading ${st.percent || 0}%`;
+        else if (st.phase === 'verifying') progLabel.textContent = 'Verifying SHA-256…';
+        else if (st.phase === 'staging') progLabel.textContent = 'Staging files…';
+        else if (st.phase === 'launching') progLabel.textContent = 'Restarting…';
+      }
+    } catch {}
+  }, 250);
+  try {
+    const res = await fetch('/api/update/apply', { method: 'POST' });
+    const data = await res.json();
+    clearInterval(updatePollTimer);
+    if (!res.ok || !data.ok) throw new Error(data.error || data.message || 'Update failed.');
+    if (progFill) progFill.style.width = '100%';
+    if (progLabel) progLabel.textContent = 'SHA-256 OK · Restarting';
+    if (summary) summary.textContent = `Verified SHA-256 (${String(data.sha256 || '').slice(0, 12)}…). Closing Trace to apply v${data.version} and relaunch…`;
+    await prepareExit();
+    if (window.chrome?.webview?.postMessage) {
+      window.chrome.webview.postMessage(JSON.stringify({ type: 'exit-confirmed' }));
+    }
+  } catch (err) {
+    clearInterval(updatePollTimer);
+    renderUpdateDialogState(null, err.message || 'Update failed.');
+    if (installBtn) { installBtn.disabled = false; installBtn.textContent = 'Retry Update'; }
+  }
+}
 async function boot() {
   await hydrateDiskState();
   S.waveMode = appSettings.defaultWaveMode || 'fit';
@@ -3669,7 +3805,18 @@ async function boot() {
   const unlockAudio = () => { if ((appSettings.masterVolume ?? 50) > 0) audio.resume(); window.removeEventListener('pointerdown', unlockAudio); window.removeEventListener('keydown', unlockAudio); };
   window.addEventListener('pointerdown', unlockAudio, { passive: true });
   window.addEventListener('keydown', unlockAudio, { passive: true });
-  fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
+  fetch('/api/health').then(response => response.json()).then(health => {
+    logFile = health.logFile || '';
+    actionLogFile = health.actionLogFile || '';
+    appVersionInfo = { version: health.version || '', installMode: health.installMode || 'dev' };
+    if ($('#setVersionLabel') && health.version) {
+      $('#setVersionLabel').textContent = `v${health.version} · ${formatInstallModeLabel(health.installMode || 'dev')}`;
+    }
+    if ($('#setAutoCheckUpdates')) $('#setAutoCheckUpdates').checked = appSettings.autoCheckUpdates !== false;
+    if (appSettings.autoCheckUpdates !== false && health.installMode && health.installMode !== 'dev') {
+      setTimeout(() => checkUpdates({ openDialog: false, silent: true }), 4500);
+    }
+  }).catch(() => {});
   const boardOpts = {
     onKey: (id, pressed) => { trackUiAction(board2d?.active ? '2D' : '3D', board2d?.active ? $('#view2d') : $('#view3d'), `${pressed ? 'press' : 'release'} ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); },
     onDip: index => { trackUiAction(board2d?.active ? '2D' : '3D', board2d?.active ? $('#view2d') : $('#view3d'), `dip ${index + 1}`); toggleDip(index); },
@@ -3713,7 +3860,7 @@ async function boot() {
   wireActionLogger();
   fetchTree();
   S.sources = [{ name: DEMO_NAME, text: DEMO_SRC }]; renderSources(); requestAnimationFrame(frame);
-  window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, get ide() { return ide; }, get actions() { return [...uiActions]; }, flushActions, build, flashToBoard, advance, loadFiles, toggleDip, stopAllSimulations, saveProjectToDisk, openProjectFromDiskPath };
+  window.__lab = { get state() { return S; }, get board() { return board; }, get waves() { return waves; }, get ide() { return ide; }, get actions() { return [...uiActions]; }, flushActions, build, flashToBoard, advance, loadFiles, toggleDip, stopAllSimulations, saveProjectToDisk, openProjectFromDiskPath, setBoardViewMode, checkUpdates };
   const launchParams = new URLSearchParams(location.search);
   const openProjectParam = launchParams.get('openProject');
   const newProjectParam = launchParams.get('newProject') === '1';
