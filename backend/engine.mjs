@@ -7,6 +7,14 @@ import { promisify } from 'node:util';
 import { randomUUID, createHash } from 'node:crypto';
 import readline from 'node:readline';
 import { compileSynthVerilogToModule } from './rtlCompiler.mjs';
+import { lintVhdlHardwarePitfalls } from './vhdlLint.mjs';
+
+function extractDeviceUsageFromRtl(rtlCode) {
+  if (!rtlCode) return null;
+  const m = rtlCode.match(/^export const meta = (\{[^\n]+\});/m);
+  if (!m) return null;
+  try { return JSON.parse(m[1])?.deviceUsage || null; } catch { return null; }
+}
 
 const exec = promisify(execFile);
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -175,6 +183,28 @@ async function spawnFromSpec(spec, compileToken = null) {
       }
     }
     session.rtlCode = !hasAscendingPort ? (spec.rtlCode || null) : null;
+    const rtlUsage = extractDeviceUsageFromRtl(spec.rtlCode);
+    let topIoPins = 0;
+    for (const s of session.schema.signals) {
+      const isTopPort = s.name.startsWith(top + '.') && !s.name.slice(top.length + 1).includes('.') && [1, 2, 3].includes(s.direction);
+      if (isTopPort) topIoPins += (s.width || 1);
+    }
+    const deviceUsage = rtlUsage || {
+      device: 'EP4CE6E22C8N',
+      leMin: null,
+      leMax: null,
+      maxLes: 6272,
+      registers: null,
+      memoryBits: null,
+      maxMemoryBits: 276480,
+      m9kBlocks: null,
+      maxM9kBlocks: 30,
+      multipliers: null,
+      maxMultipliers: 15,
+      ioPins: topIoPins,
+      maxIoPins: 91,
+      estimated: true,
+    };
     sessions.set(session.id, session);
     return {
       id: session.id,
@@ -184,6 +214,7 @@ async function spawnFromSpec(spec, compileToken = null) {
       standard: spec.standard,
       entities: [...spec.entities],
       diagnostics: [...spec.diagnostics],
+      deviceUsage,
       buildHash: spec.buildHash,
       cached: !!spec.cached,
       hasRtl: !!session.rtlCode,
@@ -351,7 +382,7 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
     const runFlags = [`--std=${standard}`, '-fsynopsys', '-fexplicit', `--work=${topLibrary}`, `--workdir=${cacheDir}`, `-P${cacheDir}`];
     let rtlCode = null;
     if (!sdf) {
-      const cachedRtlPath = path.join(cacheDir, 'rtl-v4.mjs');
+      const cachedRtlPath = path.join(cacheDir, 'rtl-v5.mjs');
       if (!genericArgs.length) {
         rtlCode = await fs.readFile(cachedRtlPath, 'utf8').catch(() => null);
       }
@@ -362,8 +393,10 @@ export async function compileDesign({ sources, top, topLibrary = 'work', standar
         }
       }
     }
+    const lintWarnings = lintVhdlHardwarePitfalls(sources);
+    const allDiagnostics = [...cachedDiagnostics, ...lintWarnings];
     const runArgs = ['-r', ...runFlags, resolvedTop, ...genericArgs, `--vpi=${cfg.plugin}`, '--assert-level=error', '--stop-delta=10000'];
-    const spec = { cfg, runArgs, cacheDir, dataFiles, sdf, top: resolvedTop, topLibrary, standard, entities: [...entities], diagnostics: cachedDiagnostics, buildHash, cached, rtlCode };
+    const spec = { cfg, runArgs, cacheDir, dataFiles, sdf, top: resolvedTop, topLibrary, standard, entities: [...entities], diagnostics: allDiagnostics, buildHash, cached, rtlCode };
     return await spawnFromSpec(spec, compileToken);
   } catch (error) {
     throw new Error(error.stderr || error.message);

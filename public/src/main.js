@@ -705,6 +705,18 @@ async function build(top = $('#topSelect').value, { quiet = false } = {}) {
     $('#inputHint').textContent = 'Flash compiled design to activate board I/O';
     $('.mode-label').textContent = 'GHDL · compiled (unflashed)';
     log(`${result.backend}\nCompiled ${result.top}${result.cached ? ' (cached)' : ''} (${result.signals.length} signals, ${assignedCount} board pin${assignedCount === 1 ? '' : 's'} assigned). Click Flash to program the devboard.`);
+    if (result.deviceUsage) {
+      const u = result.deviceUsage;
+      if (u.leMin !== null) {
+        const pctLo = Math.max(1, Math.round((u.leMin / u.maxLes) * 100));
+        const pctHi = Math.max(pctLo, Math.round((u.leMax / u.maxLes) * 100));
+        const leStr = u.leMin === u.leMax ? `${u.leMin}` : `${u.leMin}–${u.leMax}`;
+        const pctStr = pctLo === pctHi ? `${pctLo}%` : `${pctLo}–${pctHi}%`;
+        log(`Device usage (${u.device} est.): Logic elements ${leStr} / ${u.maxLes.toLocaleString()} (${pctStr}) · Registers ${u.registers} · Memory ${u.memoryBits.toLocaleString()} / ${u.maxMemoryBits.toLocaleString()} bits · Multipliers ${u.multipliers} / ${u.maxMultipliers} · I/O ${u.ioPins} / ${u.maxIoPins}`);
+      } else {
+        log(`Device usage (${u.device}): I/O ${u.ioPins} / ${u.maxIoPins} pins (GHDL VPI simulation path)`);
+      }
+    }
     result.diagnostics.forEach(d => log(d, 'warning'));
     ide?.setProblems(parseDiagnostics((result.diagnostics || []).join('\n')));
     if (!quiet) {

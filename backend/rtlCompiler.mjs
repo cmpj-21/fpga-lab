@@ -503,6 +503,57 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
   const outputPorts = ports.filter(p => p.dir === 'output');
   const observedSignals = [...outputPorts, ...internalSignals];
 
+  // Estimate Intel Cyclone IV EP4CE6E22C8N device resource utilization from synthesized netlist
+  let registerBits = 0;
+  for (const ff of ffNodes) {
+    registerBits += (symWidths.get(ff.dst)?.width || 1);
+  }
+  let combLutEst = 0;
+  let multBlocks = 0;
+  for (const node of combNodes) {
+    const w = symWidths.get(node.dst)?.width || 1;
+    const rhs = node.rhs || '';
+    if (/(?:^|[^\w])\*([^\w]|$)/.test(rhs) && !rhs.includes('/*')) {
+      multBlocks += Math.max(1, Math.ceil(w / 18));
+      combLutEst += Math.ceil(w * 0.5);
+    } else if (/[+\-]/.test(rhs)) {
+      combLutEst += w;
+    } else if (/[?]/.test(rhs)) {
+      combLutEst += Math.max(1, Math.ceil(w * 0.75));
+    } else if (/(===|!==|==|!=|<=|>=|<|>)/.test(rhs)) {
+      combLutEst += Math.max(1, Math.ceil(w * 0.5));
+    } else if (/[&|^~]/.test(rhs)) {
+      combLutEst += Math.max(1, Math.ceil(w * 0.35));
+    }
+  }
+  let memoryBits = 0;
+  let m9kBlocks = 0;
+  for (const mem of memories.values()) {
+    const bits = (mem.depth || 0) * (mem.width || 1);
+    memoryBits += bits;
+    if (bits > 0) m9kBlocks += Math.max(1, Math.ceil(bits / 9216));
+  }
+  const ioPins = ports.reduce((sum, p) => sum + (p.width || 1), 0);
+  const leBase = Math.max(registerBits, Math.round(combLutEst * 0.65 + registerBits * 0.35));
+  const leMin = Math.max(registerBits, Math.round(leBase * 0.85));
+  const leMax = Math.max(leMin, Math.round(leBase * 1.15));
+  const deviceUsage = {
+    device: 'EP4CE6E22C8N',
+    leMin,
+    leMax,
+    maxLes: 6272,
+    registers: registerBits,
+    memoryBits,
+    maxMemoryBits: 276480,
+    m9kBlocks,
+    maxM9kBlocks: 30,
+    multipliers: multBlocks,
+    maxMultipliers: 15,
+    ioPins,
+    maxIoPins: 91,
+    estimated: true,
+  };
+
   const lines = [];
   lines.push(`// Auto-generated real-time RTL runner for ${topName}`);
   lines.push(`export const meta = ${JSON.stringify({
@@ -513,6 +564,7 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
     outputs: outputPorts,
     internals: internalSignals,
     observed: observedSignals.map(s => ({ name: s.name, width: s.width, hi: s.hi, lo: s.lo })),
+    deviceUsage,
   })};`);
   lines.push(`export function createRunner(_rt_beepName = '') {`);
   for (const [name, val] of localparams.entries()) lines.push(`  const ${name} = ${val};`);
