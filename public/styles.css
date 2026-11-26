@@ -233,3 +233,6 @@ body.resizing,body.resizing *{user-select:none!important;cursor:col-resize!impor
 .sb-perf{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:999px;font-size:11px;border:1px solid var(--border);background:color-mix(in srgb,var(--surface-2,var(--panel)) 75%,transparent);color:var(--muted)}
 .sb-perf.rt-ok{color:var(--ok,#22c55e);border-color:color-mix(in srgb,var(--ok,#22c55e) 40%,transparent)}
 .sb-perf.rt-slow{color:var(--warn,#eab308);border-color:color-mix(in srgb,var(--warn,#eab308) 45%,transparent)}
+.view2d{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#boardPane.mode-2d .nav-modes,#boardPane.mode-2d [data-camera],#boardPane.mode-2d #btnCenterComp,#boardPane.mode-2d #btnPhotoMode,#boardPane.mode-2d .tool-modes,#boardPane.mode-2d #lblHideOutline{display:none!important}
+#boardPane.mode-2d .view-presets[aria-label="Board camera"]{display:none!important}

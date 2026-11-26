@@ -1,4 +1,5 @@
 import { createBoard3D } from './board/board3d.js';
+import { createBoard2D } from './board/board2d.js';
 import { NET_PIN, PIN_NET, LED_NETS, KEY_NETS, SEG_NETS, DIGIT_NETS, BOARD_PINOUT_GROUPS } from './board/boardDef.js';
 import { suggestPinAssignments } from './board/pinAutoMap.js';
 import { parseQsf } from './sim/qsf.js';
@@ -3617,6 +3618,48 @@ async function prepareExit() {
   flushEvents(true);
   await new Promise(r => setTimeout(r, 45));
 }
+let board2d = null;
+let boardHasWebGL = false;
+function wrapBoardWith2d(b3d, b2d) {
+  const mirrored = ['setPower', 'setGlow', 'setBuzzer', 'setDip', 'setKeyVisual', 'setLed', 'setSegDigit', 'setDisplayTargets', 'setDisplayOptics', 'clearOutputs'];
+  return new Proxy(b3d || b2d, {
+    get(target, prop) {
+      if (prop === 'fps') return b2d?.active ? b2d.fps : (b3d?.fps ?? b2d?.fps ?? 60);
+      if (prop === 'is2d') return !!b2d?.active;
+      if (prop === 'board2d') return b2d;
+      if (prop === 'board3d') return b3d;
+      if (typeof prop === 'string' && mirrored.includes(prop)) {
+        return (...args) => {
+          const r = b3d?.[prop]?.(...args);
+          b2d?.[prop]?.(...args);
+          return r;
+        };
+      }
+      const val = target?.[prop];
+      return typeof val === 'function' ? val.bind(target) : val;
+    },
+  });
+}
+function setBoardViewMode(mode, { save = true } = {}) {
+  const next = (mode === '2d' || !boardHasWebGL) ? '2d' : '3d';
+  const use2d = next === '2d';
+  appSettings.boardViewMode = next;
+  if (save) { saveStoredSettings(appSettings); persistAppState({ settings: appSettings }); }
+  $('#boardPane')?.classList.toggle('mode-2d', use2d);
+  $('#view3d')?.classList.toggle('hidden', use2d);
+  if (use2d) $('#glOverlay')?.classList.add('hidden');
+  else if (!boardHasWebGL) $('#glOverlay')?.classList.remove('hidden');
+  board2d?.setActive(use2d);
+  $$('[data-board-dim]').forEach(btn => {
+    const active = btn.dataset.boardDim === next;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', String(active));
+  });
+  const titleSpan = $('.board-tab-title span');
+  if (titleSpan) titleSpan.textContent = `${use2d ? '2D' : '3D'} Devboard Simulator — RZ-EasyFPGA A2.2`;
+  const hint = $('.board-nav-hint');
+  if (hint) hint.textContent = use2d ? 'Click S1–S4, Reset, DIP 1–4, or Power · Lightweight 2D Canvas (WebGL paused)' : 'Click: Interact · Drag: Orbit · Scroll: Zoom';
+}
 async function boot() {
   await hydrateDiskState();
   S.waveMode = appSettings.defaultWaveMode || 'fit';
@@ -3627,7 +3670,38 @@ async function boot() {
   window.addEventListener('pointerdown', unlockAudio, { passive: true });
   window.addEventListener('keydown', unlockAudio, { passive: true });
   fetch('/api/health').then(response => response.json()).then(health => { logFile = health.logFile || ''; actionLogFile = health.actionLogFile || ''; }).catch(() => {});
-  try { board = await createBoard3D($('#view3d'), { onKey: (id, pressed) => { trackUiAction('3D', $('#view3d'), `${pressed ? 'press' : 'release'} ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); }, onDip: index => { trackUiAction('3D', $('#view3d'), `dip ${index + 1}`); toggleDip(index); }, onSelect: part => renderInspector(part), onPower: on => { trackUiAction('3D', $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); }, onFocusPick: (dist, x, y) => { if (board.getGfx().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); } }); board.setPower(true); board.setGlow(.65); const initPov = appSettings.displayPovEnabled !== false; board.setDisplayOptics?.({ persistenceMs: initPov ? (appSettings.displayPersistenceMs ?? 28) : 0, tdmPeakBoost: initPov && appSettings.tdmPeakBoost !== false }); } catch (e) { $('#glOverlay').classList.remove('hidden'); log(e.message, 'error'); }
+  const boardOpts = {
+    onKey: (id, pressed) => { trackUiAction(board2d?.active ? '2D' : '3D', board2d?.active ? $('#view2d') : $('#view3d'), `${pressed ? 'press' : 'release'} ${id}`); keyInput(id === 'reset' ? 'reset_btn' : id.replace('key', 's'), pressed); },
+    onDip: index => { trackUiAction(board2d?.active ? '2D' : '3D', board2d?.active ? $('#view2d') : $('#view3d'), `dip ${index + 1}`); toggleDip(index); },
+    onSelect: part => renderInspector(part),
+    onPower: on => { trackUiAction(board2d?.active ? '2D' : '3D', board2d?.active ? $('#view2d') : $('#view3d'), `power ${on ? 'on' : 'off'}`); $('#pwrToggle').checked = on; $('#pwrToggle').dispatchEvent(new Event('change')); },
+    onFocusPick: (dist, x, y) => { if (board.getGfx?.().dof === 0) board.setGfx({ dof: 55 }); board.setPhotoFocusMode?.(false); $('#pmFocusPickBtn')?.classList.remove('active'); const ring = $('#pmFocusRing'); if (ring) { ring.style.left = `${x}px`; ring.style.top = `${y}px`; $('#pmFocusDistLabel').textContent = `${dist}mm`; ring.classList.remove('hidden'); clearTimeout(ring.timer); ring.timer = setTimeout(() => ring.classList.add('hidden'), 1800); } syncGfxUI(); toast(`Focus locked at ${dist} mm.`); },
+  };
+  board2d = $('#view2d') ? createBoard2D($('#view2d'), boardOpts) : null;
+  let b3d = null;
+  try {
+    b3d = await createBoard3D($('#view3d'), boardOpts);
+    boardHasWebGL = true;
+  } catch (e) {
+    boardHasWebGL = false;
+    $('#glOverlay').classList.remove('hidden');
+    log(e.message, 'error');
+  }
+  board = (b3d || board2d) ? wrapBoardWith2d(b3d, board2d) : null;
+  if (board) {
+    board.setPower(true);
+    board.setGlow(.65);
+    const initPov = appSettings.displayPovEnabled !== false;
+    board.setDisplayOptics?.({ persistenceMs: initPov ? (appSettings.displayPersistenceMs ?? 28) : 0, tdmPeakBoost: initPov && appSettings.tdmPeakBoost !== false });
+  }
+  $$('[data-board-dim]').forEach(btn => {
+    btn.onclick = () => {
+      if (btn.dataset.boardDim === '3d' && !boardHasWebGL) return toast('WebGL is unavailable on this browser — staying in 2D mode.', 'err');
+      setBoardViewMode(btn.dataset.boardDim, { save: true });
+    };
+  });
+  $('#btnFallback2d')?.addEventListener('click', () => setBoardViewMode('2d', { save: true }));
+  setBoardViewMode(appSettings.boardViewMode === '2d' || !boardHasWebGL ? '2d' : '3d', { save: false });
   waves = new WaveViewer($('#waveCanvas'), $('#waveNames'), $('#waveScrollTrack'), $('#waveScrollThumb'));
   ide = createIde({ S, toast, logEvent: recordLogEvent, markDirty, build, flashToBoard, restartSimulation, restoreSavedCompileState, renderSources, openTools, openBottomTab, syncNavigation, projectData, saveProject, persistAppState, prepareExit, saveProjectToDisk, openProjectFromDiskPath, syncProjectSaveUI, download, restoreProject, loadFiles, stopAllSimulations, reloadQsfText, getHdlRoot: () => currentHdlRoot, openSettings: tab => openSettingsModal(tab), toggleScheme });
   applyTheme(activeThemeId);
