@@ -364,7 +364,7 @@ function setStatus() {
   syncKeys();
 }
 function pause() {
-  S.running = false; accumulator = 0; wallTimeAccum = 0; rtlAudioSampleFrac = 0; clearMuxDisplayState(); resetBuzzerTracker(false); sampleOutputs(); setStatus();
+  S.running = false; accumulator = 0; wallTimeAccum = 0; rtlAudioSampleFrac = 0; ++rtlWorkerGen; rtlWorkerBusy = false; clearMuxDisplayState(); resetBuzzerTracker(false); sampleOutputs(); setStatus();
   if (waves && !$('#app')?.classList.contains('no-waves')) {
     waves.draw();
   }
@@ -726,13 +726,68 @@ function attachSignalShortNames(result) {
   }
 }
 let rtlRunner = null;
+let rtlWorker = null;
+let rtlWorkerReady = false;
+let rtlWorkerBusy = false;
+let rtlWorkerGen = 0;
+let rtlWorkerSeq = 0;
+let rtlWorkerInFlightSeq = 0;
+const rtlWorkerWaiters = new Map();
 let rtlSignalMap = [];
 let rtlInputMap = new Map();
 let rtlIdleBeep = null;
 let rtlAudioSampleFrac = 0;
 
+function hasActiveRtl() { return !!(rtlWorkerReady || rtlRunner); }
+
+function ensureRtlWorker() {
+  if (rtlWorker || typeof Worker === 'undefined') return rtlWorker;
+  try {
+    const w = new Worker('/src/rtlWorker.js', { type: 'module' });
+    w.onmessage = ({ data }) => {
+      if (!data) return;
+      if (data.type === 'ready' || data.type === 'error') {
+        const waiter = rtlWorkerWaiters.get(data.id ?? data.seq);
+        if (waiter) {
+          rtlWorkerWaiters.delete(data.id ?? data.seq);
+          if (data.type === 'error') waiter.reject(new Error(data.message || 'RTL worker error'));
+          else waiter.resolve(data);
+        }
+        if (data.type === 'error' && data.seq === rtlWorkerInFlightSeq) rtlWorkerBusy = false;
+        return;
+      }
+      if (data.type === 'result') {
+        if (data.seq === rtlWorkerInFlightSeq) rtlWorkerBusy = false;
+        const waiter = rtlWorkerWaiters.get(data.seq);
+        if (waiter) rtlWorkerWaiters.delete(data.seq);
+        if (data.gen === rtlWorkerGen && S.sim && rtlWorkerReady) {
+          applyRtlBatchResult(data);
+        }
+        waiter?.resolve(data);
+      }
+    };
+    w.onerror = () => {
+      rtlWorkerBusy = false;
+      rtlWorkerReady = false;
+      if (rtlWorker === w) rtlWorker = null;
+      try { w.terminate(); } catch {}
+      for (const wtr of rtlWorkerWaiters.values()) wtr.reject(new Error('RTL worker crashed'));
+      rtlWorkerWaiters.clear();
+    };
+    rtlWorker = w;
+  } catch {
+    rtlWorker = null;
+  }
+  return rtlWorker;
+}
+
 function clearRtlRunner() {
   rtlRunner = null;
+  rtlWorkerReady = false;
+  rtlWorkerBusy = false;
+  ++rtlWorkerGen;
+  for (const wtr of rtlWorkerWaiters.values()) wtr.resolve(null);
+  rtlWorkerWaiters.clear();
   rtlSignalMap = [];
   rtlInputMap.clear();
   rtlIdleBeep = null;
@@ -740,27 +795,58 @@ function clearRtlRunner() {
   rtlAdaptiveMaxCycles = 2500000;
 }
 
+function bindRtlMeta(meta) {
+  const sigByShort = new Map();
+  S.sim.signals.forEach((s, idx) => sigByShort.set(s.short.toLowerCase(), idx));
+  const map = [];
+  meta.observed.forEach((obs, obsIdx) => {
+    const sigIdx = sigByShort.get(obs.name.toLowerCase());
+    if (sigIdx !== undefined) map.push({ obsIdx, sigIdx, width: obs.width });
+  });
+  for (const inp of meta.inputs) {
+    const sigIdx = sigByShort.get(inp.name.toLowerCase());
+    if (sigIdx !== undefined) rtlInputMap.set(S.sim.signals[sigIdx].id, inp.name);
+  }
+  rtlSignalMap = map;
+}
+
 async function initRtlRunnerForSim() {
   clearRtlRunner();
   if (!S.sim?.hasRtl || S.vcd) return false;
-  try {
-    const mod = await import(`/api/sim/${S.sim.id}/rtl.mjs`);
-    const beepBind = S.bindings.beep;
-    const beepPortName = (beepBind && beepBind.bit === null) ? beepBind.signal.short : '';
-    const runner = mod.createRunner(beepPortName);
-    const sigByShort = new Map();
-    S.sim.signals.forEach((s, idx) => sigByShort.set(s.short.toLowerCase(), idx));
-    const map = [];
-    runner.meta.observed.forEach((obs, obsIdx) => {
-      const sigIdx = sigByShort.get(obs.name.toLowerCase());
-      if (sigIdx !== undefined) map.push({ obsIdx, sigIdx, width: obs.width });
-    });
-    for (const inp of runner.meta.inputs) {
-      const sigIdx = sigByShort.get(inp.name.toLowerCase());
-      if (sigIdx !== undefined) rtlInputMap.set(S.sim.signals[sigIdx].id, inp.name);
+  const beepBind = S.bindings.beep;
+  const beepPortName = (beepBind && beepBind.bit === null) ? beepBind.signal.short : '';
+  const rtlUrl = `/api/sim/${S.sim.id}/rtl.mjs`;
+  const gen = rtlWorkerGen;
+
+  // Primary path: dedicated background Web Worker (keeps 3D WebGL locked at 60 FPS!)
+  const w = ensureRtlWorker();
+  if (w) {
+    try {
+      const initId = `init-${++rtlWorkerSeq}`;
+      const ready = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { rtlWorkerWaiters.delete(initId); reject(new Error('RTL worker init timeout')); }, 5000);
+        rtlWorkerWaiters.set(initId, {
+          resolve: d => { clearTimeout(timer); resolve(d); },
+          reject: e => { clearTimeout(timer); reject(e); },
+        });
+        w.postMessage({ type: 'init', id: initId, url: rtlUrl, beepPort: beepPortName });
+      });
+      if (gen !== rtlWorkerGen || !S.sim) return false;
+      bindRtlMeta(ready.meta);
+      rtlWorkerReady = true;
+      return true;
+    } catch {
+      // Fall back cleanly to inline main-thread RTL runner below
+      rtlWorkerReady = false;
     }
+  }
+
+  try {
+    const mod = await import(rtlUrl);
+    const runner = mod.createRunner(beepPortName);
+    if (gen !== rtlWorkerGen || !S.sim) return false;
+    bindRtlMeta(runner.meta);
     rtlRunner = runner;
-    rtlSignalMap = map;
     return true;
   } catch {
     clearRtlRunner();
@@ -769,7 +855,20 @@ async function initRtlRunnerForSim() {
 }
 
 function syncAllInputsToRtl() {
-  if (!rtlRunner) return;
+  if (!hasActiveRtl()) return;
+  const beepBind = S.bindings.beep;
+  const beepPort = beepBind && beepBind.bit === null ? beepBind.signal.short : '';
+  if (rtlWorkerReady && rtlWorker) {
+    const list = [];
+    for (const [id, name] of rtlInputMap.entries()) {
+      const raw = S.inputs[id];
+      if (typeof raw === 'string' && raw.length) {
+        list.push({ name, val: parseInt(raw.replace(/[^01]/g, '0'), 2) >>> 0 });
+      }
+    }
+    rtlWorker.postMessage({ type: 'inputs', list, beepPort });
+    return;
+  }
   for (const [id, name] of rtlInputMap.entries()) {
     const raw = S.inputs[id];
     if (typeof raw === 'string' && raw.length) {
@@ -777,8 +876,7 @@ function syncAllInputsToRtl() {
       rtlRunner.setInput(name, num);
     }
   }
-  const beepBind = S.bindings.beep;
-  rtlRunner.setBeepPort(beepBind && beepBind.bit === null ? beepBind.signal.short : '');
+  rtlRunner.setBeepPort(beepPort);
 }
 
 let rtlAdaptiveMaxCycles = 2500000;
@@ -794,34 +892,9 @@ function pickRtlSampleCount(cycles) {
   }
   return 47;
 }
-function runRtlStepBatch(cycles, wallDt = 0) {
-  if (!rtlRunner || !S.sim) return;
-  const batchStart = performance.now();
-  const trueCycleFs = 1e15 / S.clkHz;
-  if (cycles > 0) {
-    const maxCycles = trueCycleFs > 0 ? Math.max(0, Math.floor((MAX_SIM_FS - S.time) / trueCycleFs)) : Infinity;
-    if (maxCycles <= 0) {
-      pause();
-      log('Reached 64-bit simulation time ceiling (~5 hours at 1 fs). Click Restart to continue from 0 ns.', 'info');
-      toast('Reached simulation time limit. Click Restart to continue from 0 ns.');
-      return;
-    }
-    if (cycles > maxCycles) cycles = maxCycles;
-  }
-  const startTimeFs = S.time;
-  const tickFs = 10 ** (15 + (S.sim.precision ?? -15));
-  const hasScalarBeep = !!(S.bindings.beep && S.bindings.beep.bit === null);
-  let audioOut = null;
-  if (cycles > 0 && S.running && hasScalarBeep && !audio.isMuted() && wallDt > 0) {
-    // Exact sample-locked audio clock: sample count derives strictly from simulated cycles/rate
-    // with fractional carry-over so pitch never FM-warbles on frame-time jitter
-    const exactSamples = wallDt * audio.sampleRate() + rtlAudioSampleFrac;
-    const aSamples = Math.min(4096, Math.floor(exactSamples));
-    rtlAudioSampleFrac = Math.max(0, exactSamples - aSamples);
-    if (aSamples > 0) audioOut = new Float32Array(aSamples);
-  }
-  const res = rtlRunner.runBatch(cycles, pickRtlSampleCount(cycles), audioOut);
-  const rtlExecMs = performance.now() - batchStart;
+
+function applyRtlBatchResult({ cyclesRun, execMs, nSamples, stride, offsets, flatVals, audioOut, startTimeFs, trueCycleFs, tickFs, hasScalarBeep }) {
+  if (!S.sim) return;
   const template = S.sim.signals.map(s => S.values.get(s.short) ?? S.inputs[s.id] ?? '0'.repeat(s.width));
   for (const [id] of rtlInputMap.entries()) {
     const sig = S.sim.signals.find(s => s.id === id);
@@ -830,18 +903,20 @@ function runRtlStepBatch(cycles, wallDt = 0) {
       if (idx !== -1) template[idx] = S.inputs[id];
     }
   }
-  const samples = res.samples.map(snap => {
+  const samples = new Array(nSamples);
+  for (let i = 0; i < nSamples; i++) {
     const row = template.slice();
+    const base = i * stride;
     for (let k = 0; k < rtlSignalMap.length; k++) {
       const m = rtlSignalMap[k];
-      const v = snap.vals[m.obsIdx] >>> 0;
+      const v = flatVals[base + m.obsIdx] >>> 0;
       const cache = m.width >= 2 && m.width <= 8 ? BIN_CACHE[m.width] : null;
       row[m.sigIdx] = m.width === 1 ? (v & 1 ? '1' : '0') : (cache ? cache[v & ((1 << m.width) - 1)] : v.toString(2).padStart(m.width, '0'));
     }
-    const ticks = Math.round((startTimeFs + snap.offset * trueCycleFs) / tickFs);
-    return { time: String(ticks), values: row };
-  });
-  S.cycles += res.cyclesRun;
+    const ticks = Math.round((startTimeFs + offsets[i] * trueCycleFs) / tickFs);
+    samples[i] = { time: String(ticks), values: row };
+  }
+  S.cycles += cyclesRun;
   if (audioOut && hasScalarBeep) {
     let minV = 2, maxV = -2;
     for (let i = 0; i < audioOut.length; i++) {
@@ -863,14 +938,94 @@ function runRtlStepBatch(cycles, wallDt = 0) {
   } else {
     consume({ samples }, trueCycleFs, false);
   }
-  if (cycles >= 10000) {
-    // Emergency anti-freeze guard only (never throttle healthy 1x real-time designs!)
-    if (rtlExecMs > 45) {
-      rtlAdaptiveMaxCycles = Math.max(250000, Math.round(rtlAdaptiveMaxCycles * Math.min(0.85, 36 / rtlExecMs)));
-    } else if (rtlExecMs < 28 && rtlAdaptiveMaxCycles < 2500000) {
+  if (cyclesRun >= 10000 && Number.isFinite(execMs)) {
+    // Emergency anti-freeze guard only (Worker runs off-thread so 1x real-time never stalls WebGL)
+    if (execMs > 45) {
+      rtlAdaptiveMaxCycles = Math.max(250000, Math.round(rtlAdaptiveMaxCycles * Math.min(0.85, 36 / execMs)));
+    } else if (execMs < 28 && rtlAdaptiveMaxCycles < 2500000) {
       rtlAdaptiveMaxCycles = Math.min(2500000, Math.round(rtlAdaptiveMaxCycles * 1.25));
     }
   }
+}
+
+function runRtlStepBatch(cycles, wallDt = 0, { awaitResult = false } = {}) {
+  if (!hasActiveRtl() || !S.sim) return;
+  const trueCycleFs = 1e15 / S.clkHz;
+  if (cycles > 0) {
+    const maxCycles = trueCycleFs > 0 ? Math.max(0, Math.floor((MAX_SIM_FS - S.time) / trueCycleFs)) : Infinity;
+    if (maxCycles <= 0) {
+      pause();
+      log('Reached 64-bit simulation time ceiling (~5 hours at 1 fs). Click Restart to continue from 0 ns.', 'info');
+      toast('Reached simulation time limit. Click Restart to continue from 0 ns.');
+      return;
+    }
+    if (cycles > maxCycles) cycles = maxCycles;
+  }
+  const startTimeFs = S.time;
+  const tickFs = 10 ** (15 + (S.sim.precision ?? -15));
+  const hasScalarBeep = !!(S.bindings.beep && S.bindings.beep.bit === null);
+  let audioSamples = 0;
+  if (cycles > 0 && S.running && hasScalarBeep && !audio.isMuted() && wallDt > 0) {
+    // Exact sample-locked audio clock: sample count derives strictly from simulated cycles/rate
+    // with fractional carry-over so pitch never FM-warbles on frame-time jitter
+    const exactSamples = wallDt * audio.sampleRate() + rtlAudioSampleFrac;
+    audioSamples = Math.min(4096, Math.floor(exactSamples));
+    rtlAudioSampleFrac = Math.max(0, exactSamples - audioSamples);
+  }
+  const sampleCount = pickRtlSampleCount(cycles);
+
+  if (rtlWorkerReady && rtlWorker) {
+    const seq = ++rtlWorkerSeq;
+    rtlWorkerInFlightSeq = seq;
+    rtlWorkerBusy = true;
+    const msg = {
+      type: 'batch',
+      seq,
+      gen: rtlWorkerGen,
+      cycles,
+      sampleCount,
+      audioSamples,
+      startTimeFs,
+      trueCycleFs,
+      tickFs,
+      hasScalarBeep,
+    };
+    if (awaitResult) {
+      return new Promise((resolve, reject) => {
+        rtlWorkerWaiters.set(seq, { resolve, reject });
+        rtlWorker.postMessage(msg);
+      });
+    }
+    rtlWorker.postMessage(msg);
+    return;
+  }
+
+  // Fallback inline execution when Web Worker is unavailable
+  const batchStart = performance.now();
+  const audioOut = audioSamples > 0 ? new Float32Array(audioSamples) : null;
+  const res = rtlRunner.runBatch(cycles, sampleCount, audioOut);
+  const execMs = performance.now() - batchStart;
+  const nSamples = res.samples.length;
+  const stride = nSamples > 0 ? res.samples[0].vals.length : 0;
+  const offsets = new Float64Array(nSamples);
+  const flatVals = new Uint32Array(nSamples * stride);
+  for (let i = 0; i < nSamples; i++) {
+    offsets[i] = res.samples[i].offset;
+    flatVals.set(res.samples[i].vals, i * stride);
+  }
+  applyRtlBatchResult({
+    cyclesRun: res.cyclesRun,
+    execMs,
+    nSamples,
+    stride,
+    offsets,
+    flatVals,
+    audioOut,
+    startTimeFs,
+    trueCycleFs,
+    tickFs,
+    hasScalarBeep,
+  });
 }
 
 async function applyInitialFlashedState({ preserveWaves = false } = {}) {
@@ -903,7 +1058,7 @@ async function applyInitialFlashedState({ preserveWaves = false } = {}) {
   if (await initRtlRunnerForSim()) {
     syncAllInputsToRtl();
     S.pending.length = 0;
-    runRtlStepBatch(0, 0);
+    await runRtlStepBatch(0, 0, { awaitResult: true });
     rtlIdleBeep = /[1H]/.test(boardValue('beep')) ? '1' : /[0L]/.test(boardValue('beep')) ? '0' : null;
   } else if (!S.sim.ended && S.pending.length) {
     S.busy = true;
@@ -1410,7 +1565,7 @@ async function advance(cycles = 1, wallSec = 0) {
   if (!Number.isInteger(cycles) || cycles < 0) return;
   if (!S.sim || S.sim.ended || S.dirty || S.error || !S.power || S.busy || S.building || S.importing || S.exporting) return;
   if (S.vcd) { stepPlayback(cycles); return; }
-  if (rtlRunner) { runRtlStepBatch(cycles, wallSec); return; }
+  if (hasActiveRtl()) { await runRtlStepBatch(cycles, wallSec, { awaitResult: true }); return; }
   const ticksPerSec = 10 ** -(S.sim.precision ?? -15);
   const stepHalfPeriod = (wallSec > 0 && cycles > 0)
     ? String(Math.max(1, Math.round((0.5 * wallSec * ticksPerSec) / cycles)))
@@ -1481,9 +1636,13 @@ function setInput(id, value) {
   if (!S.power || S.vcd || S.building || S.importing || S.exporting || S.dirty || S.error || !S.sim || !S.flashed || S.sim.ended || S.inputs[id] === value) return;
   clearMuxDisplayState();
   S.inputs[id] = value; syncKeys();
-  if (rtlRunner) {
+  if (hasActiveRtl()) {
     const inpName = rtlInputMap.get(id);
-    if (inpName) rtlRunner.setInput(inpName, parseInt(value.replace(/[^01]/g, '0'), 2) >>> 0);
+    if (inpName) {
+      const val = parseInt(value.replace(/[^01]/g, '0'), 2) >>> 0;
+      if (rtlWorkerReady && rtlWorker) rtlWorker.postMessage({ type: 'input', name: inpName, val });
+      else rtlRunner?.setInput(inpName, val);
+    }
     if (!S.running) runRtlStepBatch(0, 0);
     return;
   }
@@ -3216,17 +3375,19 @@ function frame(now) {
   if (now - lastDraw > 250) { $('#roFps').textContent = board ? Math.round(board.fps) : '—'; lastDraw = now; }
   if (S.running) {
     const rate = 10 ** ((S.speed - 55) / 25);
-    if (rtlRunner && !S.vcd) {
-      const frameDt = Math.min(0.04, dt);
+    if (hasActiveRtl() && !S.vcd) {
+      const frameDt = Math.min(0.05, dt);
       const stepWall = frameDt * rate;
       const cap = Math.max(250000, rtlAdaptiveMaxCycles);
       accumulator += S.clkHz * stepWall;
       accumulator = Math.min(accumulator, cap * 2);
-      const cycles = Math.min(cap, Math.floor(accumulator));
-      if (Number.isInteger(cycles) && cycles > 0) {
-        accumulator = Math.max(0, accumulator - cycles);
-        const audioDt = S.clkHz > 0 ? Math.min(0.05, (cycles / S.clkHz) / Math.max(0.05, rate)) : frameDt;
-        runRtlStepBatch(cycles, audioDt);
+      if (!rtlWorkerBusy) {
+        const cycles = Math.min(cap, Math.floor(accumulator));
+        if (Number.isInteger(cycles) && cycles > 0) {
+          accumulator = Math.max(0, accumulator - cycles);
+          const audioDt = S.clkHz > 0 ? Math.min(0.06, (cycles / S.clkHz) / Math.max(0.05, rate)) : frameDt;
+          runRtlStepBatch(cycles, audioDt);
+        }
       }
     } else {
       const maxPerFrame = S.clkHz >= 10000 ? adaptiveMaxCycles : 4096;
