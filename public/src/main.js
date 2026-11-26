@@ -1171,15 +1171,41 @@ function boardValue(net) {
   const value = S.values.get(bound.signal.short) ?? 'U';
   return value[bound.offset] ?? 'U';
 }
+const muxSlots = [null, null, null, null];
+const muxAge = [0, 0, 0, 0];
+let muxCursor = 0;
+let multiDigitFrame = null;
 const targetSegDuty = new Float32Array(32);
 const targetLedDuty = new Float32Array(4);
 const segEnergyAccum = new Float64Array(32);
 const ledEnergyAccum = new Float64Array(4);
 function clearMuxDisplayState() {
+  muxSlots.fill(null);
+  muxAge.fill(0);
+  multiDigitFrame = null;
   targetSegDuty.fill(0);
   targetLedDuty.fill(0);
   segEnergyAccum.fill(0);
   ledEnergyAccum.fill(0);
+}
+function captureDisplayFrame() {
+  let segByte = 0; SEG_NETS.forEach((net, b) => { if (/[0L]/.test(boardValue(net))) segByte |= 1 << b; });
+  let digitMask = 0; DIGIT_NETS.forEach((net, i) => { if (/[0L]/.test(boardValue(net))) digitMask |= 1 << i; });
+  let ledMask = 0; LED_NETS.forEach((net, i) => { if (/[0L]/.test(boardValue(net))) ledMask |= 1 << i; });
+  return { segByte, digitMask, ledMask };
+}
+function applyDisplayFrame(f) {
+  const active = S.power;
+  for (let i = 0; i < 4; i++) {
+    board?.setSegDigit(i, f.segByte, active && !!(f.digitMask & (1 << i)));
+    const on = active && !!(f.ledMask & (1 << i));
+    board?.setLed(i, on);
+    const ind = $(`[data-led="${i}"]`);
+    if (ind) {
+      ind.classList.toggle('on', on);
+      ind.style.setProperty('--led-lvl', on ? '1' : '0');
+    }
+  }
 }
 function accumulateDisplaySample(weight) {
   if (!S.power || weight <= 0) return;
@@ -1491,6 +1517,10 @@ function consume(result, stepFs = 0, skipLegacyBuzzer = false) {
   let prevSampleTimeFs = burstStartTimeFs;
   let totalDisplayWeight = 0;
   const usePov = S.running && appSettings.displayPovEnabled !== false;
+  const useRawMux = S.running && !usePov && list.length > 1;
+  const seenInBurst = useRawMux ? [null, null, null, null] : null;
+  let sawMultiDigit = null;
+  let lastDisplayFrame = null;
   if (usePov && list.length > 0) {
     segEnergyAccum.fill(0);
     ledEnergyAccum.fill(0);
@@ -1507,6 +1537,17 @@ function consume(result, stepFs = 0, skipLegacyBuzzer = false) {
       const w = dt > 0 ? dt : (stepFs > 0 ? stepFs : 1);
       accumulateDisplaySample(w);
       totalDisplayWeight += w;
+    } else if (useRawMux) {
+      const df = captureDisplayFrame();
+      lastDisplayFrame = df;
+      if (df.digitMask !== 0) {
+        if ((df.digitMask & (df.digitMask - 1)) === 0) {
+          const d = 31 - Math.clz32(df.digitMask);
+          if (d >= 0 && d < 4) seenInBurst[d] = df;
+        } else {
+          sawMultiDigit = df;
+        }
+      }
     }
     uartSample();
   }
@@ -1514,6 +1555,28 @@ function consume(result, stepFs = 0, skipLegacyBuzzer = false) {
   if (usePov && list.length > 0 && totalDisplayWeight > 0) {
     commitDisplayIntegration(totalDisplayWeight, false);
     sampleNonDisplayOutputs(true);
+  } else if (useRawMux) {
+    sampleNonDisplayOutputs();
+    const anySeen = seenInBurst.some(Boolean);
+    if (!anySeen && !sawMultiDigit && (!lastDisplayFrame || lastDisplayFrame.digitMask === 0)) {
+      clearMuxDisplayState();
+      sampleDisplayOnly();
+    } else if (sawMultiDigit) {
+      multiDigitFrame = sawMultiDigit;
+      muxSlots.fill(null);
+      muxAge.fill(0);
+    } else {
+      multiDigitFrame = null;
+      for (let d = 0; d < 4; d++) {
+        if (seenInBurst[d]) {
+          muxSlots[d] = seenInBurst[d];
+          muxAge[d] = 0;
+        } else if (muxSlots[d]) {
+          muxAge[d]++;
+          if (muxAge[d] > 6) muxSlots[d] = null;
+        }
+      }
+    }
   } else if (list.length > 0) {
     sampleOutputs();
   }
@@ -2866,10 +2929,11 @@ function wireSettingsAndThemes() {
   });
   const onPovToggle = checked => {
     appSettings.displayPovEnabled = !!checked;
+    clearMuxDisplayState();
     applyAllSettings();
     toast(appSettings.displayPovEnabled
       ? 'Display mode: Persistence of Vision (PoV ON)'
-      : 'Display mode: Raw FPS (per-frame snapshot)');
+      : 'Display mode: Raw FPS (1 frame per active dtube)');
   };
   $('#setDisplayPov')?.addEventListener('change', e => onPovToggle(e.target.checked));
   $('#tglPov')?.addEventListener('change', e => onPovToggle(e.target.checked));
@@ -3374,6 +3438,23 @@ function frame(now) {
   requestAnimationFrame(frame); const dt = Math.max(0, Math.min(.1, (now - lastFrame) / 1000)); lastFrame = now;
   if (now - lastDraw > 250) { $('#roFps').textContent = board ? Math.round(board.fps) : '—'; lastDraw = now; }
   if (S.running) {
+    if (appSettings.displayPovEnabled === false) {
+      if (multiDigitFrame) {
+        applyDisplayFrame(multiDigitFrame);
+      } else {
+        let nextFrame = null;
+        for (let step = 1; step <= 4; step++) {
+          const idx = (muxCursor + step) % 4;
+          if (muxSlots[idx]) {
+            muxCursor = idx;
+            nextFrame = muxSlots[idx];
+            break;
+          }
+        }
+        if (nextFrame) applyDisplayFrame(nextFrame);
+        else sampleDisplayOnly();
+      }
+    }
     const rate = 10 ** ((S.speed - 55) / 25);
     if (hasActiveRtl() && !S.vcd) {
       const frameDt = Math.min(0.05, dt);
