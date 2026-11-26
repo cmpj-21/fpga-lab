@@ -2276,7 +2276,7 @@ export function createIde(api) {
         await fetch('/api/project/write-file', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dir: picked.dir, rel: 'README.md', content: readmeText }),
+          body: JSON.stringify({ dir: picked.dir, rel: 'README.md', text: readmeText }),
         });
         await refreshProjectTree();
       }
