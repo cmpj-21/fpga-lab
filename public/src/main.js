@@ -2128,6 +2128,10 @@ function renderInspector(part) {
 function syncViewportHint() {
   const hint = $('#viewportHint');
   if (!hint) return;
+  if (board2d?.active) {
+    hint.innerHTML = `<i class="orbit-icon">◎</i> Click: S1–S4, Reset, DIP 1–4, Power <b>·</b> 2D Canvas (WebGL paused)`;
+    return;
+  }
   const tool = board?.toolMode === 'select' ? 'Click: Select' : 'Click: Interact';
   const nav = board?.navMode === 'pan' ? 'Drag: Pan' : 'Drag: Orbit';
   hint.innerHTML = `<i class="orbit-icon">↔</i> ${tool} <b>·</b> ${nav} <b>·</b> Scroll: Zoom`;
@@ -3342,6 +3346,7 @@ function wire() {
   if ($('#pmFrameWrap')) new ResizeObserver(updatePhotoFrameBox).observe($('#pmFrameWrap'));
   function togglePhotoMode(force) {
     const active = force !== undefined ? !!force : !$('#center').classList.contains('photo-mode');
+    if (active && board2d?.active) return toast('Photo Studio is only available in 3D mode.');
     if (active && ide && !ide.boardOpen) ide.setBoardPaneOpen(true);
     $('#center').classList.toggle('photo-mode', active);
     $('#photoStudio').classList.toggle('hidden', !active);
@@ -3685,8 +3690,13 @@ function setBoardViewMode(mode, { save = true } = {}) {
   if (save) { saveStoredSettings(appSettings); persistAppState({ settings: appSettings }); }
   $('#boardPane')?.classList.toggle('mode-2d', use2d);
   $('#view3d')?.classList.toggle('hidden', use2d);
-  if (use2d) $('#glOverlay')?.classList.add('hidden');
-  else if (!boardHasWebGL) $('#glOverlay')?.classList.remove('hidden');
+  if (use2d) {
+    $('#glOverlay')?.classList.add('hidden');
+    $('#deck')?.classList.add('hidden');
+    $('#btnViewSettings')?.setAttribute('aria-expanded', 'false');
+    $('#compInspector')?.classList.add('hidden');
+    if ($('#center')?.classList.contains('photo-mode')) $('#pmCloseBtn')?.click();
+  } else if (!boardHasWebGL) $('#glOverlay')?.classList.remove('hidden');
   board2d?.setActive(use2d);
   $$('[data-board-dim]').forEach(btn => {
     const active = btn.dataset.boardDim === next;
@@ -3695,8 +3705,7 @@ function setBoardViewMode(mode, { save = true } = {}) {
   });
   const titleSpan = $('.board-tab-title span');
   if (titleSpan) titleSpan.textContent = `${use2d ? '2D' : '3D'} Devboard Simulator — RZ-EasyFPGA A2.2`;
-  const hint = $('.board-nav-hint');
-  if (hint) hint.textContent = use2d ? 'Click S1–S4, Reset, DIP 1–4, or Power · Lightweight 2D Canvas (WebGL paused)' : 'Click: Interact · Drag: Orbit · Scroll: Zoom';
+  syncViewportHint();
 }
 let appVersionInfo = { version: '', installMode: 'dev' };
 let updatePollTimer = 0;

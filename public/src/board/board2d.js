@@ -33,7 +33,7 @@ export function createBoard2D(canvas, opts = {}) {
 
   // Hitboxes in PCB mm coordinates (origin = top-left of 136x106 mm PCB)
   const hitRegions = [
-    { id: 'power', kind: 'power', x: 18, y: 8, w: 12, h: 12 },
+    { id: 'power', kind: 'power', x: 16.5, y: 8, w: 8, h: 12 },
     { id: 'reset', kind: 'key', keyId: 'reset', x: 8, y: 82, w: 12, h: 12 },
     { id: 'key1', kind: 'key', keyId: 'key1', x: 82, y: 83, w: 9, h: 9 },
     { id: 'key2', kind: 'key', keyId: 'key2', x: 93, y: 83, w: 9, h: 9 },
@@ -518,18 +518,13 @@ export function createBoard2D(canvas, opts = {}) {
       state.buzzer = false;
     },
     get displayState() {
-      return {
-        power: state.power,
-        buzzer: state.buzzer,
-        dipMask: state.dipMask,
-        leds: state.leds.map(l => ({ on: l.on, duty: l.duty, target: l.target })),
-        digits: state.digits.map(d => ({
-          segs: d.segs,
-          enabled: d.enabled,
-          duty: Array.from(d.duty),
-          target: Array.from(d.target),
-        })),
-      };
+      return state.digits.map(d => ({
+        segs: d.segs,
+        latched: d.segs,
+        enabled: d.enabled,
+        duty: Array.from(d.duty),
+        target: Array.from(d.target),
+      }));
     },
     screenshot() {
       try { return canvas.toDataURL('image/png'); } catch { return ''; }
