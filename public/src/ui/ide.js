@@ -3696,6 +3696,7 @@ export function createIde(api) {
     get problems() { return problems; },
     get editor() { return docs.get(active)?.editor || null; },
     get boardOpen() { return boardPaneOpen; },
+    get activeTerminalCount() { return termSessionsList.filter(t => !t.exited).length; },
     isDirty,
   };
 }

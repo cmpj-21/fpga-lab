@@ -2765,6 +2765,13 @@ function syncSettingsUI() {
     try { skip = localStorage.getItem('trace.skipHomeExitConfirm') === '1'; } catch {}
     $('#setConfirmHomeExit').checked = !skip;
   }
+  const autoCheck = appSettings.autoCheckUpdates !== false;
+  if ($('#setAutoCheckUpdates')) $('#setAutoCheckUpdates').checked = autoCheck;
+  if ($('#setAutoInstallUpdates')) {
+    $('#setAutoInstallUpdates').checked = Boolean(appSettings.autoInstallUpdates);
+    $('#setAutoInstallUpdates').disabled = !autoCheck;
+  }
+  $('#setAutoInstallUpdatesRow')?.classList.toggle('is-disabled', !autoCheck);
   if ($('#setMasterVolume')) { $('#setMasterVolume').value = String(appSettings.masterVolume ?? 50); if ($('#setVolumeVal')) $('#setVolumeVal').textContent = `${appSettings.masterVolume ?? 50}%`; }
   const gfx = board?.getGfx?.();
   if (gfx && $('#setGfxQuality')) $('#setGfxQuality').value = gfx.quality || 'high';
@@ -2938,6 +2945,13 @@ function wireSettingsAndThemes() {
   $('#setAutoCheckUpdates')?.addEventListener('change', e => {
     appSettings.autoCheckUpdates = e.target.checked;
     applyAllSettings();
+  });
+  $('#setAutoInstallUpdates')?.addEventListener('change', e => {
+    appSettings.autoInstallUpdates = e.target.checked;
+    applyAllSettings();
+    toast(appSettings.autoInstallUpdates
+      ? 'Auto-install updates enabled (Portable & Native Installer, SHA-256 verified).'
+      : 'Auto-install updates disabled.');
   });
   $('#setCheckUpdatesBtn')?.addEventListener('click', () => {
     $('#settingsDialog')?.close();
@@ -3745,7 +3759,7 @@ function renderUpdateDialogState(info, errMsg = '') {
     notes?.classList.add('hidden');
   }
 }
-async function checkUpdates({ openDialog = false, silent = false } = {}) {
+async function checkUpdates({ openDialog = false, silent = false, allowAutoInstall = false } = {}) {
   const dlg = $('#updateDialog');
   if (openDialog && dlg && !dlg.open) {
     renderUpdateDialogState(null);
@@ -3755,6 +3769,18 @@ async function checkUpdates({ openDialog = false, silent = false } = {}) {
     const res = await fetch('/api/update/check');
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || 'Could not check for updates.');
+    if (allowAutoInstall && appSettings.autoInstallUpdates === true && data.updateAvailable && data.canSelfUpdate) {
+      const busyWorkspace = Boolean(ide?.hasUnsaved?.() || (ide?.activeTerminalCount || 0) > 0);
+      if (!busyWorkspace) {
+        if (dlg && !dlg.open) dlg.showModal();
+        renderUpdateDialogState(data);
+        toast(`Auto-installing Trace v${data.latestVersion} (${formatInstallModeLabel(data.installMode)})…`, 'ok');
+        await startSelfUpdate();
+        return data;
+      }
+      toast(`Trace v${data.latestVersion} is ready — save files / close terminals or open Help → Check for Updates… to install.`);
+      return data;
+    }
     if (openDialog) renderUpdateDialogState(data);
     else if (data.updateAvailable && !silent) {
       toast(`Update v${data.latestVersion} is available! Open Help → Check for Updates…`, 'ok');
@@ -3825,8 +3851,12 @@ async function boot() {
       $('#setVersionLabel').textContent = `v${health.version} · ${formatInstallModeLabel(health.installMode || 'dev')}`;
     }
     if ($('#setAutoCheckUpdates')) $('#setAutoCheckUpdates').checked = appSettings.autoCheckUpdates !== false;
+    if ($('#setAutoInstallUpdates')) {
+      $('#setAutoInstallUpdates').checked = Boolean(appSettings.autoInstallUpdates);
+      $('#setAutoInstallUpdates').disabled = appSettings.autoCheckUpdates === false;
+    }
     if (appSettings.autoCheckUpdates !== false && health.installMode && health.installMode !== 'dev') {
-      setTimeout(() => checkUpdates({ openDialog: false, silent: true }), 4500);
+      setTimeout(() => checkUpdates({ openDialog: false, silent: true, allowAutoInstall: true }), 4500);
     }
   }).catch(() => {});
   const boardOpts = {

@@ -922,6 +922,8 @@ export const DEFAULT_SETTINGS = {
   displayPovEnabled: true,
   displayPersistenceMs: 28,
   tdmPeakBoost: true,
+  autoCheckUpdates: true,
+  autoInstallUpdates: false,
 };
 
 export function normalizeThemeId(id) {
