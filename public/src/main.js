@@ -3661,6 +3661,8 @@ function wrapBoardWith2d(b3d, b2d) {
   return new Proxy(b3d || b2d, {
     get(target, prop) {
       if (prop === 'fps') return b2d?.active ? b2d.fps : (b3d?.fps ?? b2d?.fps ?? 60);
+      if (prop === 'displayState') return b2d?.active ? b2d.displayState : (b3d?.displayState ?? b2d?.displayState);
+      if ((prop === 'screenshot' || prop === 'png') && b2d?.active) return (...args) => b2d[prop](...args);
       if (prop === 'is2d') return !!b2d?.active;
       if (prop === 'board2d') return b2d;
       if (prop === 'board3d') return b3d;
@@ -3826,7 +3828,7 @@ async function startSelfUpdate() {
     if (summary) summary.textContent = `Verified SHA-256 (${String(data.sha256 || '').slice(0, 12)}…). Closing Trace to apply v${data.version} and relaunch…`;
     await prepareExit();
     if (window.chrome?.webview?.postMessage) {
-      window.chrome.webview.postMessage(JSON.stringify({ type: 'exit-confirmed' }));
+      window.chrome.webview.postMessage('app:close-now');
     }
   } catch (err) {
     clearInterval(updatePollTimer);

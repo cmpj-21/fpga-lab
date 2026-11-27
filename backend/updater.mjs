@@ -234,8 +234,16 @@ foreach ($item in @('Trace.exe', 'WebView2Loader.dll', 'app', 'runtime')) {
   $s = Join-Path $root $item
   $d = Join-Path $dst $item
   if (Test-Path $s) {
-    if (Test-Path $d) { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue }
-    Copy-Item -LiteralPath $s -Destination $d -Recurse -Force
+    for ($try = 0; $try -lt 20; $try++) {
+      try {
+        if (Test-Path $d) { Remove-Item -LiteralPath $d -Recurse -Force }
+        Copy-Item -LiteralPath $s -Destination $d -Recurse -Force
+        break
+      } catch {
+        if ($try -eq 19) { throw }
+        Start-Sleep -Milliseconds 300
+      }
+    }
   }
 }
 Start-Process -FilePath (Join-Path $dst 'Trace.exe') -WorkingDirectory $dst
@@ -243,10 +251,15 @@ Start-Sleep -Milliseconds 400
 Remove-Item -LiteralPath ${psQuote(workDir)} -Recurse -Force -ErrorAction SilentlyContinue
 `;
     } else {
-      // Inno Setup installer
+      // Inno Setup installer (relaunch explicitly because trace.iss uses skipifsilent)
       scriptBody = `$ErrorActionPreference = 'Stop'
 ${waitBlock}
-Start-Process -FilePath ${psQuote(dlPath)} -ArgumentList '/SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS' -Wait
+$p = Start-Process -FilePath ${psQuote(dlPath)} -ArgumentList '/SILENT /CLOSEAPPLICATIONS /NORESTART' -Wait -PassThru
+$exe = Join-Path ${psQuote(install.installDir)} 'Trace.exe'
+if ($p.ExitCode -eq 0 -and (Test-Path $exe)) {
+  Start-Process -FilePath $exe -WorkingDirectory ${psQuote(install.installDir)}
+}
+Start-Sleep -Milliseconds 400
 Remove-Item -LiteralPath ${psQuote(workDir)} -Recurse -Force -ErrorAction SilentlyContinue
 `;
     }

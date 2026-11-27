@@ -72,10 +72,10 @@ export function suggestPinAssignments(ports, existingAssignments) {
     // --- Scalar Ports ---
     if (bit === null || bit === undefined) {
       if (isIn) {
-        if (/^(clk|clock|clk50|clk50m|clk50mhz|sysclk|fpgaclk|mclk|osc|i_clk|clk_i|clk_in)$/.test(flat) || /^clk(_50|_50m|_in|_sys)?$/.test(norm)) {
+        if (/^(clk|clock|clk50|clk50m|clk50mhz|sysclk|fpgaclk|mclk|osc|iclk|clki|clkin)$/.test(flat) || /^clk(_50|_50m|_in|_sys)?$/.test(norm)) {
           if (claim(23, port, '50 MHz clock')) continue;
         }
-        if (/^(rst|reset|resetbtn|rstbtn|keyrst|sysrst|nreset|nrst|resetn|rstn|i_rst)$/.test(flat) || /^re?se?t(_btn|_in|_key)?$/.test(norm)) {
+        if (/^(rst|reset|resetbtn|rstbtn|keyrst|sysrst|nreset|nrst|resetn|rstn|irst)$/.test(flat) || /^re?se?t(_btn|_in|_key)?$/.test(norm)) {
           if (claim(25, port, 'Reset button')) continue;
         }
         const keyMatch = flat.match(/^(?:s|key|btn|button|sw|dip|k)(\d)$/);
@@ -87,13 +87,13 @@ export function suggestPinAssignments(ports, existingAssignments) {
         if (/^(uartrx|uartrxd|rxd|rx|rs232rx)$/.test(flat)) {
           if (claim(115, port, 'UART RX')) continue;
         }
-        if (/^(ir|irrx|ir_in|irin)$/.test(flat)) {
+        if (/^(ir|irrx|irin)$/.test(flat)) {
           if (claim(100, port, 'IR receiver')) continue;
         }
-        if (/^(ps2clk|ps2_clk)$/.test(flat)) {
+        if (/^(ps2clk)$/.test(flat)) {
           if (claim(119, port, 'PS/2 clock')) continue;
         }
-        if (/^(ps2dat|ps2data|ps2_data)$/.test(flat)) {
+        if (/^(ps2dat|ps2data)$/.test(flat)) {
           if (claim(120, port, 'PS/2 data')) continue;
         }
       }
@@ -123,10 +123,10 @@ export function suggestPinAssignments(ports, existingAssignments) {
         if (/^(uarttx|uarttxd|txd|tx|rs232tx)$/.test(flat)) {
           if (claim(114, port, 'UART TX')) continue;
         }
-        if (/^(vgahs|hsync|vga_hsync)$/.test(flat)) {
+        if (/^(vgahs|hsync|vgahsync)$/.test(flat)) {
           if (claim(101, port, 'VGA HSYNC')) continue;
         }
-        if (/^(vgavs|vsync|vga_vsync)$/.test(flat)) {
+        if (/^(vgavs|vsync|vgavsync)$/.test(flat)) {
           if (claim(103, port, 'VGA VSYNC')) continue;
         }
         if (/^(vgar|vgared)$/.test(flat)) {

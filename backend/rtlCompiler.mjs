@@ -260,11 +260,13 @@ function compileExpression(rawExpr, symWidths, memNames) {
       while (start < parts.length && parts[start].code === '0') start++;
       if (start >= parts.length) return { code: '0', width: totalWidth, effWidth: 1 };
       const nzParts = parts.slice(start);
-      const effWidth = nzParts.reduce((a, b) => a + (b.effWidth ?? b.width), 0);
       if (nzParts.length === 1) {
         const p0 = nzParts[0];
         return { code: p0.code, width: totalWidth, effWidth: p0.effWidth ?? p0.width };
       }
+      // Only the MSB non-zero part can trim leading zeros; lower parts occupy their full declared bit width!
+      let effWidth = nzParts[0].effWidth ?? nzParts[0].width;
+      for (let k = 1; k < nzParts.length; k++) effWidth += nzParts[k].width;
       let acc = nzParts[0].code;
       for (let k = 1; k < nzParts.length; k++) {
         acc = `(((${acc}) << ${nzParts[k].width}) | (${nzParts[k].code}))`;
@@ -429,10 +431,13 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
     combNodes.push({
       dst: targetDst,
       deps,
-      emit: () => {
-        const lines = [`let ${targetDst} = 0;`, `switch (${selName}) {`];
-        for (const b of branches) lines.push(`  case ${b.val}: ${targetDst} = ${maskExpr(b.code, wInfo.width)}; break;`);
-        if (defaultBranch !== null) lines.push(`  default: ${targetDst} = ${maskExpr(defaultBranch, wInfo.width)}; break;`);
+      rhs: `? ${blk}`,
+      isSwitch: true,
+      emit: (subst = null) => {
+        const s = subst ? subst(selName) : selName;
+        const lines = [`let ${targetDst} = 0;`, `switch (${s}) {`];
+        for (const b of branches) lines.push(`  case ${b.val}: ${targetDst} = ${maskExpr(subst ? subst(b.code) : b.code, wInfo.width)}; break;`);
+        if (defaultBranch !== null) lines.push(`  default: ${targetDst} = ${maskExpr(subst ? subst(defaultBranch) : defaultBranch, wInfo.width)}; break;`);
         lines.push(`}`);
         return lines.join('\n');
       },
@@ -496,8 +501,12 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
     combNodes.push({
       dst,
       deps: expr.deps,
+      rhs: rhsRaw,
       aliasOf: isPlainId && expr.code !== dst ? expr.code : null,
-      emit: () => `const ${dst} = ${noMaskNeeded ? expr.code : maskExpr(expr.code, wInfo.width)};`,
+      emit: (subst = null) => {
+        const exprCode = subst ? subst(expr.code) : expr.code;
+        return `const ${dst} = ${noMaskNeeded ? exprCode : maskExpr(exprCode, wInfo.width)};`;
+      },
     });
   }
 
@@ -655,8 +664,7 @@ export function compileSynthVerilogToModule(verilogText, { clkHz = 50000000 } = 
   const emitNodes = (nodes, indent, elideAliases = false) => nodes
     .filter(n => !(elideAliases && n.aliasOf))
     .map(n => {
-      const raw = n.emit();
-      const text = elideAliases ? raw.replace(/^const\s+([a-zA-Z_]\w*)\s*=\s*/, 'const $1 = ').replace(/=\s*([\s\S]+)$/, (_, rhs) => `= ${substAliases(rhs)}`) : raw;
+      const text = n.emit(elideAliases ? substAliases : null);
       return `${indent}${text.replace(/\n/g, `\n${indent}`)}`;
     })
     .join('\n');

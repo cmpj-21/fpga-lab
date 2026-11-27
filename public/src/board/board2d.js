@@ -517,5 +517,45 @@ export function createBoard2D(canvas, opts = {}) {
       for (const l of state.leds) { l.on = false; l.duty = 0; l.target = 0; }
       state.buzzer = false;
     },
+    get displayState() {
+      return {
+        power: state.power,
+        buzzer: state.buzzer,
+        dipMask: state.dipMask,
+        leds: state.leds.map(l => ({ on: l.on, duty: l.duty, target: l.target })),
+        digits: state.digits.map(d => ({
+          segs: d.segs,
+          enabled: d.enabled,
+          duty: Array.from(d.duty),
+          target: Array.from(d.target),
+        })),
+      };
+    },
+    screenshot() {
+      try { return canvas.toDataURL('image/png'); } catch { return ''; }
+    },
+    png() {
+      try { return canvas.toDataURL('image/png'); } catch { return ''; }
+    },
+    capturePhoto() {
+      try { return canvas.toDataURL('image/png'); } catch { return ''; }
+    },
+    get selectedPart() { return null; },
+    getGfx() { return { quality: 'low', dof: 0 }; },
+    setGfx() {},
+    resetGfx() {},
+    centerSelected() {},
+    highlightPin() {},
+    setCamera() {},
+    setTheme() {},
+    setQuality() {},
+    setNavMode() {},
+    setToolMode() {},
+    setExplode() {},
+    setAutoOrbit() {},
+    setHideOutline() {},
+    setPhotoFocusMode() {},
+    setStagePose() {},
+    selectPart() {},
   };
 }
