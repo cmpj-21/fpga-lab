@@ -14,7 +14,7 @@ const DEFAULT_REPO = 'cmpj-21/fpga-lab';
 
 export function readAppVersionInfo() {
   try {
-    const raw = JSON.parse(readFileSync(path.join(ROOT, 'version.json'), 'utf8'));
+    const raw = JSON.parse(readFileSync(path.join(ROOT, 'version.json'), 'utf8').replace(/^\uFEFF/, ''));
     return {
       version: String(raw?.version || '1.2.0').replace(/^v/i, '').trim(),
       repo: String(raw?.repo || DEFAULT_REPO).trim(),

@@ -194,7 +194,7 @@ Copy-Item (Join-Path $repoRoot 'backend\engine.mjs') (Join-Path $stageDir 'app\b
 Copy-Item (Join-Path $repoRoot 'backend\rtlCompiler.mjs') (Join-Path $stageDir 'app\backend\rtlCompiler.mjs') -Force
 Copy-Item (Join-Path $repoRoot 'backend\vhdlLint.mjs') (Join-Path $stageDir 'app\backend\vhdlLint.mjs') -Force
 Copy-Item (Join-Path $repoRoot 'backend\updater.mjs') (Join-Path $stageDir 'app\backend\updater.mjs') -Force
-Set-Content -Path (Join-Path $stageDir 'app\version.json') -Value (@{ version = $Version; repo = 'cmpj-21/fpga-lab' } | ConvertTo-Json) -Encoding UTF8
+[System.IO.File]::WriteAllText((Join-Path $stageDir 'app\version.json'), (@{ version = $Version; repo = 'cmpj-21/fpga-lab' } | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
 Copy-Item $conptyExe (Join-Path $stageDir 'app\backend\conpty_host.exe') -Force
 Copy-Item $bridgeSrc (Join-Path $stageDir 'app\backend\bridge.c') -Force
 Copy-Item $vpiOut (Join-Path $stageDir "app\backend\$(Split-Path -Leaf $vpiOut)") -Force
