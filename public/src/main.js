@@ -11,6 +11,7 @@ import { fmtTime } from './sim/types.js';
 import { WaveViewer } from './ui/waves.js';
 import { DEMO_SRC, DEMO_NAME, DEMO_TOP } from './ui/demo.js';
 import { createIde, parseDiagnostics } from './ui/ide.js';
+import { renderMarkdownHtml } from './ui/editor.js';
 import * as audio from './ui/audio.js';
 import { initCustomSelects, openPinPickerPopup, createPinChevronSvg } from './ui/selects.js';
 import { initCustomColorPickers } from './ui/colorpicker.js';
@@ -3764,9 +3765,10 @@ function renderUpdateDialogState(info, errMsg = '') {
     installBtn?.classList.add('hidden');
   }
   if (info.notes && notes) {
-    notes.textContent = info.notes;
+    notes.innerHTML = renderMarkdownHtml(info.notes);
     notes.classList.remove('hidden');
   } else {
+    if (notes) notes.innerHTML = '';
     notes?.classList.add('hidden');
   }
 }
