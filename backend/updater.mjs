@@ -128,7 +128,7 @@ function psQuote(s) {
   return `'${String(s || '').replace(/'/g, "''")}'`;
 }
 
-export async function applyUpdate({ onExitRequest } = {}) {
+export async function applyUpdate({ onExitRequest, deferLaunch = false } = {}) {
   const install = detectInstallMode();
   if (install.mode === 'dev') {
     return {
@@ -204,6 +204,7 @@ Start-Sleep -Milliseconds 350
     let scriptBody = '';
     if (install.mode === 'portable-exe') {
       scriptBody = `$ErrorActionPreference = 'Stop'
+try {
 ${waitBlock}
 $src = ${psQuote(dlPath)}
 $dst = ${psQuote(install.targetPath)}
@@ -219,10 +220,14 @@ for ($try = 0; $try -lt 20; $try++) {
 Start-Process -FilePath $dst
 Start-Sleep -Milliseconds 400
 Remove-Item -LiteralPath ${psQuote(workDir)} -Recurse -Force -ErrorAction SilentlyContinue
+} catch {
+  $_ | Out-String | Set-Content -LiteralPath (Join-Path $env:TEMP 'trace-update-error.log') -Encoding UTF8
+}
 `;
     } else if (install.mode === 'portable-zip') {
       const extractDir = path.join(workDir, 'extracted');
       scriptBody = `$ErrorActionPreference = 'Stop'
+try {
 ${waitBlock}
 $zip = ${psQuote(dlPath)}
 $ext = ${psQuote(extractDir)}
@@ -249,39 +254,49 @@ foreach ($item in @('Trace.exe', 'WebView2Loader.dll', 'app', 'runtime')) {
 Start-Process -FilePath (Join-Path $dst 'Trace.exe') -WorkingDirectory $dst
 Start-Sleep -Milliseconds 400
 Remove-Item -LiteralPath ${psQuote(workDir)} -Recurse -Force -ErrorAction SilentlyContinue
+} catch {
+  $_ | Out-String | Set-Content -LiteralPath (Join-Path $env:TEMP 'trace-update-error.log') -Encoding UTF8
+}
 `;
     } else {
       // Inno Setup installer (relaunch explicitly because trace.iss uses skipifsilent)
       scriptBody = `$ErrorActionPreference = 'Stop'
+try {
 ${waitBlock}
-$p = Start-Process -FilePath ${psQuote(dlPath)} -ArgumentList '/SILENT /CLOSEAPPLICATIONS /NORESTART' -Wait -PassThru
+$p = Start-Process -FilePath ${psQuote(dlPath)} -ArgumentList '/SILENT /SP- /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS /NORESTART' -Wait -PassThru
 $exe = Join-Path ${psQuote(install.installDir)} 'Trace.exe'
 if ($p.ExitCode -eq 0 -and (Test-Path $exe)) {
   Start-Process -FilePath $exe -WorkingDirectory ${psQuote(install.installDir)}
 }
 Start-Sleep -Milliseconds 400
 Remove-Item -LiteralPath ${psQuote(workDir)} -Recurse -Force -ErrorAction SilentlyContinue
+} catch {
+  $_ | Out-String | Set-Content -LiteralPath (Join-Path $env:TEMP 'trace-update-error.log') -Encoding UTF8
+}
 `;
     }
 
     await fs.writeFile(scriptPath, scriptBody, 'utf8');
     updateState.phase = 'launching';
 
-    const child = spawn('powershell.exe', [
-      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', scriptPath,
-    ], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    child.unref();
-
-    setTimeout(() => { onExitRequest?.(); }, 350);
+    if (!deferLaunch) {
+      const child = spawn('powershell.exe', [
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', scriptPath,
+      ], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      child.unref();
+      setTimeout(() => { onExitRequest?.(); }, 350);
+    }
     return {
       ok: true,
       installMode: install.mode,
       version: info.latestVersion,
       sha256: actualSha,
+      scriptPath,
+      deferredToHost: Boolean(deferLaunch),
       restarting: true,
     };
   } catch (err) {

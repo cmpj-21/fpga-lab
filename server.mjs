@@ -1140,7 +1140,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/update/apply' && req.method === 'POST') {
       try {
+        const body = await json(req, 16 * 1024).catch(() => ({}));
         const result = await applyUpdate({
+          deferLaunch: Boolean(body?.deferLaunch),
           onExitRequest: () => {
             if (typeof shutdown === 'function') shutdown('update');
             else process.exit(0);

@@ -492,6 +492,60 @@ public:
     }
 };
 
+static std::wstring ToLongPath(const std::wstring& p) {
+    if (p.empty()) return p;
+    wchar_t buf[MAX_PATH * 4] = {};
+    DWORD n = GetLongPathNameW(p.c_str(), buf, MAX_PATH * 4);
+    return (n > 0 && n < MAX_PATH * 4) ? std::wstring(buf, n) : p;
+}
+
+static bool LaunchDetachedUpdaterScript(const std::wstring& scriptPath) {
+    if (scriptPath.empty() || scriptPath.find(L"..") != std::wstring::npos || scriptPath.find(L'"') != std::wstring::npos) {
+        return false;
+    }
+    wchar_t tmpBuf[MAX_PATH * 4] = {};
+    DWORD tLen = GetTempPathW(MAX_PATH * 4, tmpBuf);
+    if (tLen == 0 || tLen >= MAX_PATH * 4) return false;
+    std::wstring tmpLong = ToLongPath(std::wstring(tmpBuf, tLen));
+    if (!tmpLong.empty() && tmpLong.back() != L'\\') tmpLong.push_back(L'\\');
+    std::wstring expectedPrefix = tmpLong + L"trace-update-";
+    std::wstring scriptLong = ToLongPath(scriptPath);
+    const std::wstring expectedSuffix = L"\\apply-trace-update.ps1";
+    if (scriptLong.size() <= expectedPrefix.size() + expectedSuffix.size()) return false;
+    if (_wcsnicmp(scriptLong.c_str(), expectedPrefix.c_str(), expectedPrefix.size()) != 0) return false;
+    if (_wcsicmp(scriptLong.c_str() + (scriptLong.size() - expectedSuffix.size()), expectedSuffix.c_str()) != 0) return false;
+    if (!FileExists(scriptLong)) return false;
+
+    wchar_t sysBuf[MAX_PATH * 4] = {};
+    UINT sLen = GetSystemDirectoryW(sysBuf, MAX_PATH * 4);
+    std::wstring psExe = (sLen > 0 && sLen < MAX_PATH * 4)
+        ? (std::wstring(sysBuf, sLen) + L"\\WindowsPowerShell\\v1.0\\powershell.exe")
+        : L"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+    if (!FileExists(psExe)) psExe = L"powershell.exe";
+
+    std::wstring cmd = L"\"" + psExe + L"\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + scriptLong + L"\"";
+    std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
+    cmdBuf.push_back(L'\0');
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi{};
+    // Spawn directly from Trace.exe (outside g_app.job) so closing Trace never terminates the updater!
+    DWORD flags = CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+    BOOL ok = CreateProcessW(
+        FileExists(psExe) ? psExe.c_str() : nullptr,
+        cmdBuf.data(), nullptr, nullptr, FALSE, flags, nullptr, nullptr, &si, &pi);
+    if (!ok) {
+        AppendNativeLog(L"Failed to launch detached updater script: " + scriptPath);
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
+}
+
 class WebMessageReceivedHandler final : public ICoreWebView2WebMessageReceivedEventHandler {
     std::atomic<ULONG> ref_{1};
 public:
@@ -522,6 +576,16 @@ public:
                 if (g_app.hwnd && IsWindow(g_app.hwnd)) {
                     KillTimer(g_app.hwnd, IDT_CLOSE_WATCHDOG);
                     PostMessageW(g_app.hwnd, WM_CLOSE, 0, 0);
+                }
+            } else if (msg.rfind(L"app:apply-update|", 0) == 0) {
+                std::wstring scriptPath = msg.substr(17);
+                if (LaunchDetachedUpdaterScript(scriptPath)) {
+                    g_app.closePending = false;
+                    g_app.allowClose = true;
+                    if (g_app.hwnd && IsWindow(g_app.hwnd)) {
+                        KillTimer(g_app.hwnd, IDT_CLOSE_WATCHDOG);
+                        PostMessageW(g_app.hwnd, WM_CLOSE, 0, 0);
+                    }
                 }
             } else if (msg == L"app:toggle-fullscreen") {
                 ToggleFullscreen(g_app.hwnd);
@@ -790,7 +854,7 @@ static bool StartBackendServer() {
     g_app.job = CreateJobObjectW(nullptr, nullptr);
     if (g_app.job) {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
         if (!SetInformationJobObject(g_app.job, JobObjectExtendedLimitInformation, &info, sizeof(info))) {
             AppendNativeLog(L"Warning: SetInformationJobObject failed.");
         }

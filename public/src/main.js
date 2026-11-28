@@ -3830,7 +3830,12 @@ async function startSelfUpdate() {
     } catch {}
   }, 250);
   try {
-    const res = await fetch('/api/update/apply', { method: 'POST' });
+    const hasNativeHost = Boolean(window.chrome?.webview?.postMessage);
+    const res = await fetch('/api/update/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deferLaunch: hasNativeHost }),
+    });
     const data = await res.json();
     clearInterval(updatePollTimer);
     if (!res.ok || !data.ok) throw new Error(data.error || data.message || 'Update failed.');
@@ -3838,7 +3843,9 @@ async function startSelfUpdate() {
     if (progLabel) progLabel.textContent = 'SHA-256 OK · Restarting';
     if (summary) summary.textContent = `Verified SHA-256 (${String(data.sha256 || '').slice(0, 12)}…). Closing Trace to apply v${data.version} and relaunch…`;
     await prepareExit();
-    if (window.chrome?.webview?.postMessage) {
+    if (hasNativeHost && data.scriptPath) {
+      window.chrome.webview.postMessage(`app:apply-update|${data.scriptPath}`);
+    } else if (hasNativeHost) {
       window.chrome.webview.postMessage('app:close-now');
     }
   } catch (err) {
